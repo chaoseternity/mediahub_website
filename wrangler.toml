@@ -1,0 +1,17 @@
+name = "inventory-tracker"
+main = ".open-next/worker.js"
+compatibility_date = "2024-12-18"
+compatibility_flags = ["nodejs_compat"]
+assets = { directory = ".open-next/assets" }
+
+[[d1_databases]]
+binding = "DB"
+database_name = "inventory-tracker-db"
+database_id = "2bc38f5e-ccfa-4899-8f09-0499ef862697"
+migrations_dir = "migrations"
+
+[vars]
+# Public/non-secret env vars go here.
+# Secret vars (AUTH_SECRET, GOOGLE_CLIENT_SECRET, etc.) go in:
+#   - .dev.vars for local wrangler dev
+#   - `wrangler secret put <KEY>` for production
