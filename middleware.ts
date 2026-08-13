@@ -50,7 +50,8 @@ export default auth((req) => {
     if (pathname.startsWith("/api/")) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
-    const loginUrl = new URL("/login", req.url);
+    const loginUrl = req.nextUrl.clone();
+    loginUrl.pathname = "/login";
     loginUrl.searchParams.set("callbackUrl", pathname);
     return NextResponse.redirect(loginUrl);
   }
