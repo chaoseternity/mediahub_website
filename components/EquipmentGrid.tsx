@@ -69,7 +69,9 @@ export function EquipmentGrid({ initialData, role, onAddNew, userName }: Equipme
         />
         <Select value={tagFilter} onValueChange={(v) => setTagFilter(v ?? ALL)}>
           <SelectTrigger className="w-full sm:w-44">
-            <SelectValue placeholder="Tag" />
+            <SelectValue>
+              {tagFilter === ALL ? "All Tags" : tagFilter}
+            </SelectValue>
           </SelectTrigger>
           <SelectContent>
             <SelectItem value={ALL}>All Tags</SelectItem>
@@ -82,7 +84,9 @@ export function EquipmentGrid({ initialData, role, onAddNew, userName }: Equipme
         </Select>
         <Select value={statusFilter} onValueChange={(v) => setStatusFilter(v ?? ALL)}>
           <SelectTrigger className="w-full sm:w-44">
-            <SelectValue placeholder="Status" />
+            <SelectValue>
+              {statusFilter === ALL ? "All Statuses" : statusFilter}
+            </SelectValue>
           </SelectTrigger>
           <SelectContent>
             <SelectItem value={ALL}>All Statuses</SelectItem>
