@@ -1,6 +1,5 @@
 /**
  * Test-only helper: sets up the full schema on an in-memory better-sqlite3 DB.
- * NOT imported by the production app (which uses Cloudflare D1).
  */
 import Database from "better-sqlite3";
 
@@ -33,7 +32,7 @@ export const SCHEMA_SQL = `
     quantity      INTEGER NOT NULL DEFAULT 1,
     location      TEXT    NOT NULL,
     status        TEXT    NOT NULL DEFAULT 'Available'
-                  CHECK(status IN ('Available','Checked Out','Under Maintenance','Retired')),
+                  CHECK(status IN ('Available','Checked Out','In Event','Under Maintenance','Retired')),
     created_at    TEXT    NOT NULL DEFAULT (datetime('now')),
     updated_at    TEXT    NOT NULL DEFAULT (datetime('now'))
   );
@@ -54,6 +53,32 @@ export const SCHEMA_SQL = `
     returned_at         TEXT,
     notes               TEXT,
     checkout_location   TEXT
+  );
+
+  CREATE TABLE IF NOT EXISTS events (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    name        TEXT    NOT NULL,
+    description TEXT,
+    start_time  TEXT    NOT NULL,
+    end_time    TEXT    NOT NULL,
+    location    TEXT    NOT NULL,
+    created_by  INTEGER REFERENCES users(id) ON DELETE SET NULL,
+    created_at  TEXT    NOT NULL DEFAULT (datetime('now')),
+    updated_at  TEXT    NOT NULL DEFAULT (datetime('now'))
+  );
+
+  CREATE TABLE IF NOT EXISTS event_ics (
+    event_id INTEGER NOT NULL REFERENCES events(id) ON DELETE CASCADE,
+    user_id  INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    PRIMARY KEY (event_id, user_id)
+  );
+
+  CREATE TABLE IF NOT EXISTS event_equipment (
+    event_id     INTEGER NOT NULL REFERENCES events(id) ON DELETE CASCADE,
+    equipment_id INTEGER NOT NULL REFERENCES equipment(id) ON DELETE CASCADE,
+    added_by     INTEGER REFERENCES users(id) ON DELETE SET NULL,
+    added_at     TEXT    NOT NULL DEFAULT (datetime('now')),
+    PRIMARY KEY (event_id, equipment_id)
   );
 `;
 

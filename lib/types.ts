@@ -5,6 +5,7 @@ export type Condition = "New" | "Good" | "Fair" | "Poor";
 export type EquipmentStatus =
   | "Available"
   | "Checked Out"
+  | "In Event"
   | "Under Maintenance"
   | "Retired";
 
@@ -44,6 +45,12 @@ export interface Equipment {
   checked_out_at: string | null;
   expected_return_at: string | null;
   checkout_location: string | null;
+  // joined from ongoing event
+  active_event_id?: number | null;
+  active_event_name?: string | null;
+  active_event_location?: string | null;
+  active_event_start_time?: string | null;
+  active_event_end_time?: string | null;
 }
 
 export interface Checkout {
@@ -58,9 +65,36 @@ export interface Checkout {
   checkout_location: string | null;
 }
 
+export interface EventEquipmentLog {
+  event_id: number;
+  event_name: string;
+  event_location: string;
+  start_time: string;
+  end_time: string;
+  added_at: string;
+}
+
 export interface EquipmentDetail extends Omit<Equipment, "active_checkout_id" | "checked_out_by_name" | "checked_out_at" | "expected_return_at"> {
   checkouts: Checkout[];
   active_checkout: Checkout | null;
+  event_logs?: EventEquipmentLog[];
+}
+
+export type EventStatus = "Upcoming" | "Ongoing" | "Completed";
+
+export interface AppEvent {
+  id: number;
+  name: string;
+  description: string | null;
+  start_time: string;
+  end_time: string;
+  location: string;
+  created_by: number | null;
+  created_at: string;
+  updated_at: string;
+  ics: User[];
+  equipment: Equipment[];
+  status: EventStatus;
 }
 
 // Extend next-auth Session type

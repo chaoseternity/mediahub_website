@@ -1,6 +1,6 @@
 "use client";
 
-import { Tag } from "lucide-react";
+import { Tag, Calendar } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import {
   Card,
@@ -22,6 +22,7 @@ const statusVariant: Record<
 > = {
   Available: "default",
   "Checked Out": "secondary",
+  "In Event": "secondary",
   "Under Maintenance": "outline",
   Retired: "destructive",
 };
@@ -29,6 +30,7 @@ const statusVariant: Record<
 const statusColour: Record<Equipment["status"], string> = {
   Available: "bg-green-100 text-green-800 border-green-200",
   "Checked Out": "bg-yellow-100 text-yellow-800 border-yellow-200",
+  "In Event": "bg-purple-100 text-purple-800 border-purple-200 dark:bg-purple-900/40 dark:text-purple-300",
   "Under Maintenance": "bg-blue-100 text-blue-800 border-blue-200",
   Retired: "bg-red-100 text-red-800 border-red-200",
 };
@@ -76,6 +78,8 @@ export function EquipmentCard({ equipment, onClick }: EquipmentCardProps) {
             <dd className="font-medium truncate">
               {equipment.status === "Checked Out"
                 ? (equipment.checkout_location || `With ${equipment.checked_out_by_name}`)
+                : equipment.status === "In Event"
+                ? (equipment.active_event_location || equipment.location)
                 : equipment.location}
             </dd>
           </div>
@@ -91,6 +95,19 @@ export function EquipmentCard({ equipment, onClick }: EquipmentCardProps) {
             <div className="flex gap-1">
               <dt className="text-muted-foreground shrink-0">With:</dt>
               <dd className="truncate">{equipment.checked_out_by_name}</dd>
+            </div>
+          )}
+          {equipment.status === "In Event" && equipment.active_event_name && (
+            <div className="pt-1 mt-1 border-t text-xs text-purple-700 dark:text-purple-300 font-medium">
+              <div className="flex items-center gap-1 truncate">
+                <Calendar className="h-3 w-3 shrink-0" />
+                <span className="truncate">Used by Event: {equipment.active_event_name}</span>
+              </div>
+              {equipment.active_event_end_time && (
+                <p className="text-[10px] text-muted-foreground mt-0.5">
+                  Possession until: {new Date(equipment.active_event_end_time).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                </p>
+              )}
             </div>
           )}
         </dl>

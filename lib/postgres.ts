@@ -37,7 +37,7 @@ export async function ensureSchema(): Promise<void> {
         condition TEXT NOT NULL DEFAULT 'Good' CHECK(condition IN ('New','Good','Fair','Poor')),
         quantity INT NOT NULL DEFAULT 1,
         location TEXT NOT NULL,
-        status TEXT NOT NULL DEFAULT 'Available' CHECK(status IN ('Available','Checked Out','Under Maintenance','Retired')),
+        status TEXT NOT NULL DEFAULT 'Available' CHECK(status IN ('Available','Checked Out','In Event','Under Maintenance','Retired')),
         created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
         updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
       );
@@ -62,6 +62,38 @@ export async function ensureSchema(): Promise<void> {
         returned_at TIMESTAMP WITH TIME ZONE,
         notes TEXT,
         checkout_location TEXT
+      );
+    `;
+
+    await sql`
+      CREATE TABLE IF NOT EXISTS events (
+        id SERIAL PRIMARY KEY,
+        name TEXT NOT NULL,
+        description TEXT,
+        start_time TIMESTAMP WITH TIME ZONE NOT NULL,
+        end_time TIMESTAMP WITH TIME ZONE NOT NULL,
+        location TEXT NOT NULL,
+        created_by INT REFERENCES users(id) ON DELETE SET NULL,
+        created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+      );
+    `;
+
+    await sql`
+      CREATE TABLE IF NOT EXISTS event_ics (
+        event_id INT NOT NULL REFERENCES events(id) ON DELETE CASCADE,
+        user_id INT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        PRIMARY KEY (event_id, user_id)
+      );
+    `;
+
+    await sql`
+      CREATE TABLE IF NOT EXISTS event_equipment (
+        event_id INT NOT NULL REFERENCES events(id) ON DELETE CASCADE,
+        equipment_id INT NOT NULL REFERENCES equipment(id) ON DELETE CASCADE,
+        added_by INT REFERENCES users(id) ON DELETE SET NULL,
+        added_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+        PRIMARY KEY (event_id, equipment_id)
       );
     `;
 

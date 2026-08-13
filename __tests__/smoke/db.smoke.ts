@@ -33,7 +33,8 @@ jest.mock("@vercel/postgres", () => {
       let sqliteQuery = query
         .replace(/COUNT\(\*\)::text/gi, "COUNT(*)")
         .replace(/CURRENT_TIMESTAMP/gi, "datetime('now')")
-        .replace(/COALESCE\(\s*ARRAY_AGG\(t\.name\)\s*FILTER\s*\(WHERE\s*t\.name\s*IS\s*NOT\s*NULL\),\s*'{}'\s*\)/gi, "GROUP_CONCAT(t.name, '|||')")
+        .replace(/COALESCE\(\s*ARRAY_AGG\(DISTINCT t\.name\)\s*FILTER\s*\(WHERE\s*t\.name\s*IS\s*NOT\s*NULL\),\s*'{}'\s*\)/gi, "GROUP_CONCAT(DISTINCT t.name)")
+        .replace(/COALESCE\(\s*ARRAY_AGG\(t\.name\)\s*FILTER\s*\(WHERE\s*t\.name\s*IS\s*NOT\s*NULL\),\s*'{}'\s*\)/gi, "GROUP_CONCAT(t.name)")
         .replace(/INSERT INTO (\w+) \((.*?)\) VALUES \((.*?)\) ON CONFLICT DO NOTHING/gi, "INSERT OR IGNORE INTO $1 ($2) VALUES ($3)");
 
       let isReturning = false;
@@ -51,7 +52,7 @@ jest.mock("@vercel/postgres", () => {
           const processedRows = rows.map((r) => {
             if ("tags" in r && typeof r.tags === "string") {
               const strVal = r.tags as string;
-              (r as Record<string, unknown>).tags = strVal ? strVal.split("|||").filter(Boolean) : [];
+              (r as Record<string, unknown>).tags = strVal ? strVal.split(",").filter(Boolean) : [];
             }
             return r;
           });
@@ -66,6 +67,7 @@ jest.mock("@vercel/postgres", () => {
             else if (/INSERT INTO tags/i.test(sqliteQuery)) table = "tags";
             else if (/INSERT INTO checkouts/i.test(sqliteQuery)) table = "checkouts";
             else if (/UPDATE checkouts/i.test(sqliteQuery)) table = "checkouts";
+            else if (/INSERT INTO events/i.test(sqliteQuery)) table = "events";
 
             const fetchStmt = testDb.prepare(`SELECT * FROM ${table} WHERE id = ?`);
             const row = fetchStmt.get(info.lastInsertRowid) as Record<string, unknown>;
@@ -98,6 +100,11 @@ import {
   getEquipmentByTagId,
   addTagToEquipment,
   removeTagFromEquipment,
+  getAllEvents,
+  createEvent,
+  attachEquipmentToEvent,
+  getEventById,
+  deleteEvent,
 } from "@/lib/db";
 
 // ── Smoke tests ───────────────────────────────────────────────────────────────
@@ -357,6 +364,47 @@ describe("Smoke — lib/db.ts (Vercel Postgres mock)", () => {
       await removeTagFromEquipment(eq.id, tag.id);
       const emptyItems = await getEquipmentByTagId(tag.id);
       expect(emptyItems).toHaveLength(0);
+    });
+  });
+
+  // ── Events management ─────────────────────────────────────────────────────
+
+  describe("Events management", () => {
+    test("creates an event with ICs and attaches equipment", async () => {
+      const admin = await upsertUser({ name: "Admin", email: "admin@test.com", google_id: "g1", image: null, provider: "google" });
+      const icUser = await upsertUser({ name: "IC Bob", email: "bob@test.com", google_id: "g2", image: null, provider: "google" });
+      const eq = await createEquipment({ name: "Speaker", tags: [], condition: "New", quantity: 1, location: "Hall", status: "Available" });
+
+      const now = new Date();
+      const startTime = new Date(now.getTime() - 1000 * 60 * 30).toISOString(); // 30 mins ago
+      const endTime = new Date(now.getTime() + 1000 * 60 * 90).toISOString(); // 90 mins from now
+
+      const event = await createEvent({
+        name: "Concert 2026",
+        description: "School concert",
+        start_time: startTime,
+        end_time: endTime,
+        location: "Main Auditorium",
+        created_by: admin.id,
+        ic_user_ids: [icUser.id],
+      });
+
+      expect(event.id).toBeGreaterThan(0);
+      expect(event.name).toBe("Concert 2026");
+      expect(event.ics).toHaveLength(1);
+      expect(event.ics[0].name).toBe("IC Bob");
+
+      await attachEquipmentToEvent(event.id, eq.id, admin.id);
+
+      const fetchedEvent = await getEventById(event.id);
+      expect(fetchedEvent?.equipment).toHaveLength(1);
+      expect(fetchedEvent?.equipment[0].name).toBe("Speaker");
+
+      const allEvents = await getAllEvents();
+      expect(allEvents.length).toBeGreaterThan(0);
+
+      const delRes = await deleteEvent(event.id);
+      expect(delRes.success).toBe(true);
     });
   });
 });

@@ -46,7 +46,7 @@ const EditSchema = z.object({
   condition: z.enum(["New", "Good", "Fair", "Poor"]),
   quantity: z.coerce.number().int().positive(),
   location: z.string().min(1),
-  status: z.enum(["Available", "Checked Out", "Under Maintenance", "Retired"]),
+  status: z.enum(["Available", "Checked Out", "In Event", "Under Maintenance", "Retired"]),
 });
 
 type EditFormValues = z.infer<typeof EditSchema>;
@@ -385,6 +385,24 @@ export function EquipmentModal({
                         <p className="text-xs text-muted-foreground text-center pt-1">
                           Showing latest 5 of {equipment.checkouts.length} checkouts
                         </p>
+                      )}
+                      {equipment.event_logs && equipment.event_logs.length > 0 && (
+                        <div className="mt-4 pt-3 border-t">
+                          <h4 className="text-xs font-semibold text-muted-foreground mb-2">Event Usage History</h4>
+                          <div className="space-y-2">
+                            {equipment.event_logs.slice(0, 5).map((log, idx) => (
+                              <div key={idx} className="p-2.5 rounded-lg border bg-purple-50/20 text-xs space-y-1">
+                                <div className="flex justify-between font-medium">
+                                  <span>{log.event_name}</span>
+                                  <span className="text-muted-foreground">{log.event_location}</span>
+                                </div>
+                                <p className="text-[11px] text-muted-foreground">
+                                  Duration: {fmtDateTime(log.start_time)} – {fmtDateTime(log.end_time)}
+                                </p>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
                       )}
                     </div>
                   )}

@@ -1,20 +1,15 @@
 import { auth } from "@/lib/auth";
-import { getEquipmentById, updateEquipment, deleteEquipment } from "@/lib/db";
+import { getEventById, updateEvent, deleteEvent } from "@/lib/db";
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 
-const UpdateEquipmentSchema = z.object({
+const UpdateEventSchema = z.object({
   name: z.string().min(1).optional(),
-  tags: z.array(z.string().min(1)).optional(),
   description: z.string().optional(),
-  serial_number: z.string().optional(),
-  purchase_date: z.string().optional(),
-  condition: z.enum(["New", "Good", "Fair", "Poor"]).optional(),
-  quantity: z.number().int().positive().optional(),
+  start_time: z.string().min(1).optional(),
+  end_time: z.string().min(1).optional(),
   location: z.string().min(1).optional(),
-  status: z
-    .enum(["Available", "Checked Out", "In Event", "Under Maintenance", "Retired"])
-    .optional(),
+  ic_user_ids: z.array(z.number().int()).optional(),
 });
 
 export async function GET(
@@ -22,9 +17,9 @@ export async function GET(
   { params }: { params: Promise<{ id: string }> }
 ) {
   const { id } = await params;
-  const item = await getEquipmentById(Number(id));
-  if (!item) return NextResponse.json({ error: "Not found" }, { status: 404 });
-  return NextResponse.json(item);
+  const event = await getEventById(Number(id));
+  if (!event) return NextResponse.json({ error: "Not found" }, { status: 404 });
+  return NextResponse.json(event);
 }
 
 export async function PUT(
@@ -33,21 +28,18 @@ export async function PUT(
 ) {
   const session = await auth();
   if (!session) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  const { role } = session.user;
-  if (role !== "admin" && role !== "verified") {
-    return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+  if (session.user.role !== "admin") {
+    return NextResponse.json({ error: "Only admins can edit events" }, { status: 403 });
   }
 
   const { id } = await params;
   const body = await req.json();
-  // Verified users may only update the description field
-  const allowedBody = role === "verified" ? { description: body.description } : body;
-  const parsed = UpdateEquipmentSchema.safeParse(allowedBody);
+  const parsed = UpdateEventSchema.safeParse(body);
   if (!parsed.success) {
     return NextResponse.json({ error: parsed.error.flatten() }, { status: 400 });
   }
 
-  const updated = await updateEquipment(Number(id), parsed.data);
+  const updated = await updateEvent(Number(id), parsed.data);
   if (!updated) return NextResponse.json({ error: "Not found" }, { status: 404 });
   return NextResponse.json(updated);
 }
@@ -59,11 +51,11 @@ export async function DELETE(
   const session = await auth();
   if (!session) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   if (session.user.role !== "admin") {
-    return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+    return NextResponse.json({ error: "Only admins can delete events" }, { status: 403 });
   }
 
   const { id } = await params;
-  const result = await deleteEquipment(Number(id));
+  const result = await deleteEvent(Number(id));
   if (!result.success) {
     return NextResponse.json({ error: result.error }, { status: 409 });
   }
