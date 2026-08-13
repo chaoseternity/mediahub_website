@@ -6,6 +6,22 @@ import type { NextAuthConfig } from "next-auth";
 import Google from "next-auth/providers/google";
 import MicrosoftEntraId from "next-auth/providers/microsoft-entra-id";
 
+function getBaseUrl(fallbackBaseUrl: string): string {
+  if (process.env.AUTH_URL && !process.env.AUTH_URL.includes("localhost")) {
+    return process.env.AUTH_URL;
+  }
+  if (process.env.NEXTAUTH_URL && !process.env.NEXTAUTH_URL.includes("localhost")) {
+    return process.env.NEXTAUTH_URL;
+  }
+  if (process.env.VERCEL_PROJECT_PRODUCTION_URL) {
+    return `https://${process.env.VERCEL_PROJECT_PRODUCTION_URL}`;
+  }
+  if (process.env.VERCEL_URL) {
+    return `https://${process.env.VERCEL_URL}`;
+  }
+  return fallbackBaseUrl;
+}
+
 export const authConfig = {
   trustHost: true,
   providers: [
@@ -23,6 +39,22 @@ export const authConfig = {
     signIn: "/login",
   },
   callbacks: {
+    async redirect({ url, baseUrl }) {
+      const effectiveBaseUrl = getBaseUrl(baseUrl);
+      if (url.startsWith("/")) {
+        return `${effectiveBaseUrl}${url}`;
+      }
+      try {
+        const parsedUrl = new URL(url);
+        const parsedBase = new URL(effectiveBaseUrl);
+        if (parsedUrl.origin === parsedBase.origin) {
+          return url;
+        }
+      } catch {
+        // Fallback below
+      }
+      return effectiveBaseUrl;
+    },
     authorized({ auth, request: { nextUrl } }) {
       const isLoggedIn = !!auth?.user;
       const { pathname } = nextUrl;

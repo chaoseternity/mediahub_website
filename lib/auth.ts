@@ -7,6 +7,7 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
   ...authConfig,
   session: { strategy: "jwt" },
   callbacks: {
+    ...authConfig.callbacks,
     async signIn({ user, account }) {
       const allowedProviders = ["google", "microsoft-entra-id"];
       if (!account?.provider || !allowedProviders.includes(account.provider)) return false;
