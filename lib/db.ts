@@ -1,17 +1,5 @@
-import { db } from "./firebase";
-import {
-  collection,
-  doc,
-  getDoc,
-  getDocs,
-  setDoc,
-  updateDoc,
-  deleteDoc,
-  query,
-  where,
-  orderBy,
-  runTransaction,
-} from "firebase/firestore";
+import { sql } from "@vercel/postgres";
+import { ensureSchema } from "./postgres";
 import type {
   Equipment,
   EquipmentDetail,
@@ -22,23 +10,6 @@ import type {
   Condition,
   Tag,
 } from "./types";
-
-// ---------------------------------------------------------------------------
-// Atomic Sequential ID Generator using Firestore Counters
-// ---------------------------------------------------------------------------
-
-async function getNextId(counterName: string): Promise<number> {
-  const counterRef = doc(db, "counters", counterName);
-  return await runTransaction(db, async (transaction) => {
-    const counterDoc = await transaction.get(counterRef);
-    let nextId = 1;
-    if (counterDoc.exists()) {
-      nextId = (counterDoc.data().current || 0) + 1;
-    }
-    transaction.set(counterRef, { current: nextId }, { merge: true });
-    return nextId;
-  });
-}
 
 function getAdminEmails(): Set<string> {
   const raw = process.env.ADMIN_EMAILS ?? "";
@@ -52,28 +23,31 @@ function getAdminEmails(): Set<string> {
 // ---------------------------------------------------------------------------
 
 export async function getUserByEmail(email: string): Promise<User | undefined> {
-  const q = query(collection(db, "users"), where("email", "==", email));
-  const snapshot = await getDocs(q);
-  if (snapshot.empty) return undefined;
-  return snapshot.docs[0].data() as User;
+  await ensureSchema();
+  const { rows } = await sql<User>`SELECT * FROM users WHERE LOWER(email) = LOWER(${email})`;
+  return rows[0];
 }
 
 export async function getUserById(id: number): Promise<User | undefined> {
-  const docRef = doc(db, "users", String(id));
-  const docSnap = await getDoc(docRef);
-  if (!docSnap.exists()) return undefined;
-  return docSnap.data() as User;
+  await ensureSchema();
+  const { rows } = await sql<User>`SELECT * FROM users WHERE id = ${id}`;
+  return rows[0];
 }
 
 export async function getAllUsers(): Promise<User[]> {
-  const q = query(collection(db, "users"), orderBy("created_at", "asc"));
-  const snapshot = await getDocs(q);
-  return snapshot.docs.map((docSnap) => docSnap.data() as User);
+  await ensureSchema();
+  const { rows } = await sql<User>`
+    SELECT id, name, email, username, google_id, image, role, provider, created_at
+    FROM users
+    ORDER BY created_at ASC
+  `;
+  return rows;
 }
 
 export async function countUsers(): Promise<number> {
-  const snapshot = await getDocs(collection(db, "users"));
-  return snapshot.size;
+  await ensureSchema();
+  const { rows } = await sql<{ c: string }>`SELECT COUNT(*)::text as c FROM users`;
+  return parseInt(rows[0]?.c ?? "0", 10);
 }
 
 export async function upsertUser(params: {
@@ -83,121 +57,114 @@ export async function upsertUser(params: {
   image: string | null;
   provider: string;
 }): Promise<User> {
+  await ensureSchema();
   const existing = await getUserByEmail(params.email);
   const adminEmails = getAdminEmails();
   const isAdminEmail = adminEmails.has(params.email.toLowerCase());
 
   if (existing) {
     const newRole = isAdminEmail && existing.role !== "admin" ? "admin" : existing.role;
-    const userRef = doc(db, "users", String(existing.id));
-    await updateDoc(userRef, {
-      name: params.name,
-      google_id: params.google_id,
-      image: params.image,
-      provider: params.provider,
-      role: newRole,
-    });
+    await sql`
+      UPDATE users
+      SET name = ${params.name},
+          google_id = ${params.google_id},
+          image = ${params.image},
+          provider = ${params.provider},
+          role = ${newRole}
+      WHERE id = ${existing.id}
+    `;
     return (await getUserById(existing.id))!;
   }
 
   const count = await countUsers();
   const role: Role = isAdminEmail || count === 0 ? "admin" : "viewer";
-  const newId = await getNextId("users");
-  const userRef = doc(db, "users", String(newId));
-  
-  const newUser: User = {
-    id: newId,
-    name: params.name,
-    email: params.email,
-    username: null,
-    google_id: params.google_id,
-    image: params.image,
-    role,
-    provider: params.provider,
-    created_at: new Date().toISOString(),
-  };
 
-  await setDoc(userRef, newUser);
-  return newUser;
+  const { rows } = await sql<User>`
+    INSERT INTO users (name, email, google_id, image, role, provider)
+    VALUES (${params.name}, ${params.email}, ${params.google_id}, ${params.image}, ${role}, ${params.provider})
+    RETURNING *
+  `;
+  return rows[0];
 }
 
 export async function updateUserRole(id: number, role: Role): Promise<void> {
-  const userRef = doc(db, "users", String(id));
-  await updateDoc(userRef, { role });
+  await ensureSchema();
+  await sql`UPDATE users SET role = ${role} WHERE id = ${id}`;
 }
 
 export async function deleteUser(id: number): Promise<void> {
-  const userRef = doc(db, "users", String(id));
-  await deleteDoc(userRef);
+  await ensureSchema();
+  await sql`DELETE FROM users WHERE id = ${id}`;
 }
 
 export async function updateUsername(id: number, username: string): Promise<void> {
-  const userRef = doc(db, "users", String(id));
-  await updateDoc(userRef, { username });
-}
-
-// ---------------------------------------------------------------------------
-// Active checkout query helper
-// ---------------------------------------------------------------------------
-
-async function getActiveCheckout(equipmentId: number): Promise<Checkout | null> {
-  const q = query(
-    collection(db, "checkouts"),
-    where("equipment_id", "==", equipmentId),
-    where("returned_at", "==", null)
-  );
-  const snapshot = await getDocs(q);
-  if (snapshot.empty) return null;
-  return snapshot.docs[0].data() as Checkout;
+  await ensureSchema();
+  await sql`UPDATE users SET username = ${username} WHERE id = ${id}`;
 }
 
 // ---------------------------------------------------------------------------
 // Equipment helpers
 // ---------------------------------------------------------------------------
 
+type EquipmentRawRow = Omit<Equipment, "tags"> & { tags: string[] | null };
+
+function formatEquipmentRow(row: EquipmentRawRow): Equipment {
+  return {
+    ...row,
+    tags: Array.isArray(row.tags) ? row.tags.filter(Boolean) : [],
+  };
+}
+
 export async function getAllEquipment(): Promise<Equipment[]> {
-  const q = query(collection(db, "equipment"), orderBy("updated_at", "desc"));
-  const snapshot = await getDocs(q);
-  const equipmentList = snapshot.docs.map((docSnap) => docSnap.data() as Equipment);
-
-  const checkoutsSnap = await getDocs(
-    query(collection(db, "checkouts"), where("returned_at", "==", null))
-  );
-  const activeCheckoutsMap = new Map<number, Checkout>();
-  checkoutsSnap.docs.forEach((d) => {
-    const c = d.data() as Checkout;
-    activeCheckoutsMap.set(c.equipment_id, c);
-  });
-
-  return equipmentList.map((eq) => {
-    const active = activeCheckoutsMap.get(eq.id);
-    return {
-      ...eq,
-      active_checkout_id: active ? active.id : null,
-      checked_out_by_name: active ? active.checked_out_by_name : null,
-      checked_out_at: active ? active.checked_out_at : null,
-      expected_return_at: active ? active.expected_return_at : null,
-      checkout_location: active ? active.checkout_location : null,
-    };
-  });
+  await ensureSchema();
+  const { rows } = await sql<EquipmentRawRow>`
+    SELECT 
+      e.id, e.name, e.description, e.serial_number, e.purchase_date,
+      e.condition, e.quantity, e.location, e.status, e.created_at, e.updated_at,
+      COALESCE(
+        ARRAY_AGG(t.name) FILTER (WHERE t.name IS NOT NULL),
+        '{}'
+      ) AS tags,
+      c.id AS active_checkout_id,
+      c.checked_out_by_name,
+      c.checked_out_at,
+      c.expected_return_at,
+      c.checkout_location
+    FROM equipment e
+    LEFT JOIN equipment_tags et ON et.equipment_id = e.id
+    LEFT JOIN tags t ON t.id = et.tag_id
+    LEFT JOIN checkouts c ON c.equipment_id = e.id AND c.returned_at IS NULL
+    GROUP BY e.id, c.id, c.checked_out_by_name, c.checked_out_at, c.expected_return_at, c.checkout_location
+    ORDER BY e.updated_at DESC
+  `;
+  return rows.map(formatEquipmentRow);
 }
 
 export async function getEquipmentById(id: number): Promise<EquipmentDetail | undefined> {
-  const docRef = doc(db, "equipment", String(id));
-  const docSnap = await getDoc(docRef);
-  if (!docSnap.exists()) return undefined;
+  await ensureSchema();
+  const { rows: eqRows } = await sql<EquipmentRawRow>`
+    SELECT 
+      e.id, e.name, e.description, e.serial_number, e.purchase_date,
+      e.condition, e.quantity, e.location, e.status, e.created_at, e.updated_at,
+      COALESCE(
+        ARRAY_AGG(t.name) FILTER (WHERE t.name IS NOT NULL),
+        '{}'
+      ) AS tags
+    FROM equipment e
+    LEFT JOIN equipment_tags et ON et.equipment_id = e.id
+    LEFT JOIN tags t ON t.id = et.tag_id
+    WHERE e.id = ${id}
+    GROUP BY e.id
+  `;
 
-  const eq = docSnap.data() as Equipment;
+  if (eqRows.length === 0) return undefined;
 
-  const checkoutsSnap = await getDocs(
-    query(
-      collection(db, "checkouts"),
-      where("equipment_id", "==", id),
-      orderBy("checked_out_at", "desc")
-    )
-  );
+  const eq = formatEquipmentRow(eqRows[0]);
 
-  const checkouts = checkoutsSnap.docs.map((d) => d.data() as Checkout);
+  const { rows: checkouts } = await sql<Checkout>`
+    SELECT * FROM checkouts WHERE equipment_id = ${id} ORDER BY checked_out_at DESC
+  `;
+
   const active_checkout = checkouts.find((c) => c.returned_at === null) ?? null;
 
   return {
@@ -218,46 +185,26 @@ export async function createEquipment(params: {
   location: string;
   status: EquipmentStatus;
 }): Promise<Equipment> {
-  const newId = await getNextId("equipment");
-  const now = new Date().toISOString();
-  const eqRef = doc(db, "equipment", String(newId));
+  await ensureSchema();
+  const { rows } = await sql<Equipment>`
+    INSERT INTO equipment (name, description, serial_number, purchase_date, condition, quantity, location, status)
+    VALUES (${params.name}, ${params.description ?? null}, ${params.serial_number ?? null}, ${params.purchase_date ?? null}, ${params.condition}, ${params.quantity}, ${params.location}, ${params.status})
+    RETURNING *
+  `;
 
-  const newEquipment: Equipment = {
-    id: newId,
-    name: params.name,
-    description: params.description ?? null,
-    serial_number: params.serial_number ?? null,
-    purchase_date: params.purchase_date ?? null,
-    condition: params.condition,
-    quantity: params.quantity,
-    location: params.location,
-    status: params.status,
-    tags: params.tags ?? [],
-    created_at: now,
-    updated_at: now,
-    active_checkout_id: null,
-    checked_out_by_name: null,
-    checked_out_at: null,
-    expected_return_at: null,
-    checkout_location: null,
-  };
+  const newId = rows[0].id;
 
-  await setDoc(eqRef, newEquipment);
-
-  // Sync equipment_tags collection for join queries
   if (params.tags && params.tags.length > 0) {
-    const allTags = await getAllTags();
     for (const tagName of params.tags) {
-      let tagObj = allTags.find((t) => t.name.toLowerCase() === tagName.toLowerCase());
+      let tagObj = (await sql<Tag>`SELECT * FROM tags WHERE LOWER(name) = LOWER(${tagName})`).rows[0];
       if (!tagObj) {
-        tagObj = await createTag(tagName);
+        tagObj = (await sql<Tag>`INSERT INTO tags (name) VALUES (${tagName}) RETURNING *`).rows[0];
       }
-      const linkRef = doc(db, "equipment_tags", `${newId}_${tagObj.id}`);
-      await setDoc(linkRef, { equipment_id: newId, tag_id: tagObj.id });
+      await sql`INSERT INTO equipment_tags (equipment_id, tag_id) VALUES (${newId}, ${tagObj.id}) ON CONFLICT DO NOTHING`;
     }
   }
 
-  return newEquipment;
+  return (await getEquipmentById(newId)) as unknown as Equipment;
 }
 
 export async function updateEquipment(
@@ -274,96 +221,88 @@ export async function updateEquipment(
     status: EquipmentStatus;
   }>
 ): Promise<EquipmentDetail | undefined> {
-  const eqRef = doc(db, "equipment", String(id));
-  const docSnap = await getDoc(eqRef);
-  if (!docSnap.exists()) return undefined;
+  await ensureSchema();
+  const existing = await getEquipmentById(id);
+  if (!existing) return undefined;
 
-  const now = new Date().toISOString();
-  const updateData: Record<string, unknown> = { updated_at: now };
+  const { tags, ...scalars } = params;
 
-  Object.entries(params).forEach(([k, v]) => {
-    if (v !== undefined) {
-      updateData[k] = v;
-    }
-  });
+  if (Object.keys(scalars).length > 0) {
+    if (scalars.name !== undefined) await sql`UPDATE equipment SET name = ${scalars.name} WHERE id = ${id}`;
+    if (scalars.description !== undefined) await sql`UPDATE equipment SET description = ${scalars.description} WHERE id = ${id}`;
+    if (scalars.serial_number !== undefined) await sql`UPDATE equipment SET serial_number = ${scalars.serial_number} WHERE id = ${id}`;
+    if (scalars.purchase_date !== undefined) await sql`UPDATE equipment SET purchase_date = ${scalars.purchase_date} WHERE id = ${id}`;
+    if (scalars.condition !== undefined) await sql`UPDATE equipment SET condition = ${scalars.condition} WHERE id = ${id}`;
+    if (scalars.quantity !== undefined) await sql`UPDATE equipment SET quantity = ${scalars.quantity} WHERE id = ${id}`;
+    if (scalars.location !== undefined) await sql`UPDATE equipment SET location = ${scalars.location} WHERE id = ${id}`;
+    if (scalars.status !== undefined) await sql`UPDATE equipment SET status = ${scalars.status} WHERE id = ${id}`;
+    await sql`UPDATE equipment SET updated_at = CURRENT_TIMESTAMP WHERE id = ${id}`;
+  }
 
-  await updateDoc(eqRef, updateData);
-
-  if (params.tags !== undefined) {
-    // Delete existing links for equipment_id
-    const linksSnap = await getDocs(
-      query(collection(db, "equipment_tags"), where("equipment_id", "==", id))
-    );
-    for (const linkDoc of linksSnap.docs) {
-      await deleteDoc(linkDoc.ref);
-    }
-    // Add new links
-    const allTags = await getAllTags();
-    for (const tagName of params.tags) {
-      let tagObj = allTags.find((t) => t.name.toLowerCase() === tagName.toLowerCase());
+  if (tags !== undefined) {
+    await sql`DELETE FROM equipment_tags WHERE equipment_id = ${id}`;
+    for (const tagName of tags) {
+      let tagObj = (await sql<Tag>`SELECT * FROM tags WHERE LOWER(name) = LOWER(${tagName})`).rows[0];
       if (!tagObj) {
-        tagObj = await createTag(tagName);
+        tagObj = (await sql<Tag>`INSERT INTO tags (name) VALUES (${tagName}) RETURNING *`).rows[0];
       }
-      const linkRef = doc(db, "equipment_tags", `${id}_${tagObj.id}`);
-      await setDoc(linkRef, { equipment_id: id, tag_id: tagObj.id });
+      await sql`INSERT INTO equipment_tags (equipment_id, tag_id) VALUES (${id}, ${tagObj.id}) ON CONFLICT DO NOTHING`;
     }
+    await sql`UPDATE equipment SET updated_at = CURRENT_TIMESTAMP WHERE id = ${id}`;
   }
 
   return getEquipmentById(id);
 }
 
 export async function deleteEquipment(id: number): Promise<{ success: boolean; error?: string }> {
-  const active = await getActiveCheckout(id);
-  if (active) {
+  await ensureSchema();
+  const activeCheckouts = await sql`SELECT id FROM checkouts WHERE equipment_id = ${id} AND returned_at IS NULL`;
+  if (activeCheckouts.rows.length > 0) {
     return { success: false, error: "Cannot delete equipment with an active checkout." };
   }
 
-  const eqRef = doc(db, "equipment", String(id));
-  await deleteDoc(eqRef);
-
-  // Clean up tag links
-  const linksSnap = await getDocs(
-    query(collection(db, "equipment_tags"), where("equipment_id", "==", id))
-  );
-  for (const linkDoc of linksSnap.docs) {
-    await deleteDoc(linkDoc.ref);
-  }
-
+  await sql`DELETE FROM equipment WHERE id = ${id}`;
   return { success: true };
 }
 
 export async function getEquipmentByTagId(tagId: number): Promise<Equipment[]> {
-  const linksSnap = await getDocs(
-    query(collection(db, "equipment_tags"), where("tag_id", "==", tagId))
-  );
-  const equipmentIds = linksSnap.docs.map((d) => d.data().equipment_id as number);
-  if (equipmentIds.length === 0) return [];
-
-  const allEq = await getAllEquipment();
-  return allEq.filter((eq) => equipmentIds.includes(eq.id));
+  await ensureSchema();
+  const { rows } = await sql<EquipmentRawRow>`
+    SELECT 
+      e.id, e.name, e.description, e.serial_number, e.purchase_date,
+      e.condition, e.quantity, e.location, e.status, e.created_at, e.updated_at,
+      COALESCE(
+        ARRAY_AGG(t.name) FILTER (WHERE t.name IS NOT NULL),
+        '{}'
+      ) AS tags,
+      c.id AS active_checkout_id,
+      c.checked_out_by_name,
+      c.checked_out_at,
+      c.expected_return_at,
+      c.checkout_location
+    FROM equipment e
+    INNER JOIN equipment_tags ef ON ef.equipment_id = e.id AND ef.tag_id = ${tagId}
+    LEFT JOIN equipment_tags et ON et.equipment_id = e.id
+    LEFT JOIN tags t ON t.id = et.tag_id
+    LEFT JOIN checkouts c ON c.equipment_id = e.id AND c.returned_at IS NULL
+    GROUP BY e.id, c.id, c.checked_out_by_name, c.checked_out_at, c.expected_return_at, c.checkout_location
+    ORDER BY e.name ASC
+  `;
+  return rows.map(formatEquipmentRow);
 }
 
 export async function addTagToEquipment(
   equipmentId: number,
   tagId: number
 ): Promise<{ success: boolean; error?: string }> {
-  const eq = await getEquipmentById(equipmentId);
-  if (!eq) return { success: false, error: "Equipment not found." };
+  await ensureSchema();
+  const eq = await sql`SELECT id FROM equipment WHERE id = ${equipmentId}`;
+  if (eq.rows.length === 0) return { success: false, error: "Equipment not found." };
+  const tag = await sql`SELECT id FROM tags WHERE id = ${tagId}`;
+  if (tag.rows.length === 0) return { success: false, error: "Tag not found." };
 
-  const tagRef = doc(db, "tags", String(tagId));
-  const tagSnap = await getDoc(tagRef);
-  if (!tagSnap.exists()) return { success: false, error: "Tag not found." };
-
-  const tagObj = tagSnap.data() as Tag;
-  const newTags = Array.from(new Set([...eq.tags, tagObj.name]));
-
-  const linkRef = doc(db, "equipment_tags", `${equipmentId}_${tagId}`);
-  await setDoc(linkRef, { equipment_id: equipmentId, tag_id: tagId });
-
-  await updateDoc(doc(db, "equipment", String(equipmentId)), {
-    tags: newTags,
-    updated_at: new Date().toISOString(),
-  });
+  await sql`INSERT INTO equipment_tags (equipment_id, tag_id) VALUES (${equipmentId}, ${tagId}) ON CONFLICT DO NOTHING`;
+  await sql`UPDATE equipment SET updated_at = CURRENT_TIMESTAMP WHERE id = ${equipmentId}`;
 
   return { success: true };
 }
@@ -372,22 +311,9 @@ export async function removeTagFromEquipment(
   equipmentId: number,
   tagId: number
 ): Promise<{ success: boolean; error?: string }> {
-  const tagRef = doc(db, "tags", String(tagId));
-  const tagSnap = await getDoc(tagRef);
-  const tagObj = tagSnap.exists() ? (tagSnap.data() as Tag) : null;
-
-  const linkRef = doc(db, "equipment_tags", `${equipmentId}_${tagId}`);
-  await deleteDoc(linkRef);
-
-  const eq = await getEquipmentById(equipmentId);
-  if (eq && tagObj) {
-    const newTags = eq.tags.filter((t) => t.toLowerCase() !== tagObj.name.toLowerCase());
-    await updateDoc(doc(db, "equipment", String(equipmentId)), {
-      tags: newTags,
-      updated_at: new Date().toISOString(),
-    });
-  }
-
+  await ensureSchema();
+  await sql`DELETE FROM equipment_tags WHERE equipment_id = ${equipmentId} AND tag_id = ${tagId}`;
+  await sql`UPDATE equipment SET updated_at = CURRENT_TIMESTAMP WHERE id = ${equipmentId}`;
   return { success: true };
 }
 
@@ -403,54 +329,36 @@ export async function createCheckout(params: {
   notes?: string;
   checkout_location?: string;
 }): Promise<Checkout> {
-  const active = await getActiveCheckout(params.equipment_id);
-  if (active) throw new Error("Equipment is already checked out.");
+  await ensureSchema();
+  const active = await sql`SELECT id FROM checkouts WHERE equipment_id = ${params.equipment_id} AND returned_at IS NULL`;
+  if (active.rows.length > 0) {
+    throw new Error("Equipment is already checked out.");
+  }
 
-  const newId = await getNextId("checkouts");
-  const now = new Date().toISOString();
-  const checkoutRef = doc(db, "checkouts", String(newId));
+  const { rows } = await sql<Checkout>`
+    INSERT INTO checkouts (equipment_id, checked_out_by, checked_out_by_name, expected_return_at, notes, checkout_location)
+    VALUES (${params.equipment_id}, ${params.checked_out_by ?? null}, ${params.checked_out_by_name}, ${params.expected_return_at ?? null}, ${params.notes ?? null}, ${params.checkout_location ?? null})
+    RETURNING *
+  `;
 
-  const newCheckout: Checkout = {
-    id: newId,
-    equipment_id: params.equipment_id,
-    checked_out_by: params.checked_out_by ?? null,
-    checked_out_by_name: params.checked_out_by_name,
-    checked_out_at: now,
-    expected_return_at: params.expected_return_at ?? null,
-    returned_at: null,
-    notes: params.notes ?? null,
-    checkout_location: params.checkout_location ?? null,
-  };
-
-  await setDoc(checkoutRef, newCheckout);
-
-  const eqRef = doc(db, "equipment", String(params.equipment_id));
-  await updateDoc(eqRef, {
-    status: "Checked Out",
-    updated_at: now,
-  });
-
-  return newCheckout;
+  await sql`UPDATE equipment SET status = 'Checked Out', updated_at = CURRENT_TIMESTAMP WHERE id = ${params.equipment_id}`;
+  return rows[0];
 }
 
 export async function returnCheckout(equipment_id: number): Promise<Checkout> {
-  const active = await getActiveCheckout(equipment_id);
-  if (!active) throw new Error("No active checkout found for this equipment.");
+  await ensureSchema();
+  const active = await sql<Checkout>`SELECT * FROM checkouts WHERE equipment_id = ${equipment_id} AND returned_at IS NULL`;
+  if (active.rows.length === 0) {
+    throw new Error("No active checkout found for this equipment.");
+  }
 
-  const now = new Date().toISOString();
-  const checkoutRef = doc(db, "checkouts", String(active.id));
-  await updateDoc(checkoutRef, { returned_at: now });
+  const checkoutId = active.rows[0].id;
+  const { rows } = await sql<Checkout>`
+    UPDATE checkouts SET returned_at = CURRENT_TIMESTAMP WHERE id = ${checkoutId} RETURNING *
+  `;
 
-  const eqRef = doc(db, "equipment", String(equipment_id));
-  await updateDoc(eqRef, {
-    status: "Available",
-    updated_at: now,
-  });
-
-  return {
-    ...active,
-    returned_at: now,
-  };
+  await sql`UPDATE equipment SET status = 'Available', updated_at = CURRENT_TIMESTAMP WHERE id = ${equipment_id}`;
+  return rows[0];
 }
 
 // ---------------------------------------------------------------------------
@@ -458,31 +366,28 @@ export async function returnCheckout(equipment_id: number): Promise<Checkout> {
 // ---------------------------------------------------------------------------
 
 export async function getAllTags(): Promise<Tag[]> {
-  const q = query(collection(db, "tags"), orderBy("name", "asc"));
-  const snapshot = await getDocs(q);
-  return snapshot.docs.map((d) => d.data() as Tag);
+  await ensureSchema();
+  const { rows } = await sql<Tag>`SELECT * FROM tags ORDER BY name ASC`;
+  return rows;
 }
 
 export async function createTag(name: string): Promise<Tag> {
-  const newId = await getNextId("tags");
-  const tagRef = doc(db, "tags", String(newId));
-  const newTag: Tag = { id: newId, name };
-  await setDoc(tagRef, newTag);
-  return newTag;
+  await ensureSchema();
+  const { rows } = await sql<Tag>`INSERT INTO tags (name) VALUES (${name}) RETURNING *`;
+  return rows[0];
 }
 
 export async function deleteTag(id: number): Promise<{ success: boolean; error?: string }> {
-  const tagRef = doc(db, "tags", String(id));
-  const tagSnap = await getDoc(tagRef);
-  if (!tagSnap.exists()) return { success: false, error: "Tag not found." };
-
-  const inUseSnap = await getDocs(
-    query(collection(db, "equipment_tags"), where("tag_id", "==", id))
-  );
-  if (!inUseSnap.empty) {
+  await ensureSchema();
+  const inUse = await sql`SELECT equipment_id FROM equipment_tags WHERE tag_id = ${id} LIMIT 1`;
+  if (inUse.rows.length > 0) {
     return { success: false, error: "Cannot delete a tag that is in use by equipment." };
   }
 
-  await deleteDoc(tagRef);
+  const { rowCount } = await sql`DELETE FROM tags WHERE id = ${id}`;
+  if (rowCount === 0) {
+    return { success: false, error: "Tag not found." };
+  }
+
   return { success: true };
 }

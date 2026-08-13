@@ -1,147 +1,82 @@
 /**
  * Smoke tests — exercises every public lib/db.ts helper through the real
- * implementation, backed by an in-memory Firestore mock.
+ * implementation, backed by an in-memory SQLite database mock for @vercel/postgres.
  *
  * Runs automatically after every `npm run build` via the `postbuild` hook.
  */
 
-// ── In-Memory Firestore Mock Setup ──────────────────────────────────────────
+import Database from "better-sqlite3";
+import { makeTestDb } from "@/lib/test-db";
 
-interface MockDocRef {
-  col: string;
-  id: string;
+let testDb: Database.Database = makeTestDb();
+
+function resetDb() {
+  testDb.close();
+  testDb = makeTestDb();
 }
 
-interface MockQuery {
-  col: string;
-  filters: Array<{ field: string; op: string; val: unknown }>;
-  orderField?: string;
-  orderDir?: "asc" | "desc";
-}
-
-let store: Record<string, Record<string, Record<string, unknown>>> = {};
-
-function resetStore() {
-  store = {};
-}
-
-jest.mock("@/lib/firebase", () => ({
-  db: { _type: "mock_db" },
+jest.mock("@/lib/postgres", () => ({
+  ensureSchema: async () => {},
 }));
 
-jest.mock("firebase/firestore", () => {
+jest.mock("@vercel/postgres", () => {
   return {
-    collection: (_db: unknown, path: string) => path,
-    doc: (_db: unknown, colOrPath: string, ...rest: string[]) => {
-      let col = colOrPath;
-      let id = rest[0];
-      if (rest.length === 0) {
-        const parts = colOrPath.split("/");
-        col = parts[0];
-        id = parts[1];
-      }
-      return { col, id } as MockDocRef;
-    },
-    getDoc: async (ref: MockDocRef) => {
-      const data = store[ref.col]?.[ref.id];
-      return {
-        exists: () => data !== undefined,
-        data: () => (data ? JSON.parse(JSON.stringify(data)) : undefined),
-      };
-    },
-    getDocs: async (q: string | MockQuery) => {
-      let col: string;
-      let filters: Array<{ field: string; op: string; val: unknown }> = [];
-      let orderField: string | undefined;
-      let orderDir: "asc" | "desc" | undefined;
-
-      if (typeof q === "string") {
-        col = q;
-      } else {
-        col = q.col;
-        filters = q.filters;
-        orderField = q.orderField;
-        orderDir = q.orderDir;
-      }
-
-      const colDocs = store[col] ? Object.values(store[col]) : [];
-      let filtered = colDocs.filter((d) => {
-        for (const f of filters) {
-          const val = d[f.field];
-          if (f.op === "==" && val !== f.val) return false;
-        }
-        return true;
-      });
-
-      if (orderField) {
-        filtered = filtered.sort((a, b) => {
-          const va = (a[orderField!] ?? "") as string | number;
-          const vb = (b[orderField!] ?? "") as string | number;
-          if (va < vb) return orderDir === "desc" ? 1 : -1;
-          if (va > vb) return orderDir === "desc" ? -1 : 1;
-          return 0;
-        });
-      }
-
-      const docs = filtered.map((d) => ({
-        data: () => JSON.parse(JSON.stringify(d)),
-        ref: { col, id: String(d.id ?? d.equipment_id) },
-      }));
-
-      return {
-        empty: docs.length === 0,
-        size: docs.length,
-        docs,
-      };
-    },
-    setDoc: async (ref: MockDocRef, data: Record<string, unknown>) => {
-      if (!store[ref.col]) store[ref.col] = {};
-      store[ref.col][ref.id] = JSON.parse(JSON.stringify(data));
-    },
-    updateDoc: async (ref: MockDocRef, patch: Record<string, unknown>) => {
-      if (!store[ref.col]) store[ref.col] = {};
-      const current = store[ref.col][ref.id] || {};
-      store[ref.col][ref.id] = { ...current, ...JSON.parse(JSON.stringify(patch)) };
-    },
-    deleteDoc: async (ref: MockDocRef) => {
-      if (store[ref.col]) {
-        delete store[ref.col][ref.id];
-      }
-    },
-    query: (colPath: string, ...clauses: unknown[]) => {
-      const q: MockQuery = { col: colPath, filters: [] };
-      for (const c of clauses) {
-        const clause = c as { type: string; field: string; op?: string; val?: unknown; dir?: "asc" | "desc" };
-        if (clause.type === "where") {
-          q.filters.push({ field: clause.field, op: clause.op!, val: clause.val });
-        } else if (clause.type === "orderBy") {
-          q.orderField = clause.field;
-          q.orderDir = clause.dir ?? "asc";
+    sql: async (strings: TemplateStringsArray, ...values: unknown[]) => {
+      let query = "";
+      for (let i = 0; i < strings.length; i++) {
+        query += strings[i];
+        if (i < values.length) {
+          query += "?";
         }
       }
-      return q;
-    },
-    where: (field: string, op: string, val: unknown) => ({ type: "where", field, op, val }),
-    orderBy: (field: string, dir?: "asc" | "desc") => ({ type: "orderBy", field, dir }),
-    runTransaction: async (_db: unknown, updateFunction: (t: unknown) => Promise<unknown>) => {
-      const transaction = {
-        get: async (ref: MockDocRef) => {
-          const data = store[ref.col]?.[ref.id];
-          return {
-            exists: () => data !== undefined,
-            data: () => (data ? JSON.parse(JSON.stringify(data)) : undefined),
-          };
-        },
-        set: (ref: MockDocRef, data: Record<string, unknown>, opts?: { merge?: boolean }) => {
-          if (!store[ref.col]) store[ref.col] = {};
-          if (opts?.merge) {
-            store[ref.col][ref.id] = { ...(store[ref.col][ref.id] || {}), ...JSON.parse(JSON.stringify(data)) };
-          } else {
-            store[ref.col][ref.id] = JSON.parse(JSON.stringify(data));
+
+      let sqliteQuery = query
+        .replace(/COUNT\(\*\)::text/gi, "COUNT(*)")
+        .replace(/CURRENT_TIMESTAMP/gi, "datetime('now')")
+        .replace(/COALESCE\(\s*ARRAY_AGG\(t\.name\)\s*FILTER\s*\(WHERE\s*t\.name\s*IS\s*NOT\s*NULL\),\s*'{}'\s*\)/gi, "GROUP_CONCAT(t.name, '|||')")
+        .replace(/INSERT INTO (\w+) \((.*?)\) VALUES \((.*?)\) ON CONFLICT DO NOTHING/gi, "INSERT OR IGNORE INTO $1 ($2) VALUES ($3)");
+
+      let isReturning = false;
+      if (/RETURNING \*/i.test(sqliteQuery)) {
+        isReturning = true;
+        sqliteQuery = sqliteQuery.replace(/RETURNING \*/gi, "");
+      }
+
+      const trimmed = sqliteQuery.trim();
+
+      try {
+        if (/^(SELECT|WITH)/i.test(trimmed)) {
+          const stmt = testDb.prepare(sqliteQuery);
+          const rows = stmt.all(...(values as [])) as Array<Record<string, unknown>>;
+          const processedRows = rows.map((r) => {
+            if ("tags" in r && typeof r.tags === "string") {
+              const strVal = r.tags as string;
+              (r as Record<string, unknown>).tags = strVal ? strVal.split("|||").filter(Boolean) : [];
+            }
+            return r;
+          });
+          return { rows: processedRows, rowCount: processedRows.length };
+        } else {
+          const stmt = testDb.prepare(sqliteQuery);
+          const info = stmt.run(...(values as []));
+          let returnedRows: Array<Record<string, unknown>> = [];
+          if (isReturning && info.lastInsertRowid) {
+            let table = "users";
+            if (/INSERT INTO equipment/i.test(sqliteQuery)) table = "equipment";
+            else if (/INSERT INTO tags/i.test(sqliteQuery)) table = "tags";
+            else if (/INSERT INTO checkouts/i.test(sqliteQuery)) table = "checkouts";
+            else if (/UPDATE checkouts/i.test(sqliteQuery)) table = "checkouts";
+
+            const fetchStmt = testDb.prepare(`SELECT * FROM ${table} WHERE id = ?`);
+            const row = fetchStmt.get(info.lastInsertRowid) as Record<string, unknown>;
+            if (row) returnedRows.push(row);
           }
-        },
-      };
-      return await updateFunction(transaction);
+          return { rows: returnedRows, rowCount: info.changes };
+        }
+      } catch (err) {
+        console.error("SQL Error in test mock:", sqliteQuery, values, err);
+        throw err;
+      }
     },
   };
 });
@@ -167,8 +102,8 @@ import {
 
 // ── Smoke tests ───────────────────────────────────────────────────────────────
 
-describe("Smoke — lib/db.ts (in-memory Firestore)", () => {
-  beforeEach(resetStore);
+describe("Smoke — lib/db.ts (Vercel Postgres mock)", () => {
+  beforeEach(resetDb);
 
   // ── getAllEquipment ───────────────────────────────────────────────────────
 
@@ -214,7 +149,7 @@ describe("Smoke — lib/db.ts (in-memory Firestore)", () => {
         location: "Locker",
         status: "Available",
       });
-      expect(eq.tags).toEqual(["Camera", "Accessory"]);
+      expect(eq.tags.sort()).toEqual(["Accessory", "Camera"]);
       const tags = await getAllTags();
       expect(tags.map((t) => t.name).sort()).toEqual(["Accessory", "Camera"]);
     });
