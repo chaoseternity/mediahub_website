@@ -7,6 +7,7 @@ import Google from "next-auth/providers/google";
 import MicrosoftEntraId from "next-auth/providers/microsoft-entra-id";
 
 export const authConfig = {
+  trustHost: true,
   providers: [
     MicrosoftEntraId({
       clientId: process.env.AZURE_AD_CLIENT_ID!,
