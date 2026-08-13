@@ -6,15 +6,17 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Search, UserCheck, ShieldAlert } from "lucide-react";
-import type { User } from "@/lib/types";
+import type { AppEvent, User } from "@/lib/types";
 
-interface CreateEventModalProps {
+interface EditEventModalProps {
+  event: AppEvent | null;
   open: boolean;
+  isAdmin: boolean;
   onClose: () => void;
-  onCreated: () => void;
+  onUpdated: () => void;
 }
 
-export function CreateEventModal({ open, onClose, onCreated }: CreateEventModalProps) {
+export function EditEventModal({ event, open, isAdmin, onClose, onUpdated }: EditEventModalProps) {
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
   const [location, setLocation] = useState("");
@@ -37,20 +39,24 @@ export function CreateEventModal({ open, onClose, onCreated }: CreateEventModalP
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    if (open) {
-      setName("");
-      setDescription("");
-      setLocation("");
-      setStartTime("");
-      setEndTime("");
-      setHasRehearsal(false);
-      setRehearsalStartTime("");
-      setRehearsalEndTime("");
+    if (open && event) {
+      setName(event.name);
+      setDescription(event.description ?? "");
+      setLocation(event.location);
+
+      setStartTime(event.start_time ? new Date(event.start_time).toISOString().slice(0, 16) : "");
+      setEndTime(event.end_time ? new Date(event.end_time).toISOString().slice(0, 16) : "");
+
+      setHasRehearsal(event.has_rehearsal);
+      setRehearsalStartTime(event.rehearsal_start_time ? new Date(event.rehearsal_start_time).toISOString().slice(0, 16) : "");
+      setRehearsalEndTime(event.rehearsal_end_time ? new Date(event.rehearsal_end_time).toISOString().slice(0, 16) : "");
+
       setUserSearch("");
-      setSelectedOicIds([]);
-      setSelectedPhotoIcIds([]);
-      setSelectedVideoIcIds([]);
-      setSelectedAvIcIds([]);
+      setSelectedOicIds(event.oics.map((u) => u.id));
+      setSelectedPhotoIcIds(event.section_ics.photo.map((u) => u.id));
+      setSelectedVideoIcIds(event.section_ics.video.map((u) => u.id));
+      setSelectedAvIcIds(event.section_ics.av.map((u) => u.id));
+
       setError(null);
 
       fetch("/api/users")
@@ -58,7 +64,9 @@ export function CreateEventModal({ open, onClose, onCreated }: CreateEventModalP
         .then((data: User[]) => setAllUsers(data))
         .catch(() => setAllUsers([]));
     }
-  }, [open]);
+  }, [open, event]);
+
+  if (!event) return null;
 
   const filteredUsers = allUsers.filter(
     (u) =>
@@ -73,6 +81,7 @@ export function CreateEventModal({ open, onClose, onCreated }: CreateEventModalP
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
+    if (!event) return;
     if (!name || !location || !startTime || !endTime) {
       setError("Please fill out all required fields.");
       return;
@@ -98,18 +107,18 @@ export function CreateEventModal({ open, onClose, onCreated }: CreateEventModalP
     setError(null);
 
     try {
-      const res = await fetch("/api/events", {
-        method: "POST",
+      const res = await fetch(`/api/events/${event.id}`, {
+        method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          name,
+          name: isAdmin ? name : undefined,
           description: description || undefined,
           location,
           start_time: new Date(startTime).toISOString(),
           end_time: new Date(endTime).toISOString(),
           has_rehearsal: hasRehearsal,
-          rehearsal_start_time: hasRehearsal ? new Date(rehearsalStartTime).toISOString() : undefined,
-          rehearsal_end_time: hasRehearsal ? new Date(rehearsalEndTime).toISOString() : undefined,
+          rehearsal_start_time: hasRehearsal ? new Date(rehearsalStartTime).toISOString() : null,
+          rehearsal_end_time: hasRehearsal ? new Date(rehearsalEndTime).toISOString() : null,
           oic_user_ids: selectedOicIds,
           photo_ic_ids: selectedPhotoIcIds,
           video_ic_ids: selectedVideoIcIds,
@@ -119,10 +128,10 @@ export function CreateEventModal({ open, onClose, onCreated }: CreateEventModalP
 
       if (!res.ok) {
         const data = await res.json();
-        throw new Error(data.error?.message ?? data.error ?? "Failed to create event");
+        throw new Error(data.error?.message ?? data.error ?? "Failed to update event");
       }
 
-      onCreated();
+      onUpdated();
       onClose();
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : "An error occurred");
@@ -135,7 +144,7 @@ export function CreateEventModal({ open, onClose, onCreated }: CreateEventModalP
     <Dialog open={open} onOpenChange={onClose}>
       <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
         <DialogHeader>
-          <DialogTitle className="text-xl font-bold">Create New Event</DialogTitle>
+          <DialogTitle className="text-xl font-bold">Edit Event Details</DialogTitle>
         </DialogHeader>
 
         <form onSubmit={handleSubmit} className="space-y-6 py-2">
@@ -143,24 +152,23 @@ export function CreateEventModal({ open, onClose, onCreated }: CreateEventModalP
 
           {/* Event Details */}
           <div className="space-y-4">
-            <h3 className="text-sm font-semibold border-b pb-1">1. Event Information</h3>
+            <h3 className="text-sm font-semibold border-b pb-1">1. Event Details</h3>
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <div className="space-y-1.5 sm:col-span-2">
-                <Label htmlFor="event-name">Event Name *</Label>
+                <Label htmlFor="edit-event-name">Event Name {!isAdmin && "(Admin editable only)"}</Label>
                 <Input
-                  id="event-name"
-                  placeholder="e.g. Annual Media Festival"
+                  id="edit-event-name"
                   value={name}
                   onChange={(e) => setName(e.target.value)}
+                  disabled={!isAdmin}
                   required
                 />
               </div>
 
               <div className="space-y-1.5">
-                <Label htmlFor="event-location">Location *</Label>
+                <Label htmlFor="edit-event-location">Location *</Label>
                 <Input
-                  id="event-location"
-                  placeholder="e.g. Main Auditorium"
+                  id="edit-event-location"
                   value={location}
                   onChange={(e) => setLocation(e.target.value)}
                   required
@@ -168,19 +176,18 @@ export function CreateEventModal({ open, onClose, onCreated }: CreateEventModalP
               </div>
 
               <div className="space-y-1.5">
-                <Label htmlFor="event-description">Description</Label>
+                <Label htmlFor="edit-event-description">Description</Label>
                 <Input
-                  id="event-description"
-                  placeholder="Brief details…"
+                  id="edit-event-description"
                   value={description}
                   onChange={(e) => setDescription(e.target.value)}
                 />
               </div>
 
               <div className="space-y-1.5">
-                <Label htmlFor="start-time">Event Start Date & Time *</Label>
+                <Label htmlFor="edit-start-time">Event Start Date & Time *</Label>
                 <Input
-                  id="start-time"
+                  id="edit-start-time"
                   type="datetime-local"
                   value={startTime}
                   onChange={(e) => setStartTime(e.target.value)}
@@ -189,9 +196,9 @@ export function CreateEventModal({ open, onClose, onCreated }: CreateEventModalP
               </div>
 
               <div className="space-y-1.5">
-                <Label htmlFor="end-time">Event End Date & Time *</Label>
+                <Label htmlFor="edit-end-time">Event End Date & Time *</Label>
                 <Input
-                  id="end-time"
+                  id="edit-end-time"
                   type="datetime-local"
                   value={endTime}
                   onChange={(e) => setEndTime(e.target.value)}
@@ -201,7 +208,7 @@ export function CreateEventModal({ open, onClose, onCreated }: CreateEventModalP
             </div>
           </div>
 
-          {/* Rehearsal Config */}
+          {/* Rehearsal Schedule */}
           <div className="space-y-3 pt-2 border-t">
             <div className="flex items-center justify-between">
               <h3 className="text-sm font-semibold">2. Rehearsal Schedule</h3>
@@ -219,9 +226,9 @@ export function CreateEventModal({ open, onClose, onCreated }: CreateEventModalP
             {hasRehearsal && (
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 bg-muted/20 p-3 rounded-lg border">
                 <div className="space-y-1.5">
-                  <Label htmlFor="reh-start">Rehearsal Start *</Label>
+                  <Label htmlFor="edit-reh-start">Rehearsal Start *</Label>
                   <Input
-                    id="reh-start"
+                    id="edit-reh-start"
                     type="datetime-local"
                     value={rehearsalStartTime}
                     onChange={(e) => setRehearsalStartTime(e.target.value)}
@@ -229,9 +236,9 @@ export function CreateEventModal({ open, onClose, onCreated }: CreateEventModalP
                   />
                 </div>
                 <div className="space-y-1.5">
-                  <Label htmlFor="reh-end">Rehearsal End *</Label>
+                  <Label htmlFor="edit-reh-end">Rehearsal End *</Label>
                   <Input
-                    id="reh-end"
+                    id="edit-reh-end"
                     type="datetime-local"
                     value={rehearsalEndTime}
                     onChange={(e) => setRehearsalEndTime(e.target.value)}
@@ -242,7 +249,7 @@ export function CreateEventModal({ open, onClose, onCreated }: CreateEventModalP
             )}
           </div>
 
-          {/* User Search & Assignments */}
+          {/* User Assignments */}
           <div className="space-y-4 pt-2 border-t">
             <div className="flex items-center justify-between">
               <h3 className="text-sm font-semibold">3. OIC & Section IC Assignments</h3>
@@ -257,7 +264,7 @@ export function CreateEventModal({ open, onClose, onCreated }: CreateEventModalP
               </div>
             </div>
 
-            {/* OIC Section */}
+            {/* OICs */}
             <div className="space-y-2">
               <Label className="text-xs font-semibold text-purple-700 dark:text-purple-300 flex items-center gap-1">
                 <ShieldAlert className="h-3.5 w-3.5" />
@@ -351,7 +358,7 @@ export function CreateEventModal({ open, onClose, onCreated }: CreateEventModalP
               Cancel
             </Button>
             <Button type="submit" disabled={submitting}>
-              {submitting ? "Creating…" : "Create Event"}
+              {submitting ? "Saving…" : "Save Changes"}
             </Button>
           </DialogFooter>
         </form>

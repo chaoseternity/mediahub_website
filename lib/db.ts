@@ -11,7 +11,15 @@ import type {
   Tag,
   AppEvent,
   EventStatus,
+  EventSection,
   EventEquipmentLog,
+  SectionICMap,
+  SectionEquipmentMap,
+  SectionEquipmentItem,
+  SectionDeploymentMap,
+  SectionDeploymentItem,
+  SectionRehearsalMap,
+  SectionRehearsalConfig,
 } from "./types";
 
 function getAdminEmails(): Set<string> {
@@ -42,7 +50,7 @@ export async function getAllUsers(): Promise<User[]> {
   const { rows } = await sql<User>`
     SELECT id, name, email, username, google_id, image, role, provider, created_at
     FROM users
-    ORDER BY created_at ASC
+    ORDER BY name ASC
   `;
   return rows;
 }
@@ -117,9 +125,8 @@ function formatEquipmentRow(row: EquipmentRawRow): Equipment {
     tags: Array.isArray(row.tags) ? row.tags.filter(Boolean) : [],
   };
 
-  // If equipment is attached to an ongoing event, override status to "In Event" if Available or Checked Out
   if (formatted.active_event_id && (formatted.status === "Available" || formatted.status === "Checked Out")) {
-    formatted.status = "In Event";
+    formatted.status = formatted.is_rehearsal ? "In Event (Rehearsal)" : "In Event";
   }
 
   return formatted;
@@ -143,15 +150,25 @@ export async function getAllEquipment(): Promise<Equipment[]> {
       ev.id AS active_event_id,
       ev.name AS active_event_name,
       ev.location AS active_event_location,
-      ev.start_time AS active_event_start_time,
-      ev.end_time AS active_event_end_time
+      CASE
+        WHEN ev.has_rehearsal AND CURRENT_TIMESTAMP >= ev.rehearsal_start_time AND CURRENT_TIMESTAMP <= ev.rehearsal_end_time AND ee.used_for_rehearsal THEN ev.rehearsal_start_time
+        ELSE ev.start_time
+      END AS active_event_start_time,
+      CASE
+        WHEN ev.has_rehearsal AND CURRENT_TIMESTAMP >= ev.rehearsal_start_time AND CURRENT_TIMESTAMP <= ev.rehearsal_end_time AND ee.used_for_rehearsal THEN ev.rehearsal_end_time
+        ELSE ev.end_time
+      END AS active_event_end_time,
+      (ev.has_rehearsal AND CURRENT_TIMESTAMP >= ev.rehearsal_start_time AND CURRENT_TIMESTAMP <= ev.rehearsal_end_time AND ee.used_for_rehearsal) AS is_rehearsal
     FROM equipment e
     LEFT JOIN equipment_tags et ON et.equipment_id = e.id
     LEFT JOIN tags t ON t.id = et.tag_id
     LEFT JOIN checkouts c ON c.equipment_id = e.id AND c.returned_at IS NULL
     LEFT JOIN event_equipment ee ON ee.equipment_id = e.id
-    LEFT JOIN events ev ON ev.id = ee.event_id AND CURRENT_TIMESTAMP >= ev.start_time AND CURRENT_TIMESTAMP <= ev.end_time
-    GROUP BY e.id, c.id, c.checked_out_by_name, c.checked_out_at, c.expected_return_at, c.checkout_location, ev.id, ev.name, ev.location, ev.start_time, ev.end_time
+    LEFT JOIN events ev ON ev.id = ee.event_id AND (
+      (CURRENT_TIMESTAMP >= ev.start_time AND CURRENT_TIMESTAMP <= ev.end_time) OR
+      (ev.has_rehearsal AND CURRENT_TIMESTAMP >= ev.rehearsal_start_time AND CURRENT_TIMESTAMP <= ev.rehearsal_end_time AND ee.used_for_rehearsal)
+    )
+    GROUP BY e.id, c.id, c.checked_out_by_name, c.checked_out_at, c.expected_return_at, c.checkout_location, ev.id, ev.name, ev.location, ev.start_time, ev.end_time, ev.has_rehearsal, ev.rehearsal_start_time, ev.rehearsal_end_time, ee.used_for_rehearsal
     ORDER BY e.updated_at DESC
   `;
   return rows.map(formatEquipmentRow);
@@ -175,16 +192,26 @@ export async function getEquipmentById(id: number): Promise<EquipmentDetail | un
       ev.id AS active_event_id,
       ev.name AS active_event_name,
       ev.location AS active_event_location,
-      ev.start_time AS active_event_start_time,
-      ev.end_time AS active_event_end_time
+      CASE
+        WHEN ev.has_rehearsal AND CURRENT_TIMESTAMP >= ev.rehearsal_start_time AND CURRENT_TIMESTAMP <= ev.rehearsal_end_time AND ee.used_for_rehearsal THEN ev.rehearsal_start_time
+        ELSE ev.start_time
+      END AS active_event_start_time,
+      CASE
+        WHEN ev.has_rehearsal AND CURRENT_TIMESTAMP >= ev.rehearsal_start_time AND CURRENT_TIMESTAMP <= ev.rehearsal_end_time AND ee.used_for_rehearsal THEN ev.rehearsal_end_time
+        ELSE ev.end_time
+      END AS active_event_end_time,
+      (ev.has_rehearsal AND CURRENT_TIMESTAMP >= ev.rehearsal_start_time AND CURRENT_TIMESTAMP <= ev.rehearsal_end_time AND ee.used_for_rehearsal) AS is_rehearsal
     FROM equipment e
     LEFT JOIN equipment_tags et ON et.equipment_id = e.id
     LEFT JOIN tags t ON t.id = et.tag_id
     LEFT JOIN checkouts c ON c.equipment_id = e.id AND c.returned_at IS NULL
     LEFT JOIN event_equipment ee ON ee.equipment_id = e.id
-    LEFT JOIN events ev ON ev.id = ee.event_id AND CURRENT_TIMESTAMP >= ev.start_time AND CURRENT_TIMESTAMP <= ev.end_time
+    LEFT JOIN events ev ON ev.id = ee.event_id AND (
+      (CURRENT_TIMESTAMP >= ev.start_time AND CURRENT_TIMESTAMP <= ev.end_time) OR
+      (ev.has_rehearsal AND CURRENT_TIMESTAMP >= ev.rehearsal_start_time AND CURRENT_TIMESTAMP <= ev.rehearsal_end_time AND ee.used_for_rehearsal)
+    )
     WHERE e.id = ${id}
-    GROUP BY e.id, c.id, c.checked_out_by_name, c.checked_out_at, c.expected_return_at, c.checkout_location, ev.id, ev.name, ev.location, ev.start_time, ev.end_time
+    GROUP BY e.id, c.id, c.checked_out_by_name, c.checked_out_at, c.expected_return_at, c.checkout_location, ev.id, ev.name, ev.location, ev.start_time, ev.end_time, ev.has_rehearsal, ev.rehearsal_start_time, ev.rehearsal_end_time, ee.used_for_rehearsal
   `;
 
   if (eqRows.length === 0) return undefined;
@@ -202,7 +229,8 @@ export async function getEquipmentById(id: number): Promise<EquipmentDetail | un
       ev.location AS event_location,
       ev.start_time,
       ev.end_time,
-      ee.added_at
+      ee.added_at,
+      ee.used_for_rehearsal AS is_rehearsal
     FROM event_equipment ee
     JOIN events ev ON ev.id = ee.event_id
     WHERE ee.equipment_id = ${id}
@@ -328,16 +356,26 @@ export async function getEquipmentByTagId(tagId: number): Promise<Equipment[]> {
       ev.id AS active_event_id,
       ev.name AS active_event_name,
       ev.location AS active_event_location,
-      ev.start_time AS active_event_start_time,
-      ev.end_time AS active_event_end_time
+      CASE
+        WHEN ev.has_rehearsal AND CURRENT_TIMESTAMP >= ev.rehearsal_start_time AND CURRENT_TIMESTAMP <= ev.rehearsal_end_time AND ee.used_for_rehearsal THEN ev.rehearsal_start_time
+        ELSE ev.start_time
+      END AS active_event_start_time,
+      CASE
+        WHEN ev.has_rehearsal AND CURRENT_TIMESTAMP >= ev.rehearsal_start_time AND CURRENT_TIMESTAMP <= ev.rehearsal_end_time AND ee.used_for_rehearsal THEN ev.rehearsal_end_time
+        ELSE ev.end_time
+      END AS active_event_end_time,
+      (ev.has_rehearsal AND CURRENT_TIMESTAMP >= ev.rehearsal_start_time AND CURRENT_TIMESTAMP <= ev.rehearsal_end_time AND ee.used_for_rehearsal) AS is_rehearsal
     FROM equipment e
     INNER JOIN equipment_tags ef ON ef.equipment_id = e.id AND ef.tag_id = ${tagId}
     LEFT JOIN equipment_tags et ON et.equipment_id = e.id
     LEFT JOIN tags t ON t.id = et.tag_id
     LEFT JOIN checkouts c ON c.equipment_id = e.id AND c.returned_at IS NULL
     LEFT JOIN event_equipment ee ON ee.equipment_id = e.id
-    LEFT JOIN events ev ON ev.id = ee.event_id AND CURRENT_TIMESTAMP >= ev.start_time AND CURRENT_TIMESTAMP <= ev.end_time
-    GROUP BY e.id, c.id, c.checked_out_by_name, c.checked_out_at, c.expected_return_at, c.checkout_location, ev.id, ev.name, ev.location, ev.start_time, ev.end_time
+    LEFT JOIN events ev ON ev.id = ee.event_id AND (
+      (CURRENT_TIMESTAMP >= ev.start_time AND CURRENT_TIMESTAMP <= ev.end_time) OR
+      (ev.has_rehearsal AND CURRENT_TIMESTAMP >= ev.rehearsal_start_time AND CURRENT_TIMESTAMP <= ev.rehearsal_end_time AND ee.used_for_rehearsal)
+    )
+    GROUP BY e.id, c.id, c.checked_out_by_name, c.checked_out_at, c.expected_return_at, c.checkout_location, ev.id, ev.name, ev.location, ev.start_time, ev.end_time, ev.has_rehearsal, ev.rehearsal_start_time, ev.rehearsal_end_time, ee.used_for_rehearsal
     ORDER BY e.name ASC
   `;
   return rows.map(formatEquipmentRow);
@@ -460,8 +498,8 @@ function computeEventStatus(startTime: string, endTime: string): EventStatus {
 
 export async function getAllEvents(): Promise<AppEvent[]> {
   await ensureSchema();
-  const { rows: eventRows } = await sql<Omit<AppEvent, "ics" | "equipment" | "status">>`
-    SELECT id, name, description, start_time, end_time, location, created_by, created_at, updated_at
+  const { rows: eventRows } = await sql<Omit<AppEvent, "oics" | "section_ics" | "section_equipment" | "section_deployments" | "section_rehearsals" | "status" | "ics" | "equipment">>`
+    SELECT id, name, description, start_time, end_time, location, created_by, has_rehearsal, rehearsal_start_time, rehearsal_end_time, created_at, updated_at
     FROM events
     ORDER BY start_time DESC
   `;
@@ -469,37 +507,8 @@ export async function getAllEvents(): Promise<AppEvent[]> {
   const events: AppEvent[] = [];
 
   for (const ev of eventRows) {
-    const { rows: ics } = await sql<User>`
-      SELECT u.id, u.name, u.email, u.username, u.google_id, u.image, u.role, u.provider, u.created_at
-      FROM users u
-      JOIN event_ics ei ON ei.user_id = u.id
-      WHERE ei.event_id = ${ev.id}
-      ORDER BY u.name ASC
-    `;
-
-    const { rows: eqRows } = await sql<EquipmentRawRow>`
-      SELECT 
-        e.id, e.name, e.description, e.serial_number, e.purchase_date,
-        e.condition, e.quantity, e.location, e.status, e.created_at, e.updated_at,
-        COALESCE(
-          ARRAY_AGG(DISTINCT t.name) FILTER (WHERE t.name IS NOT NULL),
-          '{}'
-        ) AS tags
-      FROM equipment e
-      JOIN event_equipment ee ON ee.equipment_id = e.id
-      LEFT JOIN equipment_tags et ON et.equipment_id = e.id
-      LEFT JOIN tags t ON t.id = et.tag_id
-      WHERE ee.event_id = ${ev.id}
-      GROUP BY e.id
-      ORDER BY e.name ASC
-    `;
-
-    events.push({
-      ...ev,
-      ics,
-      equipment: eqRows.map(formatEquipmentRow),
-      status: computeEventStatus(ev.start_time, ev.end_time),
-    });
+    const full = await getEventById(ev.id);
+    if (full) events.push(full);
   }
 
   return events;
@@ -507,8 +516,8 @@ export async function getAllEvents(): Promise<AppEvent[]> {
 
 export async function getEventById(id: number): Promise<AppEvent | undefined> {
   await ensureSchema();
-  const { rows } = await sql<Omit<AppEvent, "ics" | "equipment" | "status">>`
-    SELECT id, name, description, start_time, end_time, location, created_by, created_at, updated_at
+  const { rows } = await sql<Omit<AppEvent, "oics" | "section_ics" | "section_equipment" | "section_deployments" | "section_rehearsals" | "status" | "ics" | "equipment">>`
+    SELECT id, name, description, start_time, end_time, location, created_by, has_rehearsal, rehearsal_start_time, rehearsal_end_time, created_at, updated_at
     FROM events
     WHERE id = ${id}
   `;
@@ -516,18 +525,37 @@ export async function getEventById(id: number): Promise<AppEvent | undefined> {
   if (rows.length === 0) return undefined;
   const ev = rows[0];
 
-  const { rows: ics } = await sql<User>`
+  // Fetch OICs
+  const { rows: oics } = await sql<User>`
     SELECT u.id, u.name, u.email, u.username, u.google_id, u.image, u.role, u.provider, u.created_at
+    FROM users u
+    JOIN event_oics eo ON eo.user_id = u.id
+    WHERE eo.event_id = ${id}
+    ORDER BY u.name ASC
+  `;
+
+  // Fetch Section ICs
+  const section_ics: SectionICMap = { photo: [], video: [], av: [] };
+  const { rows: icRows } = await sql<User & { section: EventSection }>`
+    SELECT u.id, u.name, u.email, u.username, u.google_id, u.image, u.role, u.provider, u.created_at, ei.section
     FROM users u
     JOIN event_ics ei ON ei.user_id = u.id
     WHERE ei.event_id = ${id}
     ORDER BY u.name ASC
   `;
+  for (const ic of icRows) {
+    if (section_ics[ic.section]) {
+      section_ics[ic.section].push(ic);
+    }
+  }
 
-  const { rows: eqRows } = await sql<EquipmentRawRow>`
+  // Fetch Section Equipment
+  const section_equipment: SectionEquipmentMap = { photo: [], video: [], av: [] };
+  const { rows: eqRows } = await sql<EquipmentRawRow & { section: EventSection; used_for_rehearsal: boolean }>`
     SELECT 
       e.id, e.name, e.description, e.serial_number, e.purchase_date,
       e.condition, e.quantity, e.location, e.status, e.created_at, e.updated_at,
+      ee.section, ee.used_for_rehearsal,
       COALESCE(
         ARRAY_AGG(DISTINCT t.name) FILTER (WHERE t.name IS NOT NULL),
         '{}'
@@ -537,14 +565,55 @@ export async function getEventById(id: number): Promise<AppEvent | undefined> {
     LEFT JOIN equipment_tags et ON et.equipment_id = e.id
     LEFT JOIN tags t ON t.id = et.tag_id
     WHERE ee.event_id = ${id}
-    GROUP BY e.id
+    GROUP BY e.id, ee.section, ee.used_for_rehearsal
     ORDER BY e.name ASC
   `;
+  for (const item of eqRows) {
+    const formatted = formatEquipmentRow(item) as SectionEquipmentItem;
+    formatted.used_for_rehearsal = Boolean(item.used_for_rehearsal);
+    if (section_equipment[item.section]) {
+      section_equipment[item.section].push(formatted);
+    }
+  }
+
+  // Fetch Section Deployments
+  const section_deployments: SectionDeploymentMap = { photo: [], video: [], av: [] };
+  const { rows: depRows } = await sql<User & { section: EventSection; attending_rehearsal: boolean }>`
+    SELECT u.id, u.name, u.email, u.username, u.google_id, u.image, u.role, u.provider, u.created_at, ed.section, ed.attending_rehearsal
+    FROM users u
+    JOIN event_deployments ed ON ed.user_id = u.id
+    WHERE ed.event_id = ${id}
+    ORDER BY u.name ASC
+  `;
+  for (const dep of depRows) {
+    const item: SectionDeploymentItem = { ...dep, attending_rehearsal: Boolean(dep.attending_rehearsal) };
+    if (section_deployments[dep.section]) {
+      section_deployments[dep.section].push(item);
+    }
+  }
+
+  // Fetch Section Rehearsals config
+  const section_rehearsals: SectionRehearsalMap = {
+    photo: { participating: false },
+    video: { participating: false },
+    av: { participating: false },
+  };
+  const { rows: rehRows } = await sql<{ section: EventSection; participating: boolean }>`
+    SELECT section, participating FROM event_section_rehearsals WHERE event_id = ${id}
+  `;
+  for (const reh of rehRows) {
+    if (section_rehearsals[reh.section]) {
+      section_rehearsals[reh.section].participating = Boolean(reh.participating);
+    }
+  }
 
   return {
     ...ev,
-    ics,
-    equipment: eqRows.map(formatEquipmentRow),
+    oics,
+    section_ics,
+    section_equipment,
+    section_deployments,
+    section_rehearsals,
     status: computeEventStatus(ev.start_time, ev.end_time),
   };
 }
@@ -556,21 +625,43 @@ export async function createEvent(params: {
   end_time: string;
   location: string;
   created_by: number | null;
-  ic_user_ids: number[];
+  has_rehearsal?: boolean;
+  rehearsal_start_time?: string;
+  rehearsal_end_time?: string;
+  oic_user_ids?: number[];
+  photo_ic_ids?: number[];
+  video_ic_ids?: number[];
+  av_ic_ids?: number[];
 }): Promise<AppEvent> {
   await ensureSchema();
   const { rows } = await sql<AppEvent>`
-    INSERT INTO events (name, description, start_time, end_time, location, created_by)
-    VALUES (${params.name}, ${params.description ?? null}, ${params.start_time}, ${params.end_time}, ${params.location}, ${params.created_by})
+    INSERT INTO events (name, description, start_time, end_time, location, created_by, has_rehearsal, rehearsal_start_time, rehearsal_end_time)
+    VALUES (${params.name}, ${params.description ?? null}, ${params.start_time}, ${params.end_time}, ${params.location}, ${params.created_by}, ${params.has_rehearsal ?? false}, ${params.rehearsal_start_time ?? null}, ${params.rehearsal_end_time ?? null})
     RETURNING *
   `;
 
   const newId = rows[0].id;
 
-  if (params.ic_user_ids && params.ic_user_ids.length > 0) {
-    for (const userId of params.ic_user_ids) {
-      await sql`INSERT INTO event_ics (event_id, user_id) VALUES (${newId}, ${userId}) ON CONFLICT DO NOTHING`;
+  if (params.oic_user_ids) {
+    for (const uid of params.oic_user_ids) {
+      await sql`INSERT INTO event_oics (event_id, user_id) VALUES (${newId}, ${uid}) ON CONFLICT DO NOTHING`;
     }
+  }
+
+  const sectionMap: Record<EventSection, number[] | undefined> = {
+    photo: params.photo_ic_ids,
+    video: params.video_ic_ids,
+    av: params.av_ic_ids,
+  };
+
+  for (const sec of ["photo", "video", "av"] as EventSection[]) {
+    const ids = sectionMap[sec];
+    if (ids) {
+      for (const uid of ids) {
+        await sql`INSERT INTO event_ics (event_id, user_id, section) VALUES (${newId}, ${uid}, ${sec}) ON CONFLICT DO NOTHING`;
+      }
+    }
+    await sql`INSERT INTO event_section_rehearsals (event_id, section, participating) VALUES (${newId}, ${sec}, FALSE) ON CONFLICT DO NOTHING`;
   }
 
   return (await getEventById(newId))!;
@@ -584,14 +675,20 @@ export async function updateEvent(
     start_time: string;
     end_time: string;
     location: string;
-    ic_user_ids: number[];
+    has_rehearsal: boolean;
+    rehearsal_start_time: string | null;
+    rehearsal_end_time: string | null;
+    oic_user_ids: number[];
+    photo_ic_ids: number[];
+    video_ic_ids: number[];
+    av_ic_ids: number[];
   }>
 ): Promise<AppEvent | undefined> {
   await ensureSchema();
   const existing = await getEventById(id);
   if (!existing) return undefined;
 
-  const { ic_user_ids, ...scalars } = params;
+  const { oic_user_ids, photo_ic_ids, video_ic_ids, av_ic_ids, ...scalars } = params;
 
   if (Object.keys(scalars).length > 0) {
     if (scalars.name !== undefined) await sql`UPDATE events SET name = ${scalars.name} WHERE id = ${id}`;
@@ -599,15 +696,33 @@ export async function updateEvent(
     if (scalars.start_time !== undefined) await sql`UPDATE events SET start_time = ${scalars.start_time} WHERE id = ${id}`;
     if (scalars.end_time !== undefined) await sql`UPDATE events SET end_time = ${scalars.end_time} WHERE id = ${id}`;
     if (scalars.location !== undefined) await sql`UPDATE events SET location = ${scalars.location} WHERE id = ${id}`;
+    if (scalars.has_rehearsal !== undefined) await sql`UPDATE events SET has_rehearsal = ${scalars.has_rehearsal} WHERE id = ${id}`;
+    if (scalars.rehearsal_start_time !== undefined) await sql`UPDATE events SET rehearsal_start_time = ${scalars.rehearsal_start_time} WHERE id = ${id}`;
+    if (scalars.rehearsal_end_time !== undefined) await sql`UPDATE events SET rehearsal_end_time = ${scalars.rehearsal_end_time} WHERE id = ${id}`;
     await sql`UPDATE events SET updated_at = CURRENT_TIMESTAMP WHERE id = ${id}`;
   }
 
-  if (ic_user_ids !== undefined) {
-    await sql`DELETE FROM event_ics WHERE event_id = ${id}`;
-    for (const userId of ic_user_ids) {
-      await sql`INSERT INTO event_ics (event_id, user_id) VALUES (${id}, ${userId}) ON CONFLICT DO NOTHING`;
+  if (oic_user_ids !== undefined) {
+    await sql`DELETE FROM event_oics WHERE event_id = ${id}`;
+    for (const uid of oic_user_ids) {
+      await sql`INSERT INTO event_oics (event_id, user_id) VALUES (${id}, ${uid}) ON CONFLICT DO NOTHING`;
     }
-    await sql`UPDATE events SET updated_at = CURRENT_TIMESTAMP WHERE id = ${id}`;
+  }
+
+  const sectionMap: Record<EventSection, number[] | undefined> = {
+    photo: photo_ic_ids,
+    video: video_ic_ids,
+    av: av_ic_ids,
+  };
+
+  for (const sec of ["photo", "video", "av"] as EventSection[]) {
+    const ids = sectionMap[sec];
+    if (ids !== undefined) {
+      await sql`DELETE FROM event_ics WHERE event_id = ${id} AND section = ${sec}`;
+      for (const uid of ids) {
+        await sql`INSERT INTO event_ics (event_id, user_id, section) VALUES (${id}, ${uid}, ${sec}) ON CONFLICT DO NOTHING`;
+      }
+    }
   }
 
   return getEventById(id);
@@ -619,32 +734,103 @@ export async function deleteEvent(id: number): Promise<{ success: boolean; error
   return { success: true };
 }
 
-export async function attachEquipmentToEvent(
+export async function attachEquipmentToEventSection(
   eventId: number,
   equipmentId: number,
-  addedBy: number | null
+  section: EventSection,
+  usedForRehearsal = false,
+  addedBy: number | null = null
 ): Promise<{ success: boolean; error?: string }> {
   await ensureSchema();
-  const event = await getEventById(eventId);
-  if (!event) return { success: false, error: "Event not found." };
-
-  const eq = await getEquipmentById(equipmentId);
-  if (!eq) return { success: false, error: "Equipment not found." };
-
   await sql`
-    INSERT INTO event_equipment (event_id, equipment_id, added_by)
-    VALUES (${eventId}, ${equipmentId}, ${addedBy})
-    ON CONFLICT DO NOTHING
+    INSERT INTO event_equipment (event_id, equipment_id, section, used_for_rehearsal, added_by)
+    VALUES (${eventId}, ${equipmentId}, ${section}, ${usedForRehearsal}, ${addedBy})
+    ON CONFLICT (event_id, equipment_id, section)
+    DO UPDATE SET used_for_rehearsal = EXCLUDED.used_for_rehearsal
   `;
-
   return { success: true };
 }
 
-export async function detachEquipmentFromEvent(
+export async function detachEquipmentFromEventSection(
   eventId: number,
-  equipmentId: number
+  equipmentId: number,
+  section: EventSection
 ): Promise<{ success: boolean; error?: string }> {
   await ensureSchema();
-  await sql`DELETE FROM event_equipment WHERE event_id = ${eventId} AND equipment_id = ${equipmentId}`;
+  await sql`DELETE FROM event_equipment WHERE event_id = ${eventId} AND equipment_id = ${equipmentId} AND section = ${section}`;
+  return { success: true };
+}
+
+export async function addDeploymentToEventSection(
+  eventId: number,
+  userId: number,
+  section: EventSection,
+  attendingRehearsal = false,
+  addedBy: number | null = null
+): Promise<{ success: boolean; error?: string }> {
+  await ensureSchema();
+  await sql`
+    INSERT INTO event_deployments (event_id, user_id, section, attending_rehearsal, added_by)
+    VALUES (${eventId}, ${userId}, ${section}, ${attendingRehearsal}, ${addedBy})
+    ON CONFLICT (event_id, user_id, section)
+    DO UPDATE SET attending_rehearsal = EXCLUDED.attending_rehearsal
+  `;
+  return { success: true };
+}
+
+export async function removeDeploymentFromEventSection(
+  eventId: number,
+  userId: number,
+  section: EventSection
+): Promise<{ success: boolean; error?: string }> {
+  await ensureSchema();
+  await sql`DELETE FROM event_deployments WHERE event_id = ${eventId} AND user_id = ${userId} AND section = ${section}`;
+  return { success: true };
+}
+
+export async function updateSectionRehearsalConfig(
+  eventId: number,
+  section: EventSection,
+  participating: boolean,
+  rehearsalEquipmentIds?: number[],
+  rehearsalUserIds?: number[]
+): Promise<{ success: boolean }> {
+  await ensureSchema();
+  await sql`
+    INSERT INTO event_section_rehearsals (event_id, section, participating)
+    VALUES (${eventId}, ${section}, ${participating})
+    ON CONFLICT (event_id, section) DO UPDATE SET participating = EXCLUDED.participating
+  `;
+
+  if (rehearsalEquipmentIds !== undefined) {
+    await sql`
+      UPDATE event_equipment
+      SET used_for_rehearsal = FALSE
+      WHERE event_id = ${eventId} AND section = ${section}
+    `;
+    for (const eqId of rehearsalEquipmentIds) {
+      await sql`
+        UPDATE event_equipment
+        SET used_for_rehearsal = TRUE
+        WHERE event_id = ${eventId} AND equipment_id = ${eqId} AND section = ${section}
+      `;
+    }
+  }
+
+  if (rehearsalUserIds !== undefined) {
+    await sql`
+      UPDATE event_deployments
+      SET attending_rehearsal = FALSE
+      WHERE event_id = ${eventId} AND section = ${section}
+    `;
+    for (const uId of rehearsalUserIds) {
+      await sql`
+        UPDATE event_deployments
+        SET attending_rehearsal = TRUE
+        WHERE event_id = ${eventId} AND user_id = ${uId} AND section = ${section}
+      `;
+    }
+  }
+
   return { success: true };
 }

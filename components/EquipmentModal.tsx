@@ -46,7 +46,7 @@ const EditSchema = z.object({
   condition: z.enum(["New", "Good", "Fair", "Poor"]),
   quantity: z.coerce.number().int().positive(),
   location: z.string().min(1),
-  status: z.enum(["Available", "Checked Out", "In Event", "Under Maintenance", "Retired"]),
+  status: z.enum(["Available", "Checked Out", "In Event", "In Event (Rehearsal)", "Under Maintenance", "Retired"]),
 });
 
 type EditFormValues = z.infer<typeof EditSchema>;

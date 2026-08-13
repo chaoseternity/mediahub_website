@@ -1,19 +1,23 @@
 import { auth } from "@/lib/auth";
-import { getEventById, getUserByEmail, attachEquipmentToEvent, detachEquipmentFromEvent } from "@/lib/db";
+import { getEventById, getUserByEmail, attachEquipmentToEventSection, detachEquipmentFromEventSection } from "@/lib/db";
+import type { EventSection } from "@/lib/types";
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 
 const EquipmentEventSchema = z.object({
   equipment_id: z.number().int(),
+  section: z.enum(["photo", "video", "av"]).optional().default("photo"),
 });
 
-async function canManageEventEquipment(eventId: number, userEmail: string, role: string): Promise<boolean> {
+async function canManageEventEquipment(eventId: number, section: EventSection, userEmail: string, role: string): Promise<boolean> {
   if (role === "admin") return true;
   const event = await getEventById(eventId);
   if (!event) return false;
   const currentUser = await getUserByEmail(userEmail);
   if (!currentUser) return false;
-  return event.ics.some((ic) => ic.id === currentUser.id);
+  if (event.oics.some((u) => u.id === currentUser.id)) return true;
+  const secIcs = event.section_ics[section] || [];
+  return secIcs.some((ic) => ic.id === currentUser.id);
 }
 
 export async function POST(
@@ -26,19 +30,19 @@ export async function POST(
   const { id } = await params;
   const eventId = Number(id);
 
-  const isAllowed = await canManageEventEquipment(eventId, session.user.email!, session.user.role);
-  if (!isAllowed) {
-    return NextResponse.json({ error: "Only admins and assigned ICs can add equipment to this event" }, { status: 403 });
-  }
-
   const body = await req.json();
   const parsed = EquipmentEventSchema.safeParse(body);
   if (!parsed.success) {
     return NextResponse.json({ error: parsed.error.flatten() }, { status: 400 });
   }
 
+  const isAllowed = await canManageEventEquipment(eventId, parsed.data.section, session.user.email!, session.user.role);
+  if (!isAllowed) {
+    return NextResponse.json({ error: "Only admins, OICs, and section ICs can add equipment to this event" }, { status: 403 });
+  }
+
   const currentUser = await getUserByEmail(session.user.email!);
-  const result = await attachEquipmentToEvent(eventId, parsed.data.equipment_id, currentUser?.id ?? null);
+  const result = await attachEquipmentToEventSection(eventId, parsed.data.equipment_id, parsed.data.section, false, currentUser?.id ?? null);
   if (!result.success) {
     return NextResponse.json({ error: result.error }, { status: 400 });
   }
@@ -56,18 +60,18 @@ export async function DELETE(
   const { id } = await params;
   const eventId = Number(id);
 
-  const isAllowed = await canManageEventEquipment(eventId, session.user.email!, session.user.role);
-  if (!isAllowed) {
-    return NextResponse.json({ error: "Only admins and assigned ICs can remove equipment from this event" }, { status: 403 });
-  }
-
   const body = await req.json();
   const parsed = EquipmentEventSchema.safeParse(body);
   if (!parsed.success) {
     return NextResponse.json({ error: parsed.error.flatten() }, { status: 400 });
   }
 
-  const result = await detachEquipmentFromEvent(eventId, parsed.data.equipment_id);
+  const isAllowed = await canManageEventEquipment(eventId, parsed.data.section, session.user.email!, session.user.role);
+  if (!isAllowed) {
+    return NextResponse.json({ error: "Only admins, OICs, and section ICs can remove equipment from this event" }, { status: 403 });
+  }
+
+  const result = await detachEquipmentFromEventSection(eventId, parsed.data.equipment_id, parsed.data.section);
   if (!result.success) {
     return NextResponse.json({ error: result.error }, { status: 400 });
   }

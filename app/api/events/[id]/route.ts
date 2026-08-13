@@ -1,5 +1,5 @@
 import { auth } from "@/lib/auth";
-import { getEventById, updateEvent, deleteEvent } from "@/lib/db";
+import { getEventById, updateEvent, deleteEvent, getUserByEmail } from "@/lib/db";
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 
@@ -9,7 +9,13 @@ const UpdateEventSchema = z.object({
   start_time: z.string().min(1).optional(),
   end_time: z.string().min(1).optional(),
   location: z.string().min(1).optional(),
-  ic_user_ids: z.array(z.number().int()).optional(),
+  has_rehearsal: z.boolean().optional(),
+  rehearsal_start_time: z.string().nullable().optional(),
+  rehearsal_end_time: z.string().nullable().optional(),
+  oic_user_ids: z.array(z.number().int()).optional(),
+  photo_ic_ids: z.array(z.number().int()).optional(),
+  video_ic_ids: z.array(z.number().int()).optional(),
+  av_ic_ids: z.array(z.number().int()).optional(),
 });
 
 export async function GET(
@@ -28,19 +34,32 @@ export async function PUT(
 ) {
   const session = await auth();
   if (!session) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  if (session.user.role !== "admin") {
-    return NextResponse.json({ error: "Only admins can edit events" }, { status: 403 });
-  }
 
   const { id } = await params;
+  const eventId = Number(id);
+  const event = await getEventById(eventId);
+  if (!event) return NextResponse.json({ error: "Event not found" }, { status: 404 });
+
+  const currentUser = await getUserByEmail(session.user.email!);
+  const isAdmin = session.user.role === "admin";
+  const isOic = currentUser ? event.oics.some((oic) => oic.id === currentUser.id) : false;
+
+  if (!isAdmin && !isOic) {
+    return NextResponse.json({ error: "Only Admins and OICs can edit event details" }, { status: 403 });
+  }
+
   const body = await req.json();
   const parsed = UpdateEventSchema.safeParse(body);
   if (!parsed.success) {
     return NextResponse.json({ error: parsed.error.flatten() }, { status: 400 });
   }
 
-  const updated = await updateEvent(Number(id), parsed.data);
-  if (!updated) return NextResponse.json({ error: "Not found" }, { status: 404 });
+  // Non-admin OICs cannot rename event title
+  if (!isAdmin && parsed.data.name && parsed.data.name !== event.name) {
+    return NextResponse.json({ error: "Event name can only be changed by Admin accounts" }, { status: 403 });
+  }
+
+  const updated = await updateEvent(eventId, parsed.data);
   return NextResponse.json(updated);
 }
 
@@ -50,8 +69,9 @@ export async function DELETE(
 ) {
   const session = await auth();
   if (!session) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+
   if (session.user.role !== "admin") {
-    return NextResponse.json({ error: "Only admins can delete events" }, { status: 403 });
+    return NextResponse.json({ error: "Events can only be deleted by Admin accounts" }, { status: 403 });
   }
 
   const { id } = await params;

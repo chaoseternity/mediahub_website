@@ -6,6 +6,7 @@ export type EquipmentStatus =
   | "Available"
   | "Checked Out"
   | "In Event"
+  | "In Event (Rehearsal)"
   | "Under Maintenance"
   | "Retired";
 
@@ -51,6 +52,7 @@ export interface Equipment {
   active_event_location?: string | null;
   active_event_start_time?: string | null;
   active_event_end_time?: string | null;
+  is_rehearsal?: boolean;
 }
 
 export interface Checkout {
@@ -72,6 +74,7 @@ export interface EventEquipmentLog {
   start_time: string;
   end_time: string;
   added_at: string;
+  is_rehearsal?: boolean;
 }
 
 export interface EquipmentDetail extends Omit<Equipment, "active_checkout_id" | "checked_out_by_name" | "checked_out_at" | "expected_return_at"> {
@@ -81,6 +84,43 @@ export interface EquipmentDetail extends Omit<Equipment, "active_checkout_id" | 
 }
 
 export type EventStatus = "Upcoming" | "Ongoing" | "Completed";
+export type EventSection = "photo" | "video" | "av";
+
+export interface SectionICMap {
+  photo: User[];
+  video: User[];
+  av: User[];
+}
+
+export interface SectionEquipmentItem extends Equipment {
+  used_for_rehearsal: boolean;
+}
+
+export interface SectionEquipmentMap {
+  photo: SectionEquipmentItem[];
+  video: SectionEquipmentItem[];
+  av: SectionEquipmentItem[];
+}
+
+export interface SectionDeploymentItem extends User {
+  attending_rehearsal: boolean;
+}
+
+export interface SectionDeploymentMap {
+  photo: SectionDeploymentItem[];
+  video: SectionDeploymentItem[];
+  av: SectionDeploymentItem[];
+}
+
+export interface SectionRehearsalConfig {
+  participating: boolean;
+}
+
+export interface SectionRehearsalMap {
+  photo: SectionRehearsalConfig;
+  video: SectionRehearsalConfig;
+  av: SectionRehearsalConfig;
+}
 
 export interface AppEvent {
   id: number;
@@ -92,8 +132,14 @@ export interface AppEvent {
   created_by: number | null;
   created_at: string;
   updated_at: string;
-  ics: User[];
-  equipment: Equipment[];
+  has_rehearsal: boolean;
+  rehearsal_start_time: string | null;
+  rehearsal_end_time: string | null;
+  oics: User[];
+  section_ics: SectionICMap;
+  section_equipment: SectionEquipmentMap;
+  section_deployments: SectionDeploymentMap;
+  section_rehearsals: SectionRehearsalMap;
   status: EventStatus;
 }
 

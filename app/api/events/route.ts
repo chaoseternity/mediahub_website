@@ -9,7 +9,13 @@ const CreateEventSchema = z.object({
   start_time: z.string().min(1, "Start time is required"),
   end_time: z.string().min(1, "End time is required"),
   location: z.string().min(1, "Location is required"),
-  ic_user_ids: z.array(z.number().int()).optional().default([]),
+  has_rehearsal: z.boolean().optional().default(false),
+  rehearsal_start_time: z.string().optional(),
+  rehearsal_end_time: z.string().optional(),
+  oic_user_ids: z.array(z.number().int()).optional().default([]),
+  photo_ic_ids: z.array(z.number().int()).optional().default([]),
+  video_ic_ids: z.array(z.number().int()).optional().default([]),
+  av_ic_ids: z.array(z.number().int()).optional().default([]),
 });
 
 export async function GET() {
@@ -39,7 +45,13 @@ export async function POST(req: NextRequest) {
     end_time: parsed.data.end_time,
     location: parsed.data.location,
     created_by: currentUser?.id ?? null,
-    ic_user_ids: parsed.data.ic_user_ids,
+    has_rehearsal: parsed.data.has_rehearsal,
+    rehearsal_start_time: parsed.data.rehearsal_start_time,
+    rehearsal_end_time: parsed.data.rehearsal_end_time,
+    oic_user_ids: parsed.data.oic_user_ids,
+    photo_ic_ids: parsed.data.photo_ic_ids,
+    video_ic_ids: parsed.data.video_ic_ids,
+    av_ic_ids: parsed.data.av_ic_ids,
   });
 
   return NextResponse.json(newEvent, { status: 201 });

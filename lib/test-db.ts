@@ -32,7 +32,7 @@ export const SCHEMA_SQL = `
     quantity      INTEGER NOT NULL DEFAULT 1,
     location      TEXT    NOT NULL,
     status        TEXT    NOT NULL DEFAULT 'Available'
-                  CHECK(status IN ('Available','Checked Out','In Event','Under Maintenance','Retired')),
+                  CHECK(status IN ('Available','Checked Out','In Event','In Event (Rehearsal)','Under Maintenance','Retired')),
     created_at    TEXT    NOT NULL DEFAULT (datetime('now')),
     updated_at    TEXT    NOT NULL DEFAULT (datetime('now'))
   );
@@ -56,29 +56,58 @@ export const SCHEMA_SQL = `
   );
 
   CREATE TABLE IF NOT EXISTS events (
-    id          INTEGER PRIMARY KEY AUTOINCREMENT,
-    name        TEXT    NOT NULL,
-    description TEXT,
-    start_time  TEXT    NOT NULL,
-    end_time    TEXT    NOT NULL,
-    location    TEXT    NOT NULL,
-    created_by  INTEGER REFERENCES users(id) ON DELETE SET NULL,
-    created_at  TEXT    NOT NULL DEFAULT (datetime('now')),
-    updated_at  TEXT    NOT NULL DEFAULT (datetime('now'))
+    id                   INTEGER PRIMARY KEY AUTOINCREMENT,
+    name                 TEXT    NOT NULL,
+    description          TEXT,
+    start_time           TEXT    NOT NULL,
+    end_time             TEXT    NOT NULL,
+    location             TEXT    NOT NULL,
+    created_by           INTEGER REFERENCES users(id) ON DELETE SET NULL,
+    has_rehearsal        INTEGER DEFAULT 0,
+    rehearsal_start_time TEXT,
+    rehearsal_end_time   TEXT,
+    created_at           TEXT    NOT NULL DEFAULT (datetime('now')),
+    updated_at           TEXT    NOT NULL DEFAULT (datetime('now'))
   );
 
-  CREATE TABLE IF NOT EXISTS event_ics (
+  CREATE TABLE IF NOT EXISTS event_oics (
     event_id INTEGER NOT NULL REFERENCES events(id) ON DELETE CASCADE,
     user_id  INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
     PRIMARY KEY (event_id, user_id)
   );
 
+  CREATE TABLE IF NOT EXISTS event_ics (
+    event_id INTEGER NOT NULL REFERENCES events(id) ON DELETE CASCADE,
+    user_id  INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    section  TEXT    NOT NULL DEFAULT 'photo' CHECK(section IN ('photo','video','av')),
+    PRIMARY KEY (event_id, user_id, section)
+  );
+
   CREATE TABLE IF NOT EXISTS event_equipment (
-    event_id     INTEGER NOT NULL REFERENCES events(id) ON DELETE CASCADE,
-    equipment_id INTEGER NOT NULL REFERENCES equipment(id) ON DELETE CASCADE,
-    added_by     INTEGER REFERENCES users(id) ON DELETE SET NULL,
-    added_at     TEXT    NOT NULL DEFAULT (datetime('now')),
-    PRIMARY KEY (event_id, equipment_id)
+    event_id           INTEGER NOT NULL REFERENCES events(id) ON DELETE CASCADE,
+    equipment_id       INTEGER NOT NULL REFERENCES equipment(id) ON DELETE CASCADE,
+    section            TEXT    NOT NULL DEFAULT 'photo' CHECK(section IN ('photo','video','av')),
+    used_for_rehearsal INTEGER DEFAULT 0,
+    added_by           INTEGER REFERENCES users(id) ON DELETE SET NULL,
+    added_at           TEXT    NOT NULL DEFAULT (datetime('now')),
+    PRIMARY KEY (event_id, equipment_id, section)
+  );
+
+  CREATE TABLE IF NOT EXISTS event_deployments (
+    event_id            INTEGER NOT NULL REFERENCES events(id) ON DELETE CASCADE,
+    user_id             INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    section             TEXT    NOT NULL DEFAULT 'photo' CHECK(section IN ('photo','video','av')),
+    attending_rehearsal INTEGER DEFAULT 0,
+    added_by            INTEGER REFERENCES users(id) ON DELETE SET NULL,
+    added_at            TEXT    NOT NULL DEFAULT (datetime('now')),
+    PRIMARY KEY (event_id, user_id, section)
+  );
+
+  CREATE TABLE IF NOT EXISTS event_section_rehearsals (
+    event_id      INTEGER NOT NULL REFERENCES events(id) ON DELETE CASCADE,
+    section       TEXT    NOT NULL CHECK(section IN ('photo','video','av')),
+    participating INTEGER DEFAULT 0,
+    PRIMARY KEY (event_id, section)
   );
 `;
 
