@@ -26,6 +26,7 @@ const baseEquipment: Equipment = {
   checked_out_by_name: null,
   checked_out_at: null,
   expected_return_at: null,
+  checkout_location: null,
 };
 
 describe("EquipmentCard", () => {

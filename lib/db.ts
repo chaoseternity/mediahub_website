@@ -1,5 +1,17 @@
-import { getCloudflareContext } from "@opennextjs/cloudflare";
-import type { D1Database } from "@cloudflare/workers-types";
+import { db } from "./firebase";
+import {
+  collection,
+  doc,
+  getDoc,
+  getDocs,
+  setDoc,
+  updateDoc,
+  deleteDoc,
+  query,
+  where,
+  orderBy,
+  runTransaction,
+} from "firebase/firestore";
 import type {
   Equipment,
   EquipmentDetail,
@@ -12,58 +24,20 @@ import type {
 } from "./types";
 
 // ---------------------------------------------------------------------------
-// D1 connection — falls back to a local SQLite adapter when running `next dev`
+// Atomic Sequential ID Generator using Firestore Counters
 // ---------------------------------------------------------------------------
 
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-type D1Like = any;
-
-async function getDB(): Promise<D1Like> {
-  try {
-    const ctx = await getCloudflareContext({ async: true });
-    return (ctx.env as { DB: D1Database }).DB;
-  } catch {
-    // Not running in a Cloudflare Workers context (e.g. `next dev`).
-    // Lazy-import the local SQLite adapter so it's never bundled for production.
-    const { localD1 } = await import("./local-db");
-    return localD1;
-  }
-}
-
-// ---------------------------------------------------------------------------
-// User helpers
-// ---------------------------------------------------------------------------
-
-export async function getUserByEmail(email: string): Promise<User | undefined> {
-  const db = await getDB();
-  return (await db.prepare("SELECT * FROM users WHERE email = ?").bind(email).first()) as
-    | User
-    | undefined;
-}
-
-export async function getUserById(id: number): Promise<User | undefined> {
-  const db = await getDB();
-  return (await db.prepare("SELECT * FROM users WHERE id = ?").bind(id).first()) as
-    | User
-    | undefined;
-}
-
-export async function getAllUsers(): Promise<User[]> {
-  const db = await getDB();
-  const result = await db
-    .prepare(
-      "SELECT id, name, email, username, google_id, image, role, provider, created_at FROM users ORDER BY created_at"
-    )
-    .all();
-  return result.results as unknown as User[];
-}
-
-export async function countUsers(): Promise<number> {
-  const db = await getDB();
-  const row = (await db.prepare("SELECT COUNT(*) as c FROM users").first()) as {
-    c: number;
-  } | null;
-  return row?.c ?? 0;
+async function getNextId(counterName: string): Promise<number> {
+  const counterRef = doc(db, "counters", counterName);
+  return await runTransaction(db, async (transaction) => {
+    const counterDoc = await transaction.get(counterRef);
+    let nextId = 1;
+    if (counterDoc.exists()) {
+      nextId = (counterDoc.data().current || 0) + 1;
+    }
+    transaction.set(counterRef, { current: nextId }, { merge: true });
+    return nextId;
+  });
 }
 
 function getAdminEmails(): Set<string> {
@@ -73,6 +47,35 @@ function getAdminEmails(): Set<string> {
   );
 }
 
+// ---------------------------------------------------------------------------
+// User helpers
+// ---------------------------------------------------------------------------
+
+export async function getUserByEmail(email: string): Promise<User | undefined> {
+  const q = query(collection(db, "users"), where("email", "==", email));
+  const snapshot = await getDocs(q);
+  if (snapshot.empty) return undefined;
+  return snapshot.docs[0].data() as User;
+}
+
+export async function getUserById(id: number): Promise<User | undefined> {
+  const docRef = doc(db, "users", String(id));
+  const docSnap = await getDoc(docRef);
+  if (!docSnap.exists()) return undefined;
+  return docSnap.data() as User;
+}
+
+export async function getAllUsers(): Promise<User[]> {
+  const q = query(collection(db, "users"), orderBy("created_at", "asc"));
+  const snapshot = await getDocs(q);
+  return snapshot.docs.map((docSnap) => docSnap.data() as User);
+}
+
+export async function countUsers(): Promise<number> {
+  const snapshot = await getDocs(collection(db, "users"));
+  return snapshot.size;
+}
+
 export async function upsertUser(params: {
   name: string;
   email: string;
@@ -80,115 +83,125 @@ export async function upsertUser(params: {
   image: string | null;
   provider: string;
 }): Promise<User> {
-  const db = await getDB();
   const existing = await getUserByEmail(params.email);
   const adminEmails = getAdminEmails();
   const isAdminEmail = adminEmails.has(params.email.toLowerCase());
 
   if (existing) {
-    if (isAdminEmail && existing.role !== "admin") {
-      await db.prepare("UPDATE users SET role = 'admin' WHERE email = ?")
-        .bind(params.email)
-        .run();
-    }
-    await db.prepare(
-      "UPDATE users SET name = ?, google_id = ?, image = ?, provider = ? WHERE email = ?"
-    ).bind(params.name, params.google_id, params.image, params.provider, params.email).run();
-    return (await getUserByEmail(params.email))!;
+    const newRole = isAdminEmail && existing.role !== "admin" ? "admin" : existing.role;
+    const userRef = doc(db, "users", String(existing.id));
+    await updateDoc(userRef, {
+      name: params.name,
+      google_id: params.google_id,
+      image: params.image,
+      provider: params.provider,
+      role: newRole,
+    });
+    return (await getUserById(existing.id))!;
   }
 
   const count = await countUsers();
   const role: Role = isAdminEmail || count === 0 ? "admin" : "viewer";
-  await db.prepare(
-    "INSERT INTO users (name, email, google_id, image, role, provider) VALUES (?, ?, ?, ?, ?, ?)"
-  ).bind(params.name, params.email, params.google_id, params.image, role, params.provider).run();
-  return (await getUserByEmail(params.email))!;
+  const newId = await getNextId("users");
+  const userRef = doc(db, "users", String(newId));
+  
+  const newUser: User = {
+    id: newId,
+    name: params.name,
+    email: params.email,
+    username: null,
+    google_id: params.google_id,
+    image: params.image,
+    role,
+    provider: params.provider,
+    created_at: new Date().toISOString(),
+  };
+
+  await setDoc(userRef, newUser);
+  return newUser;
 }
 
 export async function updateUserRole(id: number, role: Role): Promise<void> {
-  const db = await getDB();
-  await db.prepare("UPDATE users SET role = ? WHERE id = ?").bind(role, id).run();
+  const userRef = doc(db, "users", String(id));
+  await updateDoc(userRef, { role });
 }
 
 export async function deleteUser(id: number): Promise<void> {
-  const db = await getDB();
-  await db.prepare("DELETE FROM users WHERE id = ?").bind(id).run();
+  const userRef = doc(db, "users", String(id));
+  await deleteDoc(userRef);
 }
 
 export async function updateUsername(id: number, username: string): Promise<void> {
-  const db = await getDB();
-  await db.prepare("UPDATE users SET username = ? WHERE id = ?").bind(username, id).run();
+  const userRef = doc(db, "users", String(id));
+  await updateDoc(userRef, { username });
+}
+
+// ---------------------------------------------------------------------------
+// Active checkout query helper
+// ---------------------------------------------------------------------------
+
+async function getActiveCheckout(equipmentId: number): Promise<Checkout | null> {
+  const q = query(
+    collection(db, "checkouts"),
+    where("equipment_id", "==", equipmentId),
+    where("returned_at", "==", null)
+  );
+  const snapshot = await getDocs(q);
+  if (snapshot.empty) return null;
+  return snapshot.docs[0].data() as Checkout;
 }
 
 // ---------------------------------------------------------------------------
 // Equipment helpers
 // ---------------------------------------------------------------------------
 
-type EquipmentRow = Omit<Equipment, "tags"> & { tags_concat: string | null };
-
-function parseTagsRow(row: EquipmentRow): Equipment {
-  const { tags_concat, ...rest } = row;
-  return {
-    ...(rest as Omit<Equipment, "tags">),
-    tags: tags_concat ? tags_concat.split("|||").filter(Boolean) : [],
-  };
-}
-
-const EQUIPMENT_TAG_SELECT = `
-  e.id, e.name, e.description, e.serial_number, e.purchase_date,
-  e.condition, e.quantity, e.location, e.status, e.created_at, e.updated_at,
-  GROUP_CONCAT(t.name, '|||') AS tags_concat
-`;
-
 export async function getAllEquipment(): Promise<Equipment[]> {
-  const db = await getDB();
-  const result = await db
-    .prepare(
-      `SELECT
-        ${EQUIPMENT_TAG_SELECT},
-        c.id    AS active_checkout_id,
-        c.checked_out_by_name,
-        c.checked_out_at,
-        c.expected_return_at,
-        c.checkout_location
-      FROM equipment e
-      LEFT JOIN equipment_tags et ON et.equipment_id = e.id
-      LEFT JOIN tags t ON t.id = et.tag_id
-      LEFT JOIN checkouts c ON c.equipment_id = e.id AND c.returned_at IS NULL
-      GROUP BY e.id
-      ORDER BY e.updated_at DESC
-    `)
-    .all();
-  return (result.results as EquipmentRow[]).map(parseTagsRow);
+  const q = query(collection(db, "equipment"), orderBy("updated_at", "desc"));
+  const snapshot = await getDocs(q);
+  const equipmentList = snapshot.docs.map((docSnap) => docSnap.data() as Equipment);
+
+  const checkoutsSnap = await getDocs(
+    query(collection(db, "checkouts"), where("returned_at", "==", null))
+  );
+  const activeCheckoutsMap = new Map<number, Checkout>();
+  checkoutsSnap.docs.forEach((d) => {
+    const c = d.data() as Checkout;
+    activeCheckoutsMap.set(c.equipment_id, c);
+  });
+
+  return equipmentList.map((eq) => {
+    const active = activeCheckoutsMap.get(eq.id);
+    return {
+      ...eq,
+      active_checkout_id: active ? active.id : null,
+      checked_out_by_name: active ? active.checked_out_by_name : null,
+      checked_out_at: active ? active.checked_out_at : null,
+      expected_return_at: active ? active.expected_return_at : null,
+      checkout_location: active ? active.checkout_location : null,
+    };
+  });
 }
 
 export async function getEquipmentById(id: number): Promise<EquipmentDetail | undefined> {
-  const db = await getDB();
-  const row = (await db
-    .prepare(
-      `SELECT ${EQUIPMENT_TAG_SELECT}
-      FROM equipment e
-      LEFT JOIN equipment_tags et ON et.equipment_id = e.id
-      LEFT JOIN tags t ON t.id = et.tag_id
-      WHERE e.id = ?
-      GROUP BY e.id`
+  const docRef = doc(db, "equipment", String(id));
+  const docSnap = await getDoc(docRef);
+  if (!docSnap.exists()) return undefined;
+
+  const eq = docSnap.data() as Equipment;
+
+  const checkoutsSnap = await getDocs(
+    query(
+      collection(db, "checkouts"),
+      where("equipment_id", "==", id),
+      orderBy("checked_out_at", "desc")
     )
-    .bind(id)
-    .first()) as EquipmentRow | null;
+  );
 
-  if (!row) return undefined;
-
-  const checkoutsResult = await db
-    .prepare("SELECT * FROM checkouts WHERE equipment_id = ? ORDER BY checked_out_at DESC")
-    .bind(id)
-    .all();
-  const checkouts = checkoutsResult.results as unknown as Checkout[];
-  const active_checkout = checkouts.find((ch) => ch.returned_at === null) ?? null;
-  const { tags_concat, ...rest } = row;
+  const checkouts = checkoutsSnap.docs.map((d) => d.data() as Checkout);
+  const active_checkout = checkouts.find((c) => c.returned_at === null) ?? null;
 
   return {
-    ...(rest as Omit<Equipment, "tags">),
-    tags: tags_concat ? tags_concat.split("|||").filter(Boolean) : [],
+    ...eq,
     checkouts,
     active_checkout,
   };
@@ -205,37 +218,46 @@ export async function createEquipment(params: {
   location: string;
   status: EquipmentStatus;
 }): Promise<Equipment> {
-  const db = await getDB();
-  const { tags, ...rest } = params;
-  const result = await db
-    .prepare(
-      `INSERT INTO equipment (name, description, serial_number, purchase_date, condition, quantity, location, status)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
-    )
-    .bind(
-      rest.name,
-      rest.description ?? null,
-      rest.serial_number ?? null,
-      rest.purchase_date ?? null,
-      rest.condition,
-      rest.quantity,
-      rest.location,
-      rest.status
-    )
-    .run();
+  const newId = await getNextId("equipment");
+  const now = new Date().toISOString();
+  const eqRef = doc(db, "equipment", String(newId));
 
-  const newId = result.meta.last_row_id;
-  if (tags.length > 0) {
-    await db.batch(
-      tags.map((tagName) =>
-        db.prepare(
-          "INSERT OR IGNORE INTO equipment_tags (equipment_id, tag_id) SELECT ?, id FROM tags WHERE name = ?"
-        ).bind(newId, tagName)
-      )
-    );
+  const newEquipment: Equipment = {
+    id: newId,
+    name: params.name,
+    description: params.description ?? null,
+    serial_number: params.serial_number ?? null,
+    purchase_date: params.purchase_date ?? null,
+    condition: params.condition,
+    quantity: params.quantity,
+    location: params.location,
+    status: params.status,
+    tags: params.tags ?? [],
+    created_at: now,
+    updated_at: now,
+    active_checkout_id: null,
+    checked_out_by_name: null,
+    checked_out_at: null,
+    expected_return_at: null,
+    checkout_location: null,
+  };
+
+  await setDoc(eqRef, newEquipment);
+
+  // Sync equipment_tags collection for join queries
+  if (params.tags && params.tags.length > 0) {
+    const allTags = await getAllTags();
+    for (const tagName of params.tags) {
+      let tagObj = allTags.find((t) => t.name.toLowerCase() === tagName.toLowerCase());
+      if (!tagObj) {
+        tagObj = await createTag(tagName);
+      }
+      const linkRef = doc(db, "equipment_tags", `${newId}_${tagObj.id}`);
+      await setDoc(linkRef, { equipment_id: newId, tag_id: tagObj.id });
+    }
   }
 
-  return (await getEquipmentById(newId)) as unknown as Equipment;
+  return newEquipment;
 }
 
 export async function updateEquipment(
@@ -252,30 +274,38 @@ export async function updateEquipment(
     status: EquipmentStatus;
   }>
 ): Promise<EquipmentDetail | undefined> {
-  const db = await getDB();
-  const { tags, ...scalarParams } = params;
+  const eqRef = doc(db, "equipment", String(id));
+  const docSnap = await getDoc(eqRef);
+  if (!docSnap.exists()) return undefined;
 
-  const entries = Object.entries(scalarParams).filter(([, v]) => v !== undefined);
-  if (entries.length > 0) {
-    const fields = entries.map(([k]) => `${k} = ?`).join(", ");
-    const values = entries.map(([, v]) => v);
-    await db.prepare(
-      `UPDATE equipment SET ${fields}, updated_at = datetime('now') WHERE id = ?`
-    ).bind(...values, id).run();
-  } else if (tags !== undefined) {
-    await db.prepare("UPDATE equipment SET updated_at = datetime('now') WHERE id = ?").bind(id).run();
-  }
+  const now = new Date().toISOString();
+  const updateData: Record<string, unknown> = { updated_at: now };
 
-  if (tags !== undefined) {
-    await db.prepare("DELETE FROM equipment_tags WHERE equipment_id = ?").bind(id).run();
-    if (tags.length > 0) {
-      await db.batch(
-        tags.map((tagName) =>
-          db.prepare(
-            "INSERT OR IGNORE INTO equipment_tags (equipment_id, tag_id) SELECT ?, id FROM tags WHERE name = ?"
-          ).bind(id, tagName)
-        )
-      );
+  Object.entries(params).forEach(([k, v]) => {
+    if (v !== undefined) {
+      updateData[k] = v;
+    }
+  });
+
+  await updateDoc(eqRef, updateData);
+
+  if (params.tags !== undefined) {
+    // Delete existing links for equipment_id
+    const linksSnap = await getDocs(
+      query(collection(db, "equipment_tags"), where("equipment_id", "==", id))
+    );
+    for (const linkDoc of linksSnap.docs) {
+      await deleteDoc(linkDoc.ref);
+    }
+    // Add new links
+    const allTags = await getAllTags();
+    for (const tagName of params.tags) {
+      let tagObj = allTags.find((t) => t.name.toLowerCase() === tagName.toLowerCase());
+      if (!tagObj) {
+        tagObj = await createTag(tagName);
+      }
+      const linkRef = doc(db, "equipment_tags", `${id}_${tagObj.id}`);
+      await setDoc(linkRef, { equipment_id: id, tag_id: tagObj.id });
     }
   }
 
@@ -283,57 +313,58 @@ export async function updateEquipment(
 }
 
 export async function deleteEquipment(id: number): Promise<{ success: boolean; error?: string }> {
-  const db = await getDB();
-  const active = await db
-    .prepare("SELECT id FROM checkouts WHERE equipment_id = ? AND returned_at IS NULL")
-    .bind(id)
-    .first();
-
+  const active = await getActiveCheckout(id);
   if (active) {
     return { success: false, error: "Cannot delete equipment with an active checkout." };
   }
 
-  await db.prepare("DELETE FROM equipment WHERE id = ?").bind(id).run();
+  const eqRef = doc(db, "equipment", String(id));
+  await deleteDoc(eqRef);
+
+  // Clean up tag links
+  const linksSnap = await getDocs(
+    query(collection(db, "equipment_tags"), where("equipment_id", "==", id))
+  );
+  for (const linkDoc of linksSnap.docs) {
+    await deleteDoc(linkDoc.ref);
+  }
+
   return { success: true };
 }
 
 export async function getEquipmentByTagId(tagId: number): Promise<Equipment[]> {
-  const db = await getDB();
-  const result = await db
-    .prepare(
-      `SELECT
-        ${EQUIPMENT_TAG_SELECT},
-        c.id    AS active_checkout_id,
-        c.checked_out_by_name,
-        c.checked_out_at,
-        c.expected_return_at,
-        c.checkout_location
-      FROM equipment e
-      INNER JOIN equipment_tags ef ON ef.equipment_id = e.id AND ef.tag_id = ?
-      LEFT JOIN equipment_tags et ON et.equipment_id = e.id
-      LEFT JOIN tags t ON t.id = et.tag_id
-      LEFT JOIN checkouts c ON c.equipment_id = e.id AND c.returned_at IS NULL
-      GROUP BY e.id
-      ORDER BY e.name
-    `)
-    .bind(tagId)
-    .all();
-  return (result.results as EquipmentRow[]).map(parseTagsRow);
+  const linksSnap = await getDocs(
+    query(collection(db, "equipment_tags"), where("tag_id", "==", tagId))
+  );
+  const equipmentIds = linksSnap.docs.map((d) => d.data().equipment_id as number);
+  if (equipmentIds.length === 0) return [];
+
+  const allEq = await getAllEquipment();
+  return allEq.filter((eq) => equipmentIds.includes(eq.id));
 }
 
 export async function addTagToEquipment(
   equipmentId: number,
   tagId: number
 ): Promise<{ success: boolean; error?: string }> {
-  const db = await getDB();
-  const equipment = await db.prepare("SELECT id FROM equipment WHERE id = ?").bind(equipmentId).first();
-  if (!equipment) return { success: false, error: "Equipment not found." };
-  const tag = await db.prepare("SELECT id FROM tags WHERE id = ?").bind(tagId).first();
-  if (!tag) return { success: false, error: "Tag not found." };
-  await db.batch([
-    db.prepare("INSERT OR IGNORE INTO equipment_tags (equipment_id, tag_id) VALUES (?, ?)").bind(equipmentId, tagId),
-    db.prepare("UPDATE equipment SET updated_at = datetime('now') WHERE id = ?").bind(equipmentId),
-  ]);
+  const eq = await getEquipmentById(equipmentId);
+  if (!eq) return { success: false, error: "Equipment not found." };
+
+  const tagRef = doc(db, "tags", String(tagId));
+  const tagSnap = await getDoc(tagRef);
+  if (!tagSnap.exists()) return { success: false, error: "Tag not found." };
+
+  const tagObj = tagSnap.data() as Tag;
+  const newTags = Array.from(new Set([...eq.tags, tagObj.name]));
+
+  const linkRef = doc(db, "equipment_tags", `${equipmentId}_${tagId}`);
+  await setDoc(linkRef, { equipment_id: equipmentId, tag_id: tagId });
+
+  await updateDoc(doc(db, "equipment", String(equipmentId)), {
+    tags: newTags,
+    updated_at: new Date().toISOString(),
+  });
+
   return { success: true };
 }
 
@@ -341,11 +372,22 @@ export async function removeTagFromEquipment(
   equipmentId: number,
   tagId: number
 ): Promise<{ success: boolean; error?: string }> {
-  const db = await getDB();
-  await db.batch([
-    db.prepare("DELETE FROM equipment_tags WHERE equipment_id = ? AND tag_id = ?").bind(equipmentId, tagId),
-    db.prepare("UPDATE equipment SET updated_at = datetime('now') WHERE id = ?").bind(equipmentId),
-  ]);
+  const tagRef = doc(db, "tags", String(tagId));
+  const tagSnap = await getDoc(tagRef);
+  const tagObj = tagSnap.exists() ? (tagSnap.data() as Tag) : null;
+
+  const linkRef = doc(db, "equipment_tags", `${equipmentId}_${tagId}`);
+  await deleteDoc(linkRef);
+
+  const eq = await getEquipmentById(equipmentId);
+  if (eq && tagObj) {
+    const newTags = eq.tags.filter((t) => t.toLowerCase() !== tagObj.name.toLowerCase());
+    await updateDoc(doc(db, "equipment", String(equipmentId)), {
+      tags: newTags,
+      updated_at: new Date().toISOString(),
+    });
+  }
+
   return { success: true };
 }
 
@@ -361,58 +403,54 @@ export async function createCheckout(params: {
   notes?: string;
   checkout_location?: string;
 }): Promise<Checkout> {
-  const db = await getDB();
+  const active = await getActiveCheckout(params.equipment_id);
+  if (active) throw new Error("Equipment is already checked out.");
 
-  const existing = await db
-    .prepare("SELECT id FROM checkouts WHERE equipment_id = ? AND returned_at IS NULL")
-    .bind(params.equipment_id)
-    .first();
-  if (existing) throw new Error("Equipment is already checked out.");
+  const newId = await getNextId("checkouts");
+  const now = new Date().toISOString();
+  const checkoutRef = doc(db, "checkouts", String(newId));
 
-  const result = await db
-    .prepare(
-      `INSERT INTO checkouts (equipment_id, checked_out_by, checked_out_by_name, expected_return_at, notes, checkout_location)
-       VALUES (?, ?, ?, ?, ?, ?)`
-    )
-    .bind(
-      params.equipment_id,
-      params.checked_out_by ?? null,
-      params.checked_out_by_name,
-      params.expected_return_at ?? null,
-      params.notes ?? null,
-      params.checkout_location ?? null
-    )
-    .run();
+  const newCheckout: Checkout = {
+    id: newId,
+    equipment_id: params.equipment_id,
+    checked_out_by: params.checked_out_by ?? null,
+    checked_out_by_name: params.checked_out_by_name,
+    checked_out_at: now,
+    expected_return_at: params.expected_return_at ?? null,
+    returned_at: null,
+    notes: params.notes ?? null,
+    checkout_location: params.checkout_location ?? null,
+  };
 
-  await db
-    .prepare("UPDATE equipment SET status = 'Checked Out', updated_at = datetime('now') WHERE id = ?")
-    .bind(params.equipment_id)
-    .run();
+  await setDoc(checkoutRef, newCheckout);
 
-  return (await db
-    .prepare("SELECT * FROM checkouts WHERE id = ?")
-    .bind(result.meta.last_row_id)
-    .first()) as Checkout;
+  const eqRef = doc(db, "equipment", String(params.equipment_id));
+  await updateDoc(eqRef, {
+    status: "Checked Out",
+    updated_at: now,
+  });
+
+  return newCheckout;
 }
 
 export async function returnCheckout(equipment_id: number): Promise<Checkout> {
-  const db = await getDB();
-  const active = (await db
-    .prepare("SELECT * FROM checkouts WHERE equipment_id = ? AND returned_at IS NULL")
-    .bind(equipment_id)
-    .first()) as Checkout | null;
-
+  const active = await getActiveCheckout(equipment_id);
   if (!active) throw new Error("No active checkout found for this equipment.");
 
-  await db.batch([
-    db.prepare("UPDATE checkouts SET returned_at = datetime('now') WHERE id = ?").bind(active.id),
-    db.prepare("UPDATE equipment SET status = 'Available', updated_at = datetime('now') WHERE id = ?").bind(equipment_id),
-  ]);
+  const now = new Date().toISOString();
+  const checkoutRef = doc(db, "checkouts", String(active.id));
+  await updateDoc(checkoutRef, { returned_at: now });
 
-  return (await db
-    .prepare("SELECT * FROM checkouts WHERE id = ?")
-    .bind(active.id)
-    .first()) as Checkout;
+  const eqRef = doc(db, "equipment", String(equipment_id));
+  await updateDoc(eqRef, {
+    status: "Available",
+    updated_at: now,
+  });
+
+  return {
+    ...active,
+    returned_at: now,
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -420,32 +458,31 @@ export async function returnCheckout(equipment_id: number): Promise<Checkout> {
 // ---------------------------------------------------------------------------
 
 export async function getAllTags(): Promise<Tag[]> {
-  const db = await getDB();
-  const result = await db.prepare("SELECT * FROM tags ORDER BY name").all();
-  return result.results as unknown as Tag[];
+  const q = query(collection(db, "tags"), orderBy("name", "asc"));
+  const snapshot = await getDocs(q);
+  return snapshot.docs.map((d) => d.data() as Tag);
 }
 
 export async function createTag(name: string): Promise<Tag> {
-  const db = await getDB();
-  const result = await db.prepare("INSERT INTO tags (name) VALUES (?)").bind(name).run();
-  return (await db
-    .prepare("SELECT * FROM tags WHERE id = ?")
-    .bind(result.meta.last_row_id)
-    .first()) as Tag;
+  const newId = await getNextId("tags");
+  const tagRef = doc(db, "tags", String(newId));
+  const newTag: Tag = { id: newId, name };
+  await setDoc(tagRef, newTag);
+  return newTag;
 }
 
 export async function deleteTag(id: number): Promise<{ success: boolean; error?: string }> {
-  const db = await getDB();
-  const tag = (await db
-    .prepare("SELECT id, name FROM tags WHERE id = ?")
-    .bind(id)
-    .first()) as { id: number; name: string } | null;
-  if (!tag) return { success: false, error: "Tag not found." };
-  const inUse = await db
-    .prepare("SELECT equipment_id FROM equipment_tags WHERE tag_id = ? LIMIT 1")
-    .bind(id)
-    .first();
-  if (inUse) return { success: false, error: "Cannot delete a tag that is in use by equipment." };
-  await db.prepare("DELETE FROM tags WHERE id = ?").bind(id).run();
+  const tagRef = doc(db, "tags", String(id));
+  const tagSnap = await getDoc(tagRef);
+  if (!tagSnap.exists()) return { success: false, error: "Tag not found." };
+
+  const inUseSnap = await getDocs(
+    query(collection(db, "equipment_tags"), where("tag_id", "==", id))
+  );
+  if (!inUseSnap.empty) {
+    return { success: false, error: "Cannot delete a tag that is in use by equipment." };
+  }
+
+  await deleteDoc(tagRef);
   return { success: true };
 }

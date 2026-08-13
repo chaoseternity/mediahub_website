@@ -101,7 +101,7 @@ export function EquipmentModal({
   const [availableTags, setAvailableTags] = useState<string[]>([]);
 
   const isAdmin = role === "admin";
-  const canCheckout = role === "admin" || role === "verified";
+  const canCheckout = true;
   const canEditAll = role === "admin";
   const canEditDescription = role === "admin" || role === "verified";
 

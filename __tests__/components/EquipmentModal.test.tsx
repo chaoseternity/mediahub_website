@@ -31,6 +31,7 @@ const mockAvailable: EquipmentDetail = {
   updated_at: "2024-01-01T00:00:00Z",
   checkouts: [],
   active_checkout: null,
+  checkout_location: null,
 };
 
 const mockCheckedOut: EquipmentDetail = {
@@ -45,6 +46,7 @@ const mockCheckedOut: EquipmentDetail = {
     expected_return_at: "2026-03-21",
     returned_at: null,
     notes: null,
+    checkout_location: null,
   },
   checkouts: [
     {
@@ -56,6 +58,7 @@ const mockCheckedOut: EquipmentDetail = {
       expected_return_at: "2026-03-21",
       returned_at: null,
       notes: null,
+      checkout_location: null,
     },
   ],
 };

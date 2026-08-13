@@ -1,5 +1,5 @@
 {
-  "name": "inventory-tracker",
+  "name": "mediahub_website",
   "version": "0.1.0",
   "private": true,
   "scripts": {
@@ -25,6 +25,7 @@
     "@hookform/resolvers": "^5.2.2",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
+    "firebase": "^12.17.1",
     "html5-qrcode": "^2.3.8",
     "lucide-react": "^0.577.0",
     "next": "^16.3.0",
