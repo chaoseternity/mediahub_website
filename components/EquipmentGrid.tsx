@@ -267,12 +267,6 @@ export function EquipmentGrid({ initialData, role, onAddNew, userName }: Equipme
             <SelectItem value="status">Sort: Status</SelectItem>
           </SelectContent>
         </Select>
-
-        {role === "admin" && onAddNew && (
-          <Button onClick={onAddNew} className="w-full sm:w-auto sm:ml-auto">
-            + Add Equipment
-          </Button>
-        )}
       </div>
 
       {/* Grid */}
