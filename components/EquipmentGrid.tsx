@@ -29,7 +29,12 @@ export function EquipmentGrid({ initialData, role, onAddNew, userName }: Equipme
   const [search, setSearch] = useState("");
   const [tagFilter, setTagFilter] = useState(ALL);
   const [statusFilter, setStatusFilter] = useState(ALL);
-  const [prefixFilter, setPrefixFilter] = useState(ALL);
+  
+  // Cascading Equipment ID variable filters (up to 3 variables: <a>-<b>-<c>)
+  const [idVar1, setIdVar1] = useState(ALL);
+  const [idVar2, setIdVar2] = useState(ALL);
+  const [idVar3, setIdVar3] = useState(ALL);
+
   const [sortBy, setSortBy] = useState<"updated" | "id_asc" | "name_asc" | "status">("updated");
 
   const [selectedId, setSelectedId] = useState<number | null>(null);
@@ -45,15 +50,36 @@ export function EquipmentGrid({ initialData, role, onAddNew, userName }: Equipme
   const tags = Array.from(new Set(items.flatMap((i) => i.tags))).sort();
   const statuses = ["Available", "Checked Out", "In Event", "In Event (Rehearsal)", "Under Maintenance", "Retired"];
 
-  // Derive unique ID prefixes <a> (e.g. LP, SD, CAM)
-  const prefixes = Array.from(
+  // 1. Derive available Variable 1 <a> options across all items
+  const var1Options = Array.from(
     new Set(
       items
-        .map((i) => parseEquipmentId(i.serial_number).prefix)
-        .filter((p) => p !== "UNASSIGNED")
+        .map((i) => parseEquipmentId(i.serial_number).partA)
+        .filter((p) => p && p !== "UNASSIGNED")
     )
   ).sort();
 
+  // 2. Derive available Variable 2 <b> options under selected Variable 1
+  const var2Options = Array.from(
+    new Set(
+      items
+        .map((i) => parseEquipmentId(i.serial_number))
+        .filter((p) => idVar1 !== ALL && p.partA === idVar1 && p.partB)
+        .map((p) => p.partB)
+    )
+  ).sort();
+
+  // 3. Derive available Variable 3 <c> options under selected Variable 1 and Variable 2
+  const var3Options = Array.from(
+    new Set(
+      items
+        .map((i) => parseEquipmentId(i.serial_number))
+        .filter((p) => idVar1 !== ALL && idVar2 !== ALL && p.partA === idVar1 && p.partB === idVar2 && p.partC)
+        .map((p) => p.partC)
+    )
+  ).sort();
+
+  // Filter items
   const filtered = items.filter((item) => {
     const q = search.toLowerCase();
     const parsedId = parseEquipmentId(item.serial_number);
@@ -69,9 +95,13 @@ export function EquipmentGrid({ initialData, role, onAddNew, userName }: Equipme
 
     const matchTag = tagFilter === ALL || item.tags.includes(tagFilter);
     const matchStatus = statusFilter === ALL || item.status === statusFilter;
-    const matchPrefix = prefixFilter === ALL || parsedId.prefix === prefixFilter;
 
-    return matchSearch && matchTag && matchStatus && matchPrefix;
+    // Cascading Equipment ID matches
+    const matchVar1 = idVar1 === ALL || parsedId.partA === idVar1;
+    const matchVar2 = idVar2 === ALL || parsedId.partB === idVar2;
+    const matchVar3 = idVar3 === ALL || parsedId.partC === idVar3;
+
+    return matchSearch && matchTag && matchStatus && matchVar1 && matchVar2 && matchVar3;
   });
 
   // Apply Sorting
@@ -94,33 +124,89 @@ export function EquipmentGrid({ initialData, role, onAddNew, userName }: Equipme
     setModalOpen(true);
   }
 
+  function handleVar1Change(v: string | null) {
+    const val = v ?? ALL;
+    setIdVar1(val);
+    setIdVar2(ALL);
+    setIdVar3(ALL);
+  }
+
+  function handleVar2Change(v: string | null) {
+    const val = v ?? ALL;
+    setIdVar2(val);
+    setIdVar3(ALL);
+  }
+
+  function handleVar3Change(v: string | null) {
+    const val = v ?? ALL;
+    setIdVar3(val);
+  }
+
   return (
     <div>
       {/* Filter bar */}
       <div className="flex flex-wrap gap-3 mb-6 items-center">
         <Input
-          placeholder="Search by ID (a-b), prefix (a), name, location or tag…"
+          placeholder="Search by ID, prefix, name, location or tag…"
           value={search}
           onChange={(e) => setSearch(e.target.value)}
           className="w-full sm:max-w-xs"
         />
 
-        {/* Prefix Filter */}
-        <Select value={prefixFilter} onValueChange={(v) => setPrefixFilter(v ?? ALL)}>
+        {/* Cascading Equipment ID Variable 1 <a> Filter */}
+        <Select value={idVar1} onValueChange={handleVar1Change}>
           <SelectTrigger className="w-full sm:w-36">
             <SelectValue>
-              {prefixFilter === ALL ? "All ID Prefixes" : `Prefix: ${prefixFilter}`}
+              {idVar1 === ALL ? "All ID Types" : `ID: ${idVar1}`}
             </SelectValue>
           </SelectTrigger>
           <SelectContent>
-            <SelectItem value={ALL}>All ID Prefixes</SelectItem>
-            {prefixes.map((p) => (
+            <SelectItem value={ALL}>All ID Types</SelectItem>
+            {var1Options.map((p) => (
               <SelectItem key={p} value={p}>
-                Prefix: {p}
+                {p}
               </SelectItem>
             ))}
           </SelectContent>
         </Select>
+
+        {/* Cascading Equipment ID Variable 2 <b> Filter (opens when <a> is selected) */}
+        {idVar1 !== ALL && var2Options.length > 0 && (
+          <Select value={idVar2} onValueChange={handleVar2Change}>
+            <SelectTrigger className="w-full sm:w-36 border-primary/50 bg-primary/5">
+              <SelectValue>
+                {idVar2 === ALL ? `All ${idVar1}-*` : `${idVar1}-${idVar2}`}
+              </SelectValue>
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value={ALL}>All {idVar1}-*</SelectItem>
+              {var2Options.map((v2) => (
+                <SelectItem key={v2} value={v2}>
+                  {idVar1}-{v2}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        )}
+
+        {/* Cascading Equipment ID Variable 3 <c> Filter (opens when <b> is selected and <c> exists) */}
+        {idVar1 !== ALL && idVar2 !== ALL && var3Options.length > 0 && (
+          <Select value={idVar3} onValueChange={handleVar3Change}>
+            <SelectTrigger className="w-full sm:w-40 border-primary/50 bg-primary/5">
+              <SelectValue>
+                {idVar3 === ALL ? `All ${idVar1}-${idVar2}-*` : `${idVar1}-${idVar2}-${idVar3}`}
+              </SelectValue>
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value={ALL}>All {idVar1}-${idVar2}-*</SelectItem>
+              {var3Options.map((v3) => (
+                <SelectItem key={v3} value={v3}>
+                  {idVar1}-{idVar2}-{v3}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        )}
 
         {/* Tag Filter */}
         <Select value={tagFilter} onValueChange={(v) => setTagFilter(v ?? ALL)}>
