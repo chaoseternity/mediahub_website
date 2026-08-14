@@ -65,7 +65,7 @@ export function SectionDeploymentModal({
       const toRemove = currentlyDeployedUserIds.filter((id) => !selectedUserIds.includes(id));
 
       for (const uid of toAdd) {
-        await fetch(`/api/events/${eventId}/section`, {
+        const res = await fetch(`/api/events/${eventId}/section`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
@@ -74,10 +74,14 @@ export function SectionDeploymentModal({
             user_id: uid,
           }),
         });
+        if (!res.ok) {
+          const json = await res.json().catch(() => ({}));
+          throw new Error(json.error ?? "Failed to add member deployment");
+        }
       }
 
       for (const uid of toRemove) {
-        await fetch(`/api/events/${eventId}/section`, {
+        const res = await fetch(`/api/events/${eventId}/section`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
@@ -86,6 +90,10 @@ export function SectionDeploymentModal({
             user_id: uid,
           }),
         });
+        if (!res.ok) {
+          const json = await res.json().catch(() => ({}));
+          throw new Error(json.error ?? "Failed to remove member deployment");
+        }
       }
 
       onUpdated();

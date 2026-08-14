@@ -739,11 +739,10 @@ export async function attachEquipmentToEventSection(
   addedBy: number | null = null
 ): Promise<{ success: boolean; error?: string }> {
   await ensureSchema();
+  await sql`DELETE FROM event_equipment WHERE event_id = ${eventId} AND equipment_id = ${equipmentId} AND section = ${section}`;
   await sql`
     INSERT INTO event_equipment (event_id, equipment_id, section, used_for_rehearsal, added_by)
     VALUES (${eventId}, ${equipmentId}, ${section}, ${usedForRehearsal}, ${addedBy})
-    ON CONFLICT (event_id, equipment_id, section)
-    DO UPDATE SET used_for_rehearsal = EXCLUDED.used_for_rehearsal
   `;
   return { success: true };
 }
@@ -766,11 +765,10 @@ export async function addDeploymentToEventSection(
   addedBy: number | null = null
 ): Promise<{ success: boolean; error?: string }> {
   await ensureSchema();
+  await sql`DELETE FROM event_deployments WHERE event_id = ${eventId} AND user_id = ${userId} AND section = ${section}`;
   await sql`
     INSERT INTO event_deployments (event_id, user_id, section, attending_rehearsal, added_by)
     VALUES (${eventId}, ${userId}, ${section}, ${attendingRehearsal}, ${addedBy})
-    ON CONFLICT (event_id, user_id, section)
-    DO UPDATE SET attending_rehearsal = EXCLUDED.attending_rehearsal
   `;
   return { success: true };
 }

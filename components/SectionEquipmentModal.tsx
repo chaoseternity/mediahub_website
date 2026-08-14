@@ -68,7 +68,7 @@ export function SectionEquipmentModal({
       const toRemove = currentlyAttachedEqIds.filter((id) => !selectedEqIds.includes(id));
 
       for (const eqId of toAdd) {
-        await fetch(`/api/events/${eventId}/section`, {
+        const res = await fetch(`/api/events/${eventId}/section`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
@@ -77,10 +77,14 @@ export function SectionEquipmentModal({
             equipment_id: eqId,
           }),
         });
+        if (!res.ok) {
+          const json = await res.json().catch(() => ({}));
+          throw new Error(json.error ?? "Failed to attach equipment to section");
+        }
       }
 
       for (const eqId of toRemove) {
-        await fetch(`/api/events/${eventId}/section`, {
+        const res = await fetch(`/api/events/${eventId}/section`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
@@ -89,6 +93,10 @@ export function SectionEquipmentModal({
             equipment_id: eqId,
           }),
         });
+        if (!res.ok) {
+          const json = await res.json().catch(() => ({}));
+          throw new Error(json.error ?? "Failed to remove equipment from section");
+        }
       }
 
       onUpdated();
