@@ -24,7 +24,6 @@ const mockAvailable: EquipmentDetail = {
   serial_number: "SN-001",
   purchase_date: "2024-01-01",
   condition: "Good",
-  quantity: 1,
   location: "Room 1",
   status: "Available",
   created_at: "2024-01-01T00:00:00Z",

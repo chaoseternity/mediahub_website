@@ -35,7 +35,6 @@ export interface Equipment {
   serial_number: string | null;
   purchase_date: string | null;
   condition: Condition;
-  quantity: number;
   location: string;
   status: EquipmentStatus;
   created_at: string;

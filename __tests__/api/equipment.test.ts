@@ -21,7 +21,6 @@ function insertEquipment(
     name: string;
     tags: string[];
     condition: Condition;
-    quantity: number;
     location: string;
     status: EquipmentStatus;
   }> = {}
@@ -33,15 +32,14 @@ function insertEquipment(
     serial_number: null,
     purchase_date: null,
     condition: "Good" as Condition,
-    quantity: 1,
     location: "AV Storage Room",
     status: "Available" as EquipmentStatus,
     ...overrides,
   };
   const result = db
     .prepare(
-      `INSERT INTO equipment (name, description, serial_number, purchase_date, condition, quantity, location, status)
-       VALUES (@name, @description, @serial_number, @purchase_date, @condition, @quantity, @location, @status)`
+      `INSERT INTO equipment (name, description, serial_number, purchase_date, condition, location, status)
+       VALUES (@name, @description, @serial_number, @purchase_date, @condition, @location, @status)`
     )
     .run(rest);
   const id = result.lastInsertRowid as number;
@@ -101,7 +99,6 @@ describe("Equipment DB helpers (in-memory SQLite) — AV CCA", () => {
       name: "SD-V-1",
       tags: ["SD Card (Video)"],
       condition: "New",
-      quantity: 1,
       location: "AV Storage Room – SD Card Wallet",
       status: "Available",
     });

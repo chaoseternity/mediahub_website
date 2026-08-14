@@ -14,8 +14,8 @@ function seedEquipment(db: Database.Database, name = "Kamera", tag = "Laptop", s
   db.prepare("INSERT OR IGNORE INTO tags (name) VALUES (?)").run(tag);
   const id = db
     .prepare(
-      `INSERT INTO equipment (name, condition, quantity, location, status)
-       VALUES (?, 'Good', 1, 'AV Storage Room', ?)`
+      `INSERT INTO equipment (name, condition, location, status)
+       VALUES (?, 'Good', 'AV Storage Room', ?)`
     )
     .run(name, status).lastInsertRowid as number;
   db.prepare(

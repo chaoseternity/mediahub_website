@@ -10,7 +10,6 @@ const CreateEquipmentSchema = z.object({
   serial_number: z.string().optional(),
   purchase_date: z.string().optional(),
   condition: z.enum(["New", "Good", "Fair", "Poor"]).default("Good"),
-  quantity: z.number().int().positive().default(1),
   location: z.string().min(1),
   status: z
     .enum(["Available", "Checked Out", "Under Maintenance", "Retired"])

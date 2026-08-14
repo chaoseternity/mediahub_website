@@ -10,7 +10,6 @@ const UpdateEquipmentSchema = z.object({
   serial_number: z.string().optional(),
   purchase_date: z.string().optional(),
   condition: z.enum(["New", "Good", "Fair", "Poor"]).optional(),
-  quantity: z.number().int().positive().optional(),
   location: z.string().min(1).optional(),
   status: z
     .enum(["Available", "Checked Out", "In Event", "Under Maintenance", "Retired"])

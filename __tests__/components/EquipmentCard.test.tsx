@@ -17,7 +17,6 @@ const baseEquipment: Equipment = {
   serial_number: "SN-001",
   purchase_date: "2023-01-01",
   condition: "Good",
-  quantity: 1,
   location: "Office A",
   status: "Available",
   created_at: "2023-01-01T00:00:00.000Z",

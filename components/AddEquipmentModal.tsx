@@ -30,7 +30,6 @@ const AddSchema = z.object({
   serial_number: z.string().optional(),
   purchase_date: z.string().optional(),
   condition: z.enum(["New", "Good", "Fair", "Poor"]),
-  quantity: z.coerce.number().int().positive(),
   location: z.string().min(1),
   status: z.enum(["Available", "Checked Out", "Under Maintenance", "Retired"]),
 });
@@ -61,7 +60,7 @@ export function AddEquipmentModal({ open, onClose, onCreated }: AddEquipmentModa
     formState: { errors, isSubmitting },
   } = useForm<AddFormValues, unknown, AddFormValues>({
     resolver: zodResolver(AddSchema) as import("react-hook-form").Resolver<AddFormValues>,
-    defaultValues: { condition: "Good", quantity: 1, status: "Available", tags: [] },
+    defaultValues: { condition: "Good", status: "Available", tags: [] },
   });
 
   const watchedTags = useWatch({ control, name: "tags" }) ?? [];
@@ -101,7 +100,7 @@ export function AddEquipmentModal({ open, onClose, onCreated }: AddEquipmentModa
                 value={watchedTags}
                 onChange={(tags) => setValue("tags", tags, { shouldValidate: true })}
                 available={availableTags}
-                placeholder="Search tags\u2026"
+                placeholder="Search tags…"
               />
               {errors.tags && <p className="text-xs text-destructive">{errors.tags.message}</p>}
             </div>
@@ -110,8 +109,8 @@ export function AddEquipmentModal({ open, onClose, onCreated }: AddEquipmentModa
               <Input id="new-description" {...register("description")} />
             </div>
             <div className="space-y-1">
-              <Label htmlFor="new-serial">Serial Number</Label>
-              <Input id="new-serial" {...register("serial_number")} />
+              <Label htmlFor="new-serial">Equipment ID</Label>
+              <Input id="new-serial" placeholder="e.g. EQ-001" {...register("serial_number")} />
             </div>
             <div className="space-y-1">
               <Label htmlFor="new-date">Purchase Date</Label>
@@ -127,16 +126,11 @@ export function AddEquipmentModal({ open, onClose, onCreated }: AddEquipmentModa
               </Select>
             </div>
             <div className="space-y-1">
-              <Label htmlFor="new-qty">Quantity *</Label>
-              <Input id="new-qty" type="number" min={1} {...register("quantity")} />
-              {errors.quantity && <p className="text-xs text-destructive">{errors.quantity.message}</p>}
-            </div>
-            <div className="space-y-1">
               <Label htmlFor="new-location">Location *</Label>
               <Input id="new-location" {...register("location")} />
               {errors.location && <p className="text-xs text-destructive">{errors.location.message}</p>}
             </div>
-            <div className="space-y-1">
+            <div className="space-y-1 col-span-2">
               <Label>Status *</Label>
               <Select defaultValue="Available" onValueChange={(v) => setValue("status", v as AddFormValues["status"])}>
                 <SelectTrigger><SelectValue /></SelectTrigger>
@@ -147,11 +141,10 @@ export function AddEquipmentModal({ open, onClose, onCreated }: AddEquipmentModa
             </div>
           </div>
           <Button type="submit" disabled={isSubmitting} className="w-full">
-            {isSubmitting ? "Creating\u2026" : "Create Equipment"}
+            {isSubmitting ? "Creating…" : "Create Equipment"}
           </Button>
         </form>
       </DialogContent>
     </Dialog>
   );
 }
-

@@ -90,8 +90,8 @@ export function EquipmentCard({ equipment, onClick }: EquipmentCardProps) {
             <dd>{equipment.condition}</dd>
           </div>
           <div className="flex gap-1">
-            <dt className="text-muted-foreground shrink-0">Qty:</dt>
-            <dd>{equipment.quantity}</dd>
+            <dt className="text-muted-foreground shrink-0">Equipment ID:</dt>
+            <dd className="font-mono text-xs truncate">{equipment.serial_number || "N/A"}</dd>
           </div>
           {equipment.status === "Checked Out" && equipment.checked_out_by_name && (
             <div className="flex gap-1">

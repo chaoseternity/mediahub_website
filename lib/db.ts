@@ -137,7 +137,7 @@ export async function getAllEquipment(): Promise<Equipment[]> {
   const { rows } = await sql<EquipmentRawRow>`
     SELECT 
       e.id, e.name, e.description, e.serial_number, e.purchase_date,
-      e.condition, e.quantity, e.location, e.status, e.created_at, e.updated_at,
+      e.condition, e.location, e.status, e.created_at, e.updated_at,
       COALESCE(
         ARRAY_AGG(DISTINCT t.name) FILTER (WHERE t.name IS NOT NULL),
         '{}'
@@ -179,7 +179,7 @@ export async function getEquipmentById(id: number): Promise<EquipmentDetail | un
   const { rows: eqRows } = await sql<EquipmentRawRow>`
     SELECT 
       e.id, e.name, e.description, e.serial_number, e.purchase_date,
-      e.condition, e.quantity, e.location, e.status, e.created_at, e.updated_at,
+      e.condition, e.location, e.status, e.created_at, e.updated_at,
       COALESCE(
         ARRAY_AGG(DISTINCT t.name) FILTER (WHERE t.name IS NOT NULL),
         '{}'
@@ -254,14 +254,13 @@ export async function createEquipment(params: {
   serial_number?: string;
   purchase_date?: string;
   condition: Condition;
-  quantity: number;
   location: string;
   status: EquipmentStatus;
 }): Promise<Equipment> {
   await ensureSchema();
   const { rows } = await sql<Equipment>`
-    INSERT INTO equipment (name, description, serial_number, purchase_date, condition, quantity, location, status)
-    VALUES (${params.name}, ${params.description ?? null}, ${params.serial_number ?? null}, ${params.purchase_date ?? null}, ${params.condition}, ${params.quantity}, ${params.location}, ${params.status})
+    INSERT INTO equipment (name, description, serial_number, purchase_date, condition, location, status)
+    VALUES (${params.name}, ${params.description ?? null}, ${params.serial_number ?? null}, ${params.purchase_date ?? null}, ${params.condition}, ${params.location}, ${params.status})
     RETURNING *
   `;
 
@@ -289,7 +288,6 @@ export async function updateEquipment(
     serial_number: string;
     purchase_date: string;
     condition: Condition;
-    quantity: number;
     location: string;
     status: EquipmentStatus;
   }>
@@ -306,7 +304,6 @@ export async function updateEquipment(
     if (scalars.serial_number !== undefined) await sql`UPDATE equipment SET serial_number = ${scalars.serial_number} WHERE id = ${id}`;
     if (scalars.purchase_date !== undefined) await sql`UPDATE equipment SET purchase_date = ${scalars.purchase_date} WHERE id = ${id}`;
     if (scalars.condition !== undefined) await sql`UPDATE equipment SET condition = ${scalars.condition} WHERE id = ${id}`;
-    if (scalars.quantity !== undefined) await sql`UPDATE equipment SET quantity = ${scalars.quantity} WHERE id = ${id}`;
     if (scalars.location !== undefined) await sql`UPDATE equipment SET location = ${scalars.location} WHERE id = ${id}`;
     if (scalars.status !== undefined) await sql`UPDATE equipment SET status = ${scalars.status} WHERE id = ${id}`;
     await sql`UPDATE equipment SET updated_at = CURRENT_TIMESTAMP WHERE id = ${id}`;
@@ -343,7 +340,7 @@ export async function getEquipmentByTagId(tagId: number): Promise<Equipment[]> {
   const { rows } = await sql<EquipmentRawRow>`
     SELECT 
       e.id, e.name, e.description, e.serial_number, e.purchase_date,
-      e.condition, e.quantity, e.location, e.status, e.created_at, e.updated_at,
+      e.condition, e.location, e.status, e.created_at, e.updated_at,
       COALESCE(
         ARRAY_AGG(DISTINCT t.name) FILTER (WHERE t.name IS NOT NULL),
         '{}'
@@ -554,7 +551,7 @@ export async function getEventById(id: number): Promise<AppEvent | undefined> {
   const { rows: eqRows } = await sql<EquipmentRawRow & { section: EventSection; used_for_rehearsal: boolean }>`
     SELECT 
       e.id, e.name, e.description, e.serial_number, e.purchase_date,
-      e.condition, e.quantity, e.location, e.status, e.created_at, e.updated_at,
+      e.condition, e.location, e.status, e.created_at, e.updated_at,
       ee.section, ee.used_for_rehearsal,
       COALESCE(
         ARRAY_AGG(DISTINCT t.name) FILTER (WHERE t.name IS NOT NULL),
