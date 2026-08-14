@@ -6,7 +6,7 @@ export default async function ScanPage() {
   const [session, equipment] = await Promise.all([auth(), getAllEquipment()]);
 
   return (
-    <div className="px-4 py-4 md:px-6 md:py-8 max-w-screen-xl mx-auto">
+    <div className="px-4 py-4 md:px-6 md:py-8 w-full">
       <div className="mb-6">
         <h2 className="text-xl md:text-2xl font-bold">Scan QR Code</h2>
         <p className="text-muted-foreground text-sm">

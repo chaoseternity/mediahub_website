@@ -47,7 +47,7 @@ export function MobileNav({ userName, role }: MobileNavProps) {
         >
           <Menu className="h-5 w-5" />
         </Button>
-        <h1 className="font-bold text-sm tracking-tight flex-1">Inventory Tracker</h1>
+        <h1 className="font-bold text-base tracking-tight flex-1">Inventory Tracker</h1>
         {mounted && (
           <Button
             variant="ghost"
@@ -56,9 +56,9 @@ export function MobileNav({ userName, role }: MobileNavProps) {
             onClick={() => setTheme(resolvedTheme === "dark" ? "light" : "dark")}
           >
             {resolvedTheme === "dark" ? (
-              <Sun className="h-4 w-4" />
+              <Sun className="h-5 w-5" />
             ) : (
-              <Moon className="h-4 w-4" />
+              <Moon className="h-5 w-5" />
             )}
           </Button>
         )}
@@ -80,34 +80,34 @@ export function MobileNav({ userName, role }: MobileNavProps) {
         )}
       >
         <div className="flex items-center justify-between px-4 py-4 border-b">
-          <h1 className="font-bold text-base tracking-tight">Inventory Tracker</h1>
+          <h1 className="font-bold text-lg tracking-tight">Inventory Tracker</h1>
           <Button variant="ghost" size="icon" aria-label="Close menu" onClick={() => setOpen(false)}>
-            <X className="h-4 w-4" />
+            <X className="h-5 w-5" />
           </Button>
         </div>
 
-        <nav className="flex-1 px-2 py-3 space-y-0.5">
+        <nav className="flex-1 px-3 py-3 space-y-1">
           {navItems.map(({ href, label, icon: Icon }) => (
             <Link
               key={href}
               href={href}
               onClick={() => setOpen(false)}
               className={cn(
-                "flex items-center gap-2.5 px-3 py-2 rounded-md text-sm transition-colors",
+                "flex items-center gap-3 px-3.5 py-2.5 rounded-lg text-base transition-colors",
                 pathname === href
-                  ? "bg-primary text-primary-foreground font-medium"
-                  : "text-muted-foreground hover:text-foreground hover:bg-accent"
+                  ? "bg-primary text-primary-foreground font-semibold shadow-sm"
+                  : "text-muted-foreground hover:text-foreground hover:bg-accent font-medium"
               )}
             >
-              <Icon className="h-4 w-4 shrink-0" />
+              <Icon className="h-5 w-5 shrink-0" />
               {label}
             </Link>
           ))}
         </nav>
 
-        <div className="px-3 py-3 border-t space-y-2">
+        <div className="px-3.5 py-3.5 border-t space-y-2.5">
           <div className="flex items-center gap-2 px-1">
-            <span className="text-sm font-medium truncate flex-1 min-w-0">{userName}</span>
+            <span className="text-sm font-semibold truncate flex-1 min-w-0">{userName}</span>
             <Badge className={cn(roleBadgeClass[role], "shrink-0")}>
               {role}
             </Badge>
@@ -115,10 +115,10 @@ export function MobileNav({ userName, role }: MobileNavProps) {
           <Button
             variant="outline"
             size="sm"
-            className="w-full justify-start gap-1.5"
+            className="w-full justify-start gap-2 text-sm font-medium h-9"
             onClick={() => signOut({ callbackUrl: "/login" })}
           >
-            <LogOut className="h-4 w-4" />
+            <LogOut className="h-4.5 w-4.5" />
             Sign Out
           </Button>
         </div>

@@ -54,7 +54,7 @@ export function Sidebar({ userName, role }: SidebarProps) {
     <aside
       className={cn(
         "hidden md:flex flex-col border-r bg-background h-full shrink-0 transition-[width] duration-200 overflow-hidden relative",
-        collapsed ? "w-14" : "w-56"
+        collapsed ? "w-16" : "w-60"
       )}
     >
       {/* Collapse / expand toggle — tall rectangle flush with the right edge, vertically centred */}
@@ -64,59 +64,60 @@ export function Sidebar({ userName, role }: SidebarProps) {
         onClick={toggle}
         className="absolute right-0 top-1/2 -translate-y-1/2 z-20 h-16 w-5 rounded-l-md rounded-r-none border-l border-y bg-muted/60 hover:bg-muted flex items-center justify-center p-0"
       >
-        {collapsed ? <ChevronRight className="h-3.5 w-3.5" /> : <ChevronLeft className="h-3.5 w-3.5" />}
+        {collapsed ? <ChevronRight className="h-4 w-4" /> : <ChevronLeft className="h-4 w-4" />}
       </Button>
 
       {/* Logo */}
-      <div className="flex items-center px-3 py-4 border-b min-w-0">
+      <div className="flex items-center px-4 py-4 border-b min-w-0">
         {!collapsed && (
-          <h1 className="font-bold text-base tracking-tight truncate">Inventory Tracker</h1>
+          <h1 className="font-bold text-lg tracking-tight truncate">Inventory Tracker</h1>
         )}
       </div>
 
-      {/* Nav */}
-      <nav className="flex-1 px-2 py-3 space-y-0.5">
+      {/* Nav with larger text and icons */}
+      <nav className="flex-1 px-2.5 py-3 space-y-1">
         {navItems.map(({ href, label, icon: Icon }) => (
           <Link
             key={href}
             href={href}
             title={collapsed ? label : undefined}
             className={cn(
-              "flex items-center gap-2.5 px-3 py-2 rounded-md text-sm transition-colors",
-              collapsed && "justify-center px-2",
+              "flex items-center gap-3 px-3.5 py-2.5 rounded-lg text-base transition-colors",
+              collapsed && "justify-center px-2 py-2.5",
               pathname === href
-                ? "bg-primary text-primary-foreground font-medium"
-                : "text-muted-foreground hover:text-foreground hover:bg-accent"
+                ? "bg-primary text-primary-foreground font-semibold shadow-sm"
+                : "text-muted-foreground hover:text-foreground hover:bg-accent font-medium"
             )}
           >
-            <Icon className="h-4 w-4 shrink-0" />
-            {!collapsed && label}
+            <Icon className="h-5 w-5 shrink-0" />
+            {!collapsed && <span className="truncate">{label}</span>}
           </Link>
         ))}
       </nav>
 
       {/* User info + actions */}
-      <div className={cn("py-3 border-t space-y-2", collapsed ? "px-1" : "px-3")}>
+      <div className={cn("py-3.5 border-t space-y-2.5", collapsed ? "px-1.5" : "px-3.5")}>
         {!collapsed && (
           <div className="flex items-center gap-2 px-1">
-            <span className="text-sm font-medium truncate flex-1 min-w-0">{userName}</span>
+            <span className="text-sm font-semibold truncate flex-1 min-w-0">{userName}</span>
             <Badge className={cn(roleBadgeClass[role], "shrink-0")}>
               {role}
             </Badge>
           </div>
         )}
-        <div className={cn("flex gap-1", collapsed && "flex-col items-center")}>
+        <div className={cn("flex gap-1.5", collapsed && "flex-col items-center")}>
           <Button
             variant="ghost"
             size="icon"
             aria-label="Toggle dark mode"
             onClick={() => setTheme(resolvedTheme === "dark" ? "light" : "dark")}
+            className="h-9 w-9"
           >
             {mounted &&
               (resolvedTheme === "dark" ? (
-                <Sun className="h-4 w-4" />
+                <Sun className="h-5 w-5" />
               ) : (
-                <Moon className="h-4 w-4" />
+                <Moon className="h-5 w-5" />
               ))}
           </Button>
           <Button
@@ -124,10 +125,10 @@ export function Sidebar({ userName, role }: SidebarProps) {
             size={collapsed ? "icon" : "sm"}
             aria-label="Sign out"
             title="Sign out"
-            className={cn(!collapsed && "flex-1 justify-start gap-1.5")}
+            className={cn("h-9", !collapsed && "flex-1 justify-start gap-2 text-sm font-medium")}
             onClick={() => signOut({ callbackUrl: "/login" })}
           >
-            <LogOut className="h-4 w-4" />
+            <LogOut className="h-4.5 w-4.5" />
             {!collapsed && "Sign Out"}
           </Button>
         </div>

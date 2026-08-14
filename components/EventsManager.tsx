@@ -93,7 +93,7 @@ export function EventsManager({ initialEvents, role, currentUserId }: EventsMana
   });
 
   return (
-    <div className="px-4 py-4 md:px-6 md:py-8 max-w-screen-xl mx-auto space-y-6">
+    <div className="px-4 py-4 md:px-6 md:py-8 w-full space-y-6">
       {/* Header */}
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
         <div>
