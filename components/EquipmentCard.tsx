@@ -9,6 +9,7 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
+import { parseEquipmentId } from "@/lib/utils";
 import type { Equipment } from "@/lib/types";
 
 interface EquipmentCardProps {
@@ -38,6 +39,8 @@ const statusColour: Record<Equipment["status"], string> = {
 };
 
 export function EquipmentCard({ equipment, onClick }: EquipmentCardProps) {
+  const parsedId = parseEquipmentId(equipment.serial_number);
+
   return (
     <Card
       className="cursor-pointer hover:shadow-lg hover:-translate-y-0.5 hover:ring-1 hover:ring-primary/20 transition-all duration-200 flex flex-col"
@@ -55,22 +58,29 @@ export function EquipmentCard({ equipment, onClick }: EquipmentCardProps) {
             {equipment.status}
           </Badge>
         </div>
-        <p className="text-xs text-muted-foreground mt-1">
-          <span className="flex flex-wrap gap-1">
-            {equipment.tags.map((tag) => (
-              <span
-                key={tag}
-                className="inline-flex items-center gap-1 whitespace-nowrap rounded-full border bg-secondary px-2 py-0.5 text-xs font-medium text-secondary-foreground"
-              >
-                <Tag className="h-3 w-3 shrink-0" />
-                {tag}
-              </span>
-            ))}
-            {equipment.tags.length === 0 && (
-              <span className="italic text-muted-foreground">No tags</span>
-            )}
-          </span>
-        </p>
+
+        <div className="flex flex-wrap items-center gap-1 mt-1">
+          {equipment.serial_number && (
+            <span className="inline-flex items-center font-mono text-[11px] font-semibold bg-primary/10 text-primary border border-primary/20 px-1.5 py-0.5 rounded">
+              <span className="font-bold">{parsedId.partA}</span>
+              {parsedId.partB && <span>-{parsedId.partB}</span>}
+              {parsedId.partC && <span>-{parsedId.partC}</span>}
+            </span>
+          )}
+
+          {equipment.tags.map((tag) => (
+            <span
+              key={tag}
+              className="inline-flex items-center gap-1 whitespace-nowrap rounded-full border bg-secondary px-2 py-0.5 text-xs font-medium text-secondary-foreground"
+            >
+              <Tag className="h-3 w-3 shrink-0" />
+              {tag}
+            </span>
+          ))}
+          {equipment.tags.length === 0 && !equipment.serial_number && (
+            <span className="italic text-xs text-muted-foreground">No tags</span>
+          )}
+        </div>
       </CardHeader>
 
       <CardContent className="pb-2 flex-1">
@@ -91,7 +101,7 @@ export function EquipmentCard({ equipment, onClick }: EquipmentCardProps) {
           </div>
           <div className="flex gap-1">
             <dt className="text-muted-foreground shrink-0">Equipment ID:</dt>
-            <dd className="font-mono text-xs truncate">{equipment.serial_number || "N/A"}</dd>
+            <dd className="font-mono text-xs font-medium truncate">{equipment.serial_number || "N/A"}</dd>
           </div>
           {equipment.status === "Checked Out" && equipment.checked_out_by_name && (
             <div className="flex gap-1">
