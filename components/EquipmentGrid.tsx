@@ -153,60 +153,65 @@ export function EquipmentGrid({ initialData, role, onAddNew, userName }: Equipme
           className="w-full sm:max-w-xs"
         />
 
-        {/* Cascading Equipment ID Variable 1 <a> Filter */}
-        <Select value={idVar1} onValueChange={handleVar1Change}>
-          <SelectTrigger className="w-full sm:w-36">
-            <SelectValue>
-              {idVar1 === ALL ? "All ID Types" : `ID: ${idVar1}`}
-            </SelectValue>
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem value={ALL}>All ID Types</SelectItem>
-            {var1Options.map((p) => (
-              <SelectItem key={p} value={p}>
-                {p}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
+        {/* Compact Inline Cascading Equipment ID Filter */}
+        <div className="inline-flex items-center gap-1 bg-muted/30 border rounded-lg px-2.5 py-1 text-xs">
+          <span className="font-semibold text-muted-foreground shrink-0 select-none">ID:</span>
 
-        {/* Cascading Equipment ID Variable 2 <b> Filter (opens when <a> is selected) */}
-        {idVar1 !== ALL && var2Options.length > 0 && (
-          <Select value={idVar2} onValueChange={handleVar2Change}>
-            <SelectTrigger className="w-full sm:w-36 border-primary/50 bg-primary/5">
-              <SelectValue>
-                {idVar2 === ALL ? `All ${idVar1}-*` : `${idVar1}-${idVar2}`}
-              </SelectValue>
+          {/* Variable 1 dropdown */}
+          <Select value={idVar1} onValueChange={handleVar1Change}>
+            <SelectTrigger className="h-7 w-20 px-2 py-0 text-xs font-mono font-medium border-muted-foreground/30 bg-background">
+              <SelectValue>{idVar1 === ALL ? "All" : idVar1}</SelectValue>
             </SelectTrigger>
             <SelectContent>
-              <SelectItem value={ALL}>All {idVar1}-*</SelectItem>
-              {var2Options.map((v2) => (
-                <SelectItem key={v2} value={v2}>
-                  {idVar1}-{v2}
+              <SelectItem value={ALL}>All</SelectItem>
+              {var1Options.map((p) => (
+                <SelectItem key={p} value={p} className="font-mono text-xs">
+                  {p}
                 </SelectItem>
               ))}
             </SelectContent>
           </Select>
-        )}
 
-        {/* Cascading Equipment ID Variable 3 <c> Filter (opens when <b> is selected and <c> exists) */}
-        {idVar1 !== ALL && idVar2 !== ALL && var3Options.length > 0 && (
-          <Select value={idVar3} onValueChange={handleVar3Change}>
-            <SelectTrigger className="w-full sm:w-40 border-primary/50 bg-primary/5">
-              <SelectValue>
-                {idVar3 === ALL ? `All ${idVar1}-${idVar2}-*` : `${idVar1}-${idVar2}-${idVar3}`}
-              </SelectValue>
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value={ALL}>All {idVar1}-${idVar2}-*</SelectItem>
-              {var3Options.map((v3) => (
-                <SelectItem key={v3} value={v3}>
-                  {idVar1}-{idVar2}-{v3}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-        )}
+          {/* Variable 2 dropdown (opens when <a> is selected) */}
+          {idVar1 !== ALL && var2Options.length > 0 && (
+            <>
+              <span className="text-muted-foreground font-bold select-none">-</span>
+              <Select value={idVar2} onValueChange={handleVar2Change}>
+                <SelectTrigger className="h-7 w-20 px-2 py-0 text-xs font-mono font-medium border-primary/40 bg-primary/5 text-primary">
+                  <SelectValue>{idVar2 === ALL ? "All" : idVar2}</SelectValue>
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value={ALL}>All</SelectItem>
+                  {var2Options.map((v2) => (
+                    <SelectItem key={v2} value={v2} className="font-mono text-xs">
+                      {v2}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </>
+          )}
+
+          {/* Variable 3 dropdown (opens when <b> is selected and <c> exists) */}
+          {idVar1 !== ALL && idVar2 !== ALL && var3Options.length > 0 && (
+            <>
+              <span className="text-muted-foreground font-bold select-none">-</span>
+              <Select value={idVar3} onValueChange={handleVar3Change}>
+                <SelectTrigger className="h-7 w-20 px-2 py-0 text-xs font-mono font-medium border-primary/40 bg-primary/5 text-primary">
+                  <SelectValue>{idVar3 === ALL ? "All" : idVar3}</SelectValue>
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value={ALL}>All</SelectItem>
+                  {var3Options.map((v3) => (
+                    <SelectItem key={v3} value={v3} className="font-mono text-xs">
+                      {v3}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </>
+          )}
+        </div>
 
         {/* Tag Filter */}
         <Select value={tagFilter} onValueChange={(v) => setTagFilter(v ?? ALL)}>
