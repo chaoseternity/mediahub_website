@@ -41,8 +41,8 @@ export default function LoginPage() {
     <main className="min-h-screen flex items-center justify-center bg-muted/40">
       <Card className="w-full max-w-sm">
         <CardHeader className="text-center">
-          <CardTitle className="text-2xl">Inventory Tracker</CardTitle>
-          <CardDescription>Sign in to manage your equipment inventory</CardDescription>
+          <CardTitle className="text-2xl font-bold">MediaHub</CardTitle>
+          <CardDescription>Sign in to manage your equipment & events</CardDescription>
         </CardHeader>
         <CardContent className="flex flex-col gap-3">
           {/* Primary: Google */}

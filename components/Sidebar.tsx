@@ -70,7 +70,7 @@ export function Sidebar({ userName, role }: SidebarProps) {
       {/* Logo */}
       <div className="flex items-center px-4 py-4 border-b min-w-0">
         {!collapsed && (
-          <h1 className="font-bold text-lg tracking-tight truncate">Inventory Tracker</h1>
+          <h1 className="font-bold text-lg tracking-tight truncate">MediaHub</h1>
         )}
       </div>
 

@@ -47,7 +47,7 @@ export function MobileNav({ userName, role }: MobileNavProps) {
         >
           <Menu className="h-5 w-5" />
         </Button>
-        <h1 className="font-bold text-base tracking-tight flex-1">Inventory Tracker</h1>
+        <h1 className="font-bold text-base tracking-tight flex-1">MediaHub</h1>
         {mounted && (
           <Button
             variant="ghost"
@@ -80,7 +80,7 @@ export function MobileNav({ userName, role }: MobileNavProps) {
         )}
       >
         <div className="flex items-center justify-between px-4 py-4 border-b">
-          <h1 className="font-bold text-lg tracking-tight">Inventory Tracker</h1>
+          <h1 className="font-bold text-lg tracking-tight">MediaHub</h1>
           <Button variant="ghost" size="icon" aria-label="Close menu" onClick={() => setOpen(false)}>
             <X className="h-5 w-5" />
           </Button>

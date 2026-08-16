@@ -15,8 +15,8 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "Inventory Tracker",
-  description: "Equipment inventory management system",
+  title: "MediaHub",
+  description: "Equipment inventory & events management system",
 };
 
 export default function RootLayout({
