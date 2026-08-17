@@ -4,7 +4,7 @@ import { useEffect, useState } from "react";
 import { useForm, useWatch } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
-import { Pencil, QrCode, Printer } from "lucide-react";
+import { Pencil, QrCode, Printer, Calendar, Clock, MapPin, ArrowRight, ExternalLink } from "lucide-react";
 import {
   Dialog,
   DialogContent,
@@ -26,8 +26,9 @@ import { Badge } from "@/components/ui/badge";
 import { CheckoutForm } from "@/components/CheckoutForm";
 import { TagMultiSelect } from "@/components/TagMultiSelect";
 import { PrintLabelModal } from "@/components/PrintLabelModal";
+import { EventDetailModal } from "@/components/EventDetailModal";
 import { cn } from "@/lib/utils";
-import type { EquipmentDetail, Role, Checkout, Tag } from "@/lib/types";
+import type { EquipmentDetail, Role, Checkout, Tag, EventEquipmentLog } from "@/lib/types";
 
 interface EquipmentModalProps {
   equipmentId: number | null;
@@ -99,6 +100,8 @@ export function EquipmentModal({
   const [editingField, setEditingField] = useState<string | null>(null);
   const [showCheckout, setShowCheckout] = useState(false);
   const [printModalOpen, setPrintModalOpen] = useState(false);
+  const [selectedEventId, setSelectedEventId] = useState<number | null>(null);
+  const [eventDetailOpen, setEventDetailOpen] = useState(false);
   const [availableTags, setAvailableTags] = useState<string[]>([]);
 
   const isAdmin = role === "admin";
@@ -267,15 +270,52 @@ export function EquipmentModal({
     );
   }
 
-  // ── Last 5 checkouts ──────────────────────────────────────────────────────
+  // ── Unified History (Checkouts & Events) sorted by Date of Return ─────────
 
-  const last5 = equipment
-    ? [...equipment.checkouts]
-        .sort(
-          (a, b) =>
-            new Date(b.checked_out_at).getTime() - new Date(a.checked_out_at).getTime()
-        )
-        .slice(0, 5)
+  type HistoryEntry =
+    | {
+        kind: "checkout";
+        id: string;
+        checkout: Checkout;
+        returnDate: Date;
+        returnDateStr: string;
+        isReturned: boolean;
+      }
+    | {
+        kind: "event";
+        id: string;
+        eventLog: EventEquipmentLog;
+        returnDate: Date;
+        returnDateStr: string;
+        isReturned: boolean;
+      };
+
+  const unifiedHistory: HistoryEntry[] = equipment
+    ? [
+        ...(equipment.checkouts || []).map((ch) => {
+          const rawReturn = ch.returned_at || ch.expected_return_at || ch.checked_out_at;
+          return {
+            kind: "checkout" as const,
+            id: `ch-${ch.id}`,
+            checkout: ch,
+            returnDate: parseUTC(rawReturn),
+            returnDateStr: rawReturn,
+            isReturned: Boolean(ch.returned_at),
+          };
+        }),
+        ...(equipment.event_logs || []).map((ev) => {
+          const rawReturn = ev.end_time || ev.start_time || ev.added_at;
+          const returnDate = parseUTC(rawReturn);
+          return {
+            kind: "event" as const,
+            id: `ev-${ev.event_id}-${ev.added_at}`,
+            eventLog: ev,
+            returnDate,
+            returnDateStr: rawReturn,
+            isReturned: new Date().getTime() > returnDate.getTime(),
+          };
+        }),
+      ].sort((a, b) => b.returnDate.getTime() - a.returnDate.getTime())
     : [];
 
   const isDetailsOpen = open && !printModalOpen;
@@ -364,70 +404,112 @@ export function EquipmentModal({
                   </div>
                 </TabsContent>
 
-                {/* ── Checkout History tab ── */}
+                {/* ── Checkout History tab (Sorted by Date of Return) ── */}
                 <TabsContent value="history">
-                  {last5.length === 0 ? (
-                    <p className="text-sm text-muted-foreground py-4">
-                      No checkout history yet.
+                  {unifiedHistory.length === 0 ? (
+                    <p className="text-sm text-muted-foreground py-4 text-center">
+                      No checkout or event history yet.
                     </p>
                   ) : (
                     <div className="space-y-3">
-                      {last5.map((ch: Checkout) => (
-                        <div key={ch.id} className="border rounded-lg p-3 space-y-1.5">
-                          <div className="flex items-center justify-between">
-                            <p className="font-medium text-sm">{ch.checked_out_by_name}</p>
-                            <Badge
-                              variant={ch.returned_at ? "secondary" : "default"}
-                              className="text-xs"
-                            >
-                              {ch.returned_at ? "Returned" : "Active"}
-                            </Badge>
-                          </div>
-                          <div className="grid grid-cols-2 gap-x-4 gap-y-2 text-xs">
-                            <div>
-                              <p className="text-muted-foreground mb-0.5">Checked out</p>
-                              <p>{fmtDateTime(ch.checked_out_at)}</p>
-                            </div>
-                            {ch.expected_return_at && (
-                              <div>
-                                <p className="text-muted-foreground mb-0.5">Expected return</p>
-                                <p>{fmtDate(ch.expected_return_at)}</p>
+                      {unifiedHistory.slice(0, 10).map((item) => {
+                        if (item.kind === "checkout") {
+                          const ch = item.checkout;
+                          return (
+                            <div key={item.id} className="border rounded-lg p-3 space-y-1.5 bg-card">
+                              <div className="flex items-center justify-between">
+                                <p className="font-medium text-sm">{ch.checked_out_by_name}</p>
+                                <Badge
+                                  variant={ch.returned_at ? "secondary" : "default"}
+                                  className="text-xs"
+                                >
+                                  {ch.returned_at ? "Returned" : "Active Checkout"}
+                                </Badge>
                               </div>
-                            )}
-                            {ch.returned_at && (
-                              <div>
-                                <p className="text-muted-foreground mb-0.5">Returned</p>
-                                <p>{fmtDateTime(ch.returned_at)}</p>
-                              </div>
-                            )}
-                          </div>
-                          {ch.notes && (
-                            <p className="text-xs text-muted-foreground italic">{ch.notes}</p>
-                          )}
-                        </div>
-                      ))}
-                      {equipment.checkouts.length > 5 && (
-                        <p className="text-xs text-muted-foreground text-center pt-1">
-                          Showing latest 5 of {equipment.checkouts.length} checkouts
-                        </p>
-                      )}
-                      {equipment.event_logs && equipment.event_logs.length > 0 && (
-                        <div className="mt-4 pt-3 border-t">
-                          <h4 className="text-xs font-semibold text-muted-foreground mb-2">Event Usage History</h4>
-                          <div className="space-y-2">
-                            {equipment.event_logs.slice(0, 5).map((log, idx) => (
-                              <div key={idx} className="p-2.5 rounded-lg border bg-purple-50/20 text-xs space-y-1">
-                                <div className="flex justify-between font-medium">
-                                  <span>{log.event_name}</span>
-                                  <span className="text-muted-foreground">{log.event_location}</span>
+                              <div className="grid grid-cols-2 gap-x-4 gap-y-2 text-xs">
+                                <div>
+                                  <p className="text-muted-foreground mb-0.5">Checked out</p>
+                                  <p>{fmtDateTime(ch.checked_out_at)}</p>
                                 </div>
-                                <p className="text-[11px] text-muted-foreground">
-                                  Duration: {fmtDateTime(log.start_time)} – {fmtDateTime(log.end_time)}
-                                </p>
+                                {ch.returned_at ? (
+                                  <div>
+                                    <p className="text-muted-foreground mb-0.5 font-medium text-foreground">Date of Return</p>
+                                    <p className="font-medium text-foreground">{fmtDateTime(ch.returned_at)}</p>
+                                  </div>
+                                ) : ch.expected_return_at ? (
+                                  <div>
+                                    <p className="text-muted-foreground mb-0.5 font-medium text-primary">Expected Return</p>
+                                    <p className="font-medium text-primary">{fmtDateTime(ch.expected_return_at)}</p>
+                                  </div>
+                                ) : (
+                                  <div>
+                                    <p className="text-muted-foreground mb-0.5 font-medium text-foreground">Date of Return</p>
+                                    <p>—</p>
+                                  </div>
+                                )}
                               </div>
-                            ))}
+                              {ch.notes && (
+                                <p className="text-xs text-muted-foreground italic">{ch.notes}</p>
+                              )}
+                            </div>
+                          );
+                        }
+
+                        // Event item
+                        const ev = item.eventLog;
+                        return (
+                          <div
+                            key={item.id}
+                            onClick={() => {
+                              setSelectedEventId(ev.event_id);
+                              setEventDetailOpen(true);
+                            }}
+                            className="border rounded-lg p-3 space-y-2 bg-purple-50/20 dark:bg-purple-950/20 hover:bg-purple-50/50 dark:hover:bg-purple-950/40 border-purple-200/60 dark:border-purple-800/60 cursor-pointer transition-all hover:shadow-xs group"
+                          >
+                            <div className="flex items-center justify-between gap-2">
+                              <div className="flex items-center gap-1.5 min-w-0">
+                                <Calendar className="h-4 w-4 text-purple-600 dark:text-purple-400 shrink-0" />
+                                <span className="font-bold text-sm text-foreground group-hover:text-purple-600 dark:group-hover:text-purple-400 transition-colors truncate">
+                                  {ev.event_name}
+                                </span>
+                              </div>
+                              <Badge
+                                variant="secondary"
+                                className="text-[11px] bg-purple-100 text-purple-800 dark:bg-purple-900/40 dark:text-purple-300 shrink-0"
+                              >
+                                {ev.is_rehearsal ? "Event (Rehearsal)" : "Event"}
+                              </Badge>
+                            </div>
+
+                            <div className="grid grid-cols-2 gap-x-4 gap-y-2 text-xs">
+                              <div>
+                                <p className="text-muted-foreground mb-0.5">Event Start</p>
+                                <p>{fmtDateTime(ev.start_time)}</p>
+                              </div>
+                              <div>
+                                <p className="text-muted-foreground mb-0.5 font-medium text-foreground">Date of Return / End</p>
+                                <p className="font-medium text-foreground">{fmtDateTime(ev.end_time)}</p>
+                              </div>
+                            </div>
+
+                            <div className="flex items-center justify-between border-t border-purple-200/40 dark:border-purple-800/40 pt-1.5 text-[11px] text-muted-foreground">
+                              <span className="flex items-center gap-1">
+                                <MapPin className="h-3 w-3 text-primary" />
+                                {ev.event_location}
+                              </span>
+                              <span className="text-purple-600 dark:text-purple-400 font-semibold group-hover:underline flex items-center gap-0.5">
+                                View Event Details
+                                <ArrowRight className="h-3 w-3 inline" />
+                              </span>
+                            </div>
                           </div>
-                        </div>
+                        );
+                      })}
+
+                      {unifiedHistory.length > 10 && (
+                        <p className="text-xs text-muted-foreground text-center pt-1">
+                          Showing latest 10 of {unifiedHistory.length} history records
+                        </p>
                       )}
                     </div>
                   )}
@@ -523,6 +605,15 @@ export function EquipmentModal({
       equipment={equipment}
       open={open && printModalOpen}
       onClose={() => setPrintModalOpen(false)}
+    />
+
+    <EventDetailModal
+      eventId={selectedEventId}
+      open={eventDetailOpen}
+      onClose={() => {
+        setEventDetailOpen(false);
+        setSelectedEventId(null);
+      }}
     />
   </>
   );
