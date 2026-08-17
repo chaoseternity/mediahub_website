@@ -278,17 +278,19 @@ export function EquipmentModal({
         .slice(0, 5)
     : [];
 
+  const isDetailsOpen = open && !printModalOpen;
+
   return (
-    <Dialog
-      open={open}
-      onOpenChange={(o) => {
-        if (!o) {
-          setPrintModalOpen(false);
-          onClose();
-        }
-      }}
-    >
-      <DialogContent className="max-w-6xl max-h-[90vh] overflow-y-auto w-[95vw]">
+    <>
+      <Dialog
+        open={isDetailsOpen}
+        onOpenChange={(o) => {
+          if (!o && !printModalOpen) {
+            onClose();
+          }
+        }}
+      >
+        <DialogContent className="max-w-6xl max-h-[90vh] overflow-y-auto w-[95vw]">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             {equipment?.name ?? "Equipment"}
@@ -514,12 +516,14 @@ export function EquipmentModal({
             </div>
           </>
         )}
-        <PrintLabelModal
-          equipment={equipment}
-          open={printModalOpen}
-          onClose={() => setPrintModalOpen(false)}
-        />
       </DialogContent>
     </Dialog>
+
+    <PrintLabelModal
+      equipment={equipment}
+      open={open && printModalOpen}
+      onClose={() => setPrintModalOpen(false)}
+    />
+  </>
   );
 }
