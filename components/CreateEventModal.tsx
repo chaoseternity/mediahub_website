@@ -133,7 +133,7 @@ export function CreateEventModal({ open, onClose, onCreated }: CreateEventModalP
 
   return (
     <Dialog open={open} onOpenChange={onClose}>
-      <DialogContent className="max-w-4xl max-h-[90vh] overflow-y-auto w-[95vw]">
+      <DialogContent className="max-w-6xl max-h-[90vh] overflow-y-auto w-[95vw]">
         <DialogHeader>
           <DialogTitle className="text-xl font-bold">Create New Event</DialogTitle>
         </DialogHeader>

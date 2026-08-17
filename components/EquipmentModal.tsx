@@ -120,10 +120,14 @@ export function EquipmentModal({
   const watched = useWatch({ control });
 
   useEffect(() => {
-    if (!open || !equipmentId) return;
+    if (!open || !equipmentId) {
+      setPrintModalOpen(false);
+      return;
+    }
     // eslint-disable-next-line react-hooks/set-state-in-effect
     setLoading(true);
     setShowCheckout(false);
+    setPrintModalOpen(false);
     setEditingField(null);
     Promise.all([
       fetch(`/api/equipment/${equipmentId}`).then((r) => r.json()),
@@ -275,8 +279,16 @@ export function EquipmentModal({
     : [];
 
   return (
-    <Dialog open={open} onOpenChange={(o) => !o && onClose()}>
-      <DialogContent className="max-w-4xl max-h-[90vh] overflow-y-auto w-[95vw]">
+    <Dialog
+      open={open}
+      onOpenChange={(o) => {
+        if (!o) {
+          setPrintModalOpen(false);
+          onClose();
+        }
+      }}
+    >
+      <DialogContent className="max-w-6xl max-h-[90vh] overflow-y-auto w-[95vw]">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             {equipment?.name ?? "Equipment"}
