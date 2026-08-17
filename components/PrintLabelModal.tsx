@@ -1,9 +1,9 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import QRCode from "qrcode";
 import JsBarcode from "jsbarcode";
-import { Printer, Download, QrCode, Barcode, X } from "lucide-react";
+import { Printer, Download, QrCode, Barcode } from "lucide-react";
 import {
   Dialog,
   DialogContent,
@@ -23,41 +23,69 @@ interface PrintLabelModalProps {
 
 export function PrintLabelModal({ equipment, open, onClose }: PrintLabelModalProps) {
   const [qrDataUrl, setQrDataUrl] = useState<string>("");
-  const barcodeSvgRef = useRef<SVGSVGElement | null>(null);
-  const labelRef = useRef<HTMLDivElement | null>(null);
+  const [barcodeDataUrl, setBarcodeDataUrl] = useState<string>("");
+  const [barcodeError, setBarcodeError] = useState<string | null>(null);
 
-  const codeValue = equipment?.serial_number?.trim() || equipment?.name?.trim() || "N/A";
+  const codeValue =
+    equipment?.serial_number?.trim() || equipment?.name?.trim() || "EQUIPMENT";
   const parsedId = equipment ? parseEquipmentId(equipment.serial_number) : null;
 
   useEffect(() => {
-    if (open && equipment && codeValue) {
-      // 1. Generate QR Code
-      QRCode.toDataURL(codeValue, {
-        width: 300,
-        margin: 1,
-        color: {
-          dark: "#000000",
-          light: "#ffffff",
-        },
-      })
-        .then((url) => setQrDataUrl(url))
-        .catch((err) => console.error("Failed to generate QR code", err));
+    if (!open || !equipment) return;
 
-      // 2. Generate Barcode (Code128)
-      if (barcodeSvgRef.current) {
-        try {
-          JsBarcode(barcodeSvgRef.current, codeValue, {
-            format: "CODE128",
-            width: 1.8,
-            height: 48,
-            displayValue: true,
-            fontSize: 12,
-            font: "monospace",
-            margin: 4,
-          });
-        } catch (err) {
-          console.error("Failed to generate barcode", err);
-        }
+    // 1. Generate QR Code Data URL
+    QRCode.toDataURL(codeValue, {
+      width: 300,
+      margin: 1,
+      color: {
+        dark: "#000000",
+        light: "#ffffff",
+      },
+    })
+      .then((url) => setQrDataUrl(url))
+      .catch((err) => {
+        console.error("Failed to generate QR code", err);
+      });
+
+    // 2. Generate Barcode (Code128) via Offscreen Canvas to Data URL
+    try {
+      setBarcodeError(null);
+      const canvas = document.createElement("canvas");
+      JsBarcode(canvas, codeValue, {
+        format: "CODE128",
+        width: 2,
+        height: 50,
+        displayValue: true,
+        fontSize: 13,
+        font: "monospace",
+        textMargin: 4,
+        margin: 8,
+        background: "#ffffff",
+        lineColor: "#000000",
+      });
+      setBarcodeDataUrl(canvas.toDataURL("image/png"));
+    } catch (err) {
+      console.error("Failed to generate Code128 barcode, retrying with fallback:", err);
+      // Fallback: sanitized alphanumeric codeValue
+      try {
+        const fallbackValue = codeValue.replace(/[^A-Za-z0-9_-]/g, "") || "EQUIPMENT";
+        const canvas = document.createElement("canvas");
+        JsBarcode(canvas, fallbackValue, {
+          format: "CODE128",
+          width: 2,
+          height: 50,
+          displayValue: true,
+          fontSize: 13,
+          font: "monospace",
+          textMargin: 4,
+          margin: 8,
+          background: "#ffffff",
+          lineColor: "#000000",
+        });
+        setBarcodeDataUrl(canvas.toDataURL("image/png"));
+      } catch (fallbackErr) {
+        setBarcodeError("Unable to encode barcode for this ID format.");
+        console.error("Barcode generation error:", fallbackErr);
       }
     }
   }, [open, equipment, codeValue]);
@@ -77,16 +105,11 @@ export function PrintLabelModal({ equipment, open, onClose }: PrintLabelModalPro
   }
 
   function handleDownloadBarcode() {
-    if (!barcodeSvgRef.current) return;
-    const serializer = new XMLSerializer();
-    const svgStr = serializer.serializeToString(barcodeSvgRef.current);
-    const blob = new Blob([svgStr], { type: "image/svg+xml;charset=utf-8" });
-    const url = URL.createObjectURL(blob);
+    if (!barcodeDataUrl) return;
     const a = document.createElement("a");
-    a.href = url;
-    a.download = `Barcode_${codeValue}.svg`;
+    a.href = barcodeDataUrl;
+    a.download = `Barcode_${codeValue}.png`;
     a.click();
-    URL.revokeObjectURL(url);
   }
 
   return (
@@ -102,13 +125,12 @@ export function PrintLabelModal({ equipment, open, onClose }: PrintLabelModalPro
 
         <div className="space-y-4 py-2">
           <p className="text-xs text-muted-foreground">
-            Print or download high-resolution QR and Code128 Barcode labels for physical equipment stickers.
+            Print or download high-resolution QR and Code 128 Barcode labels for physical equipment stickers.
           </p>
 
           {/* Printable Label Box */}
           <div
             id="printable-equipment-label"
-            ref={labelRef}
             className="border-2 border-dashed border-primary/30 rounded-xl p-4 bg-white text-black shadow-sm flex flex-col items-center text-center space-y-3"
           >
             <div className="flex items-center justify-between w-full border-b pb-1.5 px-1">
@@ -133,7 +155,7 @@ export function PrintLabelModal({ equipment, open, onClose }: PrintLabelModalPro
             </div>
 
             {/* Side-by-side QR Code and Barcode */}
-            <div className="flex flex-col sm:flex-row items-center justify-center gap-3 w-full pt-1">
+            <div className="flex flex-col sm:flex-row items-center justify-center gap-4 w-full pt-1">
               {/* QR Code */}
               {qrDataUrl && (
                 <div className="flex flex-col items-center">
@@ -143,14 +165,28 @@ export function PrintLabelModal({ equipment, open, onClose }: PrintLabelModalPro
                     alt={`QR code for ${codeValue}`}
                     className="w-24 h-24 border rounded p-1 bg-white"
                   />
-                  <span className="text-[9px] font-mono text-gray-500 mt-0.5">QR Code</span>
+                  <span className="text-[9px] font-mono text-gray-500 mt-1">QR Code</span>
                 </div>
               )}
 
               {/* Code 128 Barcode */}
-              <div className="flex flex-col items-center overflow-x-auto max-w-full">
-                <svg ref={barcodeSvgRef} className="max-w-[180px] h-14" />
-              </div>
+              {barcodeDataUrl ? (
+                <div className="flex flex-col items-center">
+                  {/* eslint-disable-next-line @next/next/no-img-element */}
+                  <img
+                    src={barcodeDataUrl}
+                    alt={`Barcode for ${codeValue}`}
+                    className="max-w-[190px] h-18 border rounded p-1 bg-white object-contain"
+                  />
+                  <span className="text-[9px] font-mono text-gray-500 mt-1">Code 128</span>
+                </div>
+              ) : barcodeError ? (
+                <p className="text-[10px] text-destructive">{barcodeError}</p>
+              ) : (
+                <div className="h-18 w-36 bg-gray-100 rounded flex items-center justify-center text-[10px] text-gray-400">
+                  Generating Barcode…
+                </div>
+              )}
             </div>
 
             <div className="flex items-center justify-between w-full text-[10px] text-gray-500 border-t pt-1.5 px-1">
@@ -166,6 +202,7 @@ export function PrintLabelModal({ equipment, open, onClose }: PrintLabelModalPro
               variant="outline"
               size="sm"
               onClick={handleDownloadQR}
+              disabled={!qrDataUrl}
               className="text-xs"
             >
               <Download className="h-3.5 w-3.5 mr-1.5" />
@@ -176,10 +213,11 @@ export function PrintLabelModal({ equipment, open, onClose }: PrintLabelModalPro
               variant="outline"
               size="sm"
               onClick={handleDownloadBarcode}
+              disabled={!barcodeDataUrl}
               className="text-xs"
             >
               <Download className="h-3.5 w-3.5 mr-1.5" />
-              Download Barcode (SVG)
+              Download Barcode (PNG)
             </Button>
           </div>
         </div>
