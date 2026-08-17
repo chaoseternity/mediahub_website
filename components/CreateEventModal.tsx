@@ -133,7 +133,7 @@ export function CreateEventModal({ open, onClose, onCreated }: CreateEventModalP
 
   return (
     <Dialog open={open} onOpenChange={onClose}>
-      <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
+      <DialogContent className="max-w-4xl max-h-[90vh] overflow-y-auto w-[95vw]">
         <DialogHeader>
           <DialogTitle className="text-xl font-bold">Create New Event</DialogTitle>
         </DialogHeader>
@@ -244,12 +244,12 @@ export function CreateEventModal({ open, onClose, onCreated }: CreateEventModalP
 
           {/* User Search & Assignments */}
           <div className="space-y-4 pt-2 border-t">
-            <div className="flex items-center justify-between">
+            <div className="flex items-center justify-between gap-4">
               <h3 className="text-sm font-semibold">3. OIC & Section IC Assignments</h3>
-              <div className="relative w-48">
+              <div className="relative w-64">
                 <Search className="h-3.5 w-3.5 absolute left-2.5 top-2.5 text-muted-foreground" />
                 <Input
-                  placeholder="Search users…"
+                  placeholder="Search users by name/email…"
                   value={userSearch}
                   onChange={(e) => setUserSearch(e.target.value)}
                   className="pl-8 h-8 text-xs"
@@ -263,7 +263,7 @@ export function CreateEventModal({ open, onClose, onCreated }: CreateEventModalP
                 <ShieldAlert className="h-3.5 w-3.5" />
                 Overall In-Charges (OICs)
               </Label>
-              <div className="max-h-28 overflow-y-auto border rounded-md p-1.5 space-y-1 bg-purple-50/10">
+              <div className="max-h-36 overflow-y-auto border rounded-md p-2 space-y-1 bg-purple-50/10">
                 {filteredUsers.map((u) => (
                   <label key={u.id} className="flex items-center gap-2 text-xs p-1 hover:bg-accent rounded cursor-pointer">
                     <input

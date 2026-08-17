@@ -83,12 +83,12 @@ export function AddEquipmentModal({ open, onClose, onCreated }: AddEquipmentModa
 
   return (
     <Dialog open={open} onOpenChange={(o) => !o && onClose()}>
-      <DialogContent className="max-w-xl max-h-[90vh] overflow-y-auto">
+      <DialogContent className="max-w-3xl max-h-[90vh] overflow-y-auto w-[95vw]">
         <DialogHeader>
-          <DialogTitle>Add New Equipment</DialogTitle>
+          <DialogTitle className="text-xl font-bold">Add New Equipment</DialogTitle>
         </DialogHeader>
-        <form onSubmit={handleSubmit(onSubmit)} className="space-y-4">
-          <div className="grid grid-cols-2 gap-4">
+        <form onSubmit={handleSubmit(onSubmit)} className="space-y-5 py-1">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-5">
             <div className="space-y-1">
               <Label htmlFor="new-name">Name *</Label>
               <Input id="new-name" {...register("name")} />

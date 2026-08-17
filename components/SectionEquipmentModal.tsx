@@ -110,7 +110,7 @@ export function SectionEquipmentModal({
 
   return (
     <Dialog open={open} onOpenChange={onClose}>
-      <DialogContent className="max-w-lg max-h-[85vh] flex flex-col">
+      <DialogContent className="max-w-2xl max-h-[85vh] flex flex-col w-[95vw]">
         <DialogHeader>
           <DialogTitle className="capitalize">Select {section} Equipment</DialogTitle>
         </DialogHeader>
