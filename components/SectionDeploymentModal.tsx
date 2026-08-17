@@ -107,7 +107,7 @@ export function SectionDeploymentModal({
 
   return (
     <Dialog open={open} onOpenChange={onClose}>
-      <DialogContent className="max-w-xl max-h-[85vh] flex flex-col w-[95vw]">
+      <DialogContent className="max-w-md max-h-[85vh] flex flex-col w-[95vw]">
         <DialogHeader>
           <DialogTitle className="capitalize">Deploy {section} Members</DialogTitle>
         </DialogHeader>

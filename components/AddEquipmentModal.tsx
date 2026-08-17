@@ -83,7 +83,7 @@ export function AddEquipmentModal({ open, onClose, onCreated }: AddEquipmentModa
 
   return (
     <Dialog open={open} onOpenChange={(o) => !o && onClose()}>
-      <DialogContent className="max-w-xl max-h-[90vh] overflow-y-auto w-[95vw]">
+      <DialogContent className="max-w-lg max-h-[90vh] overflow-y-auto w-[95vw]">
         <DialogHeader>
           <DialogTitle className="text-xl font-bold">Add New Equipment</DialogTitle>
         </DialogHeader>
