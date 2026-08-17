@@ -4,7 +4,7 @@ import { useEffect, useState } from "react";
 import { useForm, useWatch } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
-import { Pencil } from "lucide-react";
+import { Pencil, QrCode, Printer } from "lucide-react";
 import {
   Dialog,
   DialogContent,
@@ -25,6 +25,7 @@ import {
 import { Badge } from "@/components/ui/badge";
 import { CheckoutForm } from "@/components/CheckoutForm";
 import { TagMultiSelect } from "@/components/TagMultiSelect";
+import { PrintLabelModal } from "@/components/PrintLabelModal";
 import { cn } from "@/lib/utils";
 import type { EquipmentDetail, Role, Checkout, Tag } from "@/lib/types";
 
@@ -97,6 +98,7 @@ export function EquipmentModal({
   const [loading, setLoading] = useState(false);
   const [editingField, setEditingField] = useState<string | null>(null);
   const [showCheckout, setShowCheckout] = useState(false);
+  const [printModalOpen, setPrintModalOpen] = useState(false);
   const [availableTags, setAvailableTags] = useState<string[]>([]);
 
   const isAdmin = role === "admin";
@@ -296,10 +298,22 @@ export function EquipmentModal({
             {/* ── Save form (wraps fields only — avoids nested <form> with CheckoutForm) ── */}
             <form id="equipment-edit-form" onSubmit={handleSubmit(onSave)}>
               <Tabs defaultValue="details">
-                <TabsList className="mb-4">
-                  <TabsTrigger value="details">Details</TabsTrigger>
-                  <TabsTrigger value="history">Checkout History</TabsTrigger>
-                </TabsList>
+                <div className="flex items-center justify-between mb-4">
+                  <TabsList>
+                    <TabsTrigger value="details">Details</TabsTrigger>
+                    <TabsTrigger value="history">Checkout History</TabsTrigger>
+                  </TabsList>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    onClick={() => setPrintModalOpen(true)}
+                    className="h-8 gap-1.5 text-xs"
+                  >
+                    <QrCode className="h-3.5 w-3.5" />
+                    Label / Barcode
+                  </Button>
+                </div>
 
                 {/* ── Details tab ── */}
                 <TabsContent value="details">
@@ -488,6 +502,11 @@ export function EquipmentModal({
             </div>
           </>
         )}
+        <PrintLabelModal
+          equipment={equipment}
+          open={printModalOpen}
+          onClose={() => setPrintModalOpen(false)}
+        />
       </DialogContent>
     </Dialog>
   );
