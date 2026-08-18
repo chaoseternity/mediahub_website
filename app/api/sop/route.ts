@@ -3,6 +3,7 @@ import { getAllSOPDocuments, createSOPDocument, getUserByEmail } from "@/lib/db"
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { PDFParse } from "pdf-parse";
+import mammoth from "mammoth";
 
 export const runtime = "nodejs";
 
@@ -60,6 +61,22 @@ export async function POST(req: NextRequest) {
           console.error("PDF parse error:", pdfErr);
           return NextResponse.json(
             { error: "Failed to extract text from PDF. Please make sure the PDF is not password protected or corrupted." },
+            { status: 400 }
+          );
+        }
+      } else if (
+        fileName.toLowerCase().endsWith(".docx") ||
+        fileName.toLowerCase().endsWith(".doc") ||
+        fileType.includes("wordprocessingml") ||
+        fileType.includes("msword")
+      ) {
+        try {
+          const result = await mammoth.extractRawText({ buffer });
+          extractedContent = result.value.trim();
+        } catch (docxErr) {
+          console.error("DOCX parse error:", docxErr);
+          return NextResponse.json(
+            { error: "Failed to extract text from Word document. Please ensure the file is not corrupted or password-protected." },
             { status: 400 }
           );
         }

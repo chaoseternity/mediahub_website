@@ -611,11 +611,11 @@ export function SOPManager({ initialDocuments, role, userName }: SOPManagerProps
             )}
 
             <div className="space-y-1.5">
-              <Label htmlFor="upload-file">Select File (.pdf, .md, .txt) *</Label>
+              <Label htmlFor="upload-file">Select File (.docx, .pdf, .md, .txt) *</Label>
               <Input
                 id="upload-file"
                 type="file"
-                accept=".pdf,.txt,.md,.markdown"
+                accept=".docx,.doc,.pdf,.txt,.md,.markdown"
                 onChange={(e) => {
                   const f = e.target.files?.[0];
                   if (f) {
@@ -628,7 +628,7 @@ export function SOPManager({ initialDocuments, role, userName }: SOPManagerProps
                 required
               />
               <p className="text-[11px] text-muted-foreground">
-                PDF text content and Markdown documents will be extracted and indexed automatically.
+                Word documents (.docx), PDFs, and Markdown files will be extracted and indexed automatically.
               </p>
             </div>
 
