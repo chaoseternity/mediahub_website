@@ -5,7 +5,7 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { signOut } from "next-auth/react";
 import { useTheme } from "next-themes";
-import { LayoutGrid, Calendar, Tag, QrCode, Users as UsersIcon, Moon, Sun, LogOut, ChevronLeft, ChevronRight } from "lucide-react";
+import { LayoutGrid, Calendar, Tag, QrCode, Users as UsersIcon, Moon, Sun, LogOut, ChevronLeft, ChevronRight, Bot } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { cn, roleBadgeClass } from "@/lib/utils";
@@ -19,6 +19,7 @@ interface SidebarProps {
 const allNavItems = [
   { href: "/dashboard",        label: "Equipment", icon: LayoutGrid,  roles: ["admin", "verified", "viewer"] as Role[] },
   { href: "/dashboard/events", label: "Events",    icon: Calendar,    roles: ["admin", "verified", "viewer"] as Role[] },
+  { href: "/dashboard/sop",    label: "SOP & AI",  icon: Bot,         roles: ["admin", "verified", "viewer"] as Role[] },
   { href: "/dashboard/tags",   label: "Tags",      icon: Tag,          roles: ["admin", "verified", "viewer"] as Role[] },
   { href: "/dashboard/scan",   label: "Scan QR",   icon: QrCode,       roles: ["admin", "verified"] as Role[] },
   { href: "/dashboard/users",  label: "Users",     icon: UsersIcon,    roles: ["admin"] as Role[] },

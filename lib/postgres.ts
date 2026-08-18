@@ -140,6 +140,21 @@ export async function ensureSchema(): Promise<void> {
       );
     `;
 
+    await sql`
+      CREATE TABLE IF NOT EXISTS sop_documents (
+        id SERIAL PRIMARY KEY,
+        title TEXT NOT NULL,
+        category TEXT NOT NULL DEFAULT 'General',
+        content TEXT NOT NULL,
+        file_name TEXT,
+        file_type TEXT,
+        file_size INT,
+        uploaded_by INT REFERENCES users(id) ON DELETE SET NULL,
+        created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+      );
+    `;
+
     initialized = true;
   } catch (err) {
     console.error("Error ensuring Postgres schema:", err);

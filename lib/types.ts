@@ -142,6 +142,35 @@ export interface AppEvent {
   status: EventStatus;
 }
 
+export interface SOPDocument {
+  id: number;
+  title: string;
+  category: string;
+  content: string;
+  file_name: string | null;
+  file_type: string | null;
+  file_size: number | null;
+  uploaded_by: number | null;
+  uploaded_by_name?: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface SOPCitation {
+  document_id: number;
+  document_title: string;
+  section_title?: string;
+  snippet: string;
+}
+
+export interface AIChatMessage {
+  id: string;
+  role: "user" | "assistant" | "system";
+  content: string;
+  citations?: SOPCitation[];
+  created_at?: string;
+}
+
 // Extend next-auth Session type
 declare module "next-auth" {
   interface Session {

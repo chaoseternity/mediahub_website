@@ -109,6 +109,19 @@ export const SCHEMA_SQL = `
     participating INTEGER DEFAULT 0,
     PRIMARY KEY (event_id, section)
   );
+
+  CREATE TABLE IF NOT EXISTS sop_documents (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    title        TEXT    NOT NULL,
+    category     TEXT    NOT NULL DEFAULT 'General',
+    content      TEXT    NOT NULL,
+    file_name    TEXT,
+    file_type    TEXT,
+    file_size    INTEGER,
+    uploaded_by  INTEGER REFERENCES users(id) ON DELETE SET NULL,
+    created_at   TEXT    NOT NULL DEFAULT (datetime('now')),
+    updated_at   TEXT    NOT NULL DEFAULT (datetime('now'))
+  );
 `;
 
 export function makeTestDb(): Database.Database {

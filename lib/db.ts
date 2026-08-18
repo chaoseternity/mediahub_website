@@ -20,6 +20,7 @@ import type {
   SectionDeploymentItem,
   SectionRehearsalMap,
   SectionRehearsalConfig,
+  SOPDocument,
 } from "./types";
 
 function getAdminEmails(): Set<string> {
@@ -828,4 +829,146 @@ export async function updateSectionRehearsalConfig(
   }
 
   return { success: true };
+}
+
+// ---------------------------------------------------------------------------
+// SOP Document Helpers
+// ---------------------------------------------------------------------------
+
+export async function getAllSOPDocuments(): Promise<SOPDocument[]> {
+  await ensureSchema();
+  const { rows } = await sql<SOPDocument>`
+    SELECT 
+      s.id,
+      s.title,
+      s.category,
+      s.content,
+      s.file_name,
+      s.file_type,
+      s.file_size,
+      s.uploaded_by,
+      u.name AS uploaded_by_name,
+      s.created_at,
+      s.updated_at
+    FROM sop_documents s
+    LEFT JOIN users u ON u.id = s.uploaded_by
+    ORDER BY s.updated_at DESC
+  `;
+  return rows;
+}
+
+export async function getSOPDocumentById(id: number): Promise<SOPDocument | undefined> {
+  await ensureSchema();
+  const { rows } = await sql<SOPDocument>`
+    SELECT 
+      s.id,
+      s.title,
+      s.category,
+      s.content,
+      s.file_name,
+      s.file_type,
+      s.file_size,
+      s.uploaded_by,
+      u.name AS uploaded_by_name,
+      s.created_at,
+      s.updated_at
+    FROM sop_documents s
+    LEFT JOIN users u ON u.id = s.uploaded_by
+    WHERE s.id = ${id}
+  `;
+  return rows[0];
+}
+
+export async function createSOPDocument(params: {
+  title: string;
+  category?: string;
+  content: string;
+  file_name?: string | null;
+  file_type?: string | null;
+  file_size?: number | null;
+  uploaded_by?: number | null;
+}): Promise<SOPDocument> {
+  await ensureSchema();
+  const category = params.category?.trim() || "General";
+  const { rows } = await sql<SOPDocument>`
+    INSERT INTO sop_documents (
+      title,
+      category,
+      content,
+      file_name,
+      file_type,
+      file_size,
+      uploaded_by
+    )
+    VALUES (
+      ${params.title},
+      ${category},
+      ${params.content},
+      ${params.file_name ?? null},
+      ${params.file_type ?? null},
+      ${params.file_size ?? null},
+      ${params.uploaded_by ?? null}
+    )
+    RETURNING *
+  `;
+  return rows[0];
+}
+
+export async function updateSOPDocument(
+  id: number,
+  params: {
+    title?: string;
+    category?: string;
+    content?: string;
+  }
+): Promise<SOPDocument | undefined> {
+  await ensureSchema();
+  const existing = await getSOPDocumentById(id);
+  if (!existing) return undefined;
+
+  const title = params.title ?? existing.title;
+  const category = params.category ?? existing.category;
+  const content = params.content ?? existing.content;
+
+  const { rows } = await sql<SOPDocument>`
+    UPDATE sop_documents
+    SET 
+      title = ${title},
+      category = ${category},
+      content = ${content},
+      updated_at = CURRENT_TIMESTAMP
+    WHERE id = ${id}
+    RETURNING *
+  `;
+  return rows[0];
+}
+
+export async function deleteSOPDocument(id: number): Promise<{ success: boolean; error?: string }> {
+  await ensureSchema();
+  await sql`DELETE FROM sop_documents WHERE id = ${id}`;
+  return { success: true };
+}
+
+export async function searchSOPDocuments(query: string): Promise<SOPDocument[]> {
+  await ensureSchema();
+  const pattern = `%${query}%`;
+  const { rows } = await sql<SOPDocument>`
+    SELECT 
+      s.id,
+      s.title,
+      s.category,
+      s.content,
+      s.file_name,
+      s.file_type,
+      s.file_size,
+      s.uploaded_by,
+      u.name AS uploaded_by_name,
+      s.created_at,
+      s.updated_at
+    FROM sop_documents s
+    LEFT JOIN users u ON u.id = s.uploaded_by
+    WHERE s.title ILIKE ${pattern} OR s.content ILIKE ${pattern} OR s.category ILIKE ${pattern}
+    ORDER BY s.updated_at DESC
+  `;
+  return rows;
 }

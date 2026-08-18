@@ -1,0 +1,771 @@
+"use client";
+
+import { useState, useRef, useEffect } from "react";
+import {
+  Bot,
+  BookOpen,
+  Upload,
+  Send,
+  Trash2,
+  FileText,
+  Plus,
+  Sparkles,
+  Search,
+  CheckCircle2,
+  AlertCircle,
+  Clock,
+  User,
+  ArrowRight,
+  ExternalLink,
+  RefreshCw,
+  FolderOpen,
+} from "lucide-react";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Badge } from "@/components/ui/badge";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogFooter,
+} from "@/components/ui/dialog";
+import { SOPPreviewModal } from "./SOPPreviewModal";
+import type { SOPDocument, SOPCitation, AIChatMessage, Role } from "@/lib/types";
+
+interface SOPManagerProps {
+  initialDocuments: SOPDocument[];
+  role: Role;
+  userName: string;
+}
+
+const PRESET_QUESTIONS = [
+  "What is the procedure for returning damaged or missing equipment?",
+  "How should audio cables and XLRs be wrapped and stored?",
+  "What are the pre-event battery and SD card check protocols?",
+  "Who is responsible for equipment handover during event rehearsals?",
+];
+
+const CATEGORIES = ["All", "General", "Photo", "Video", "Audio/AV", "Safety & Handling", "Events"];
+
+export function SOPManager({ initialDocuments, role, userName }: SOPManagerProps) {
+  const [documents, setDocuments] = useState<SOPDocument[]>(initialDocuments);
+  const [activeTab, setActiveTab] = useState<"assistant" | "library">("assistant");
+
+  // Chat State
+  const [messages, setMessages] = useState<AIChatMessage[]>([
+    {
+      id: "welcome",
+      role: "assistant",
+      content:
+        `Hello ${userName}! 👋 I am your **MediaHub SOP AI Assistant**, powered by Google Gemini.\n\nI can answer questions regarding standard operating procedures, equipment handling guidelines, safety rules, and event protocols based on our official SOP library.\n\nAsk me anything or pick a topic below!`,
+    },
+  ]);
+  const [inputQuery, setInputQuery] = useState("");
+  const [chatLoading, setChatLoading] = useState(false);
+  const chatBottomRef = useRef<HTMLDivElement>(null);
+
+  // Document Library & Upload State
+  const [searchQuery, setSearchQuery] = useState("");
+  const [selectedCategory, setSelectedCategory] = useState("All");
+  const [uploadModalOpen, setUploadModalOpen] = useState(false);
+  const [manualModalOpen, setManualModalOpen] = useState(false);
+  const [uploading, setUploading] = useState(false);
+  const [uploadError, setUploadError] = useState<string | null>(null);
+
+  // Manual SOP form
+  const [manualTitle, setManualTitle] = useState("");
+  const [manualCategory, setManualCategory] = useState("General");
+  const [manualContent, setManualContent] = useState("");
+
+  // File Upload form
+  const [uploadFile, setUploadFile] = useState<File | null>(null);
+  const [uploadTitle, setUploadTitle] = useState("");
+  const [uploadCategory, setUploadCategory] = useState("General");
+
+  // Preview Modal State
+  const [previewDoc, setPreviewDoc] = useState<SOPDocument | null>(null);
+  const [previewCitation, setPreviewCitation] = useState<SOPCitation | null>(null);
+  const [previewOpen, setPreviewOpen] = useState(false);
+
+  const isAdmin = role === "admin";
+
+  useEffect(() => {
+    chatBottomRef.current?.scrollIntoView({ behavior: "smooth" });
+  }, [messages, chatLoading]);
+
+  // Refresh documents list
+  async function refreshDocuments() {
+    try {
+      const res = await fetch("/api/sop");
+      if (res.ok) {
+        const data = await res.json();
+        setDocuments(data);
+      }
+    } catch (e) {
+      console.error("Failed to refresh SOP documents", e);
+    }
+  }
+
+  // Handle Send Chat
+  async function handleSendMessage(textToSend?: string) {
+    const q = (textToSend || inputQuery).trim();
+    if (!q || chatLoading) return;
+
+    const userMsg: AIChatMessage = {
+      id: `user-${Date.now()}`,
+      role: "user",
+      content: q,
+      created_at: new Date().toISOString(),
+    };
+
+    setMessages((prev) => [...prev, userMsg]);
+    setInputQuery("");
+    setChatLoading(true);
+
+    const historyPayload = messages
+      .filter((m) => m.id !== "welcome")
+      .map((m) => ({
+        role: m.role as "user" | "assistant",
+        content: m.content,
+      }));
+
+    try {
+      const res = await fetch("/api/sop/chat", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          question: q,
+          history: historyPayload,
+        }),
+      });
+
+      const data = await res.json();
+
+      if (!res.ok) {
+        throw new Error(data.error || "Failed to get response from AI");
+      }
+
+      const botMsg: AIChatMessage = {
+        id: `bot-${Date.now()}`,
+        role: "assistant",
+        content: data.answer,
+        citations: data.citations || [],
+        created_at: new Date().toISOString(),
+      };
+
+      setMessages((prev) => [...prev, botMsg]);
+    } catch (err: unknown) {
+      const errorMsg: AIChatMessage = {
+        id: `bot-err-${Date.now()}`,
+        role: "assistant",
+        content: `⚠️ **Error**: ${err instanceof Error ? err.message : "Something went wrong while connecting to the AI Assistant."}`,
+        created_at: new Date().toISOString(),
+      };
+      setMessages((prev) => [...prev, errorMsg]);
+    } finally {
+      setChatLoading(false);
+    }
+  }
+
+  // Open Document Citation
+  function handleOpenCitation(citation: SOPCitation) {
+    const matched = documents.find((d) => d.id === citation.document_id);
+    if (matched) {
+      setPreviewDoc(matched);
+      setPreviewCitation(citation);
+      setPreviewOpen(true);
+    } else {
+      // Fetch document directly
+      fetch(`/api/sop/${citation.document_id}`)
+        .then((res) => res.json())
+        .then((doc) => {
+          setPreviewDoc(doc);
+          setPreviewCitation(citation);
+          setPreviewOpen(true);
+        })
+        .catch((e) => console.error("Could not fetch cited doc", e));
+    }
+  }
+
+  // Handle File Upload Submit
+  async function handleFileUploadSubmit(e: React.FormEvent) {
+    e.preventDefault();
+    if (!uploadFile) return;
+
+    setUploading(true);
+    setUploadError(null);
+
+    const formData = new FormData();
+    formData.append("file", uploadFile);
+    if (uploadTitle.trim()) formData.append("title", uploadTitle.trim());
+    formData.append("category", uploadCategory);
+
+    try {
+      const res = await fetch("/api/sop", {
+        method: "POST",
+        body: formData,
+      });
+
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Upload failed");
+
+      setUploadModalOpen(false);
+      setUploadFile(null);
+      setUploadTitle("");
+      refreshDocuments();
+    } catch (err: unknown) {
+      setUploadError(err instanceof Error ? err.message : "Upload failed");
+    } finally {
+      setUploading(false);
+    }
+  }
+
+  // Handle Manual Document Submit
+  async function handleManualSubmit(e: React.FormEvent) {
+    e.preventDefault();
+    if (!manualTitle.trim() || !manualContent.trim()) return;
+
+    setUploading(true);
+    setUploadError(null);
+
+    try {
+      const res = await fetch("/api/sop", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          title: manualTitle.trim(),
+          category: manualCategory,
+          content: manualContent.trim(),
+        }),
+      });
+
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Creation failed");
+
+      setManualModalOpen(false);
+      setManualTitle("");
+      setManualContent("");
+      refreshDocuments();
+    } catch (err: unknown) {
+      setUploadError(err instanceof Error ? err.message : "Creation failed");
+    } finally {
+      setUploading(false);
+    }
+  }
+
+  // Handle Delete Document
+  async function handleDeleteDocument(id: number, title: string) {
+    if (!confirm(`Are you sure you want to delete "${title}"?`)) return;
+    try {
+      const res = await fetch(`/api/sop/${id}`, { method: "DELETE" });
+      if (res.ok) refreshDocuments();
+    } catch (e) {
+      console.error("Failed to delete SOP document", e);
+    }
+  }
+
+  const filteredDocuments = documents.filter((doc) => {
+    const matchesSearch =
+      doc.title.toLowerCase().includes(searchQuery.toLowerCase()) ||
+      doc.content.toLowerCase().includes(searchQuery.toLowerCase()) ||
+      (doc.file_name && doc.file_name.toLowerCase().includes(searchQuery.toLowerCase()));
+
+    const matchesCategory =
+      selectedCategory === "All" || doc.category.toLowerCase() === selectedCategory.toLowerCase();
+
+    return matchesSearch && matchesCategory;
+  });
+
+  return (
+    <div className="px-4 py-4 md:px-6 md:py-6 w-full space-y-6 max-w-6xl mx-auto">
+      {/* Header */}
+      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 border-b pb-4">
+        <div>
+          <h2 className="text-xl md:text-2xl font-bold flex items-center gap-2">
+            <Bot className="h-6 w-6 text-purple-600 dark:text-purple-400" />
+            SOP & AI Knowledge Assistant
+          </h2>
+          <p className="text-muted-foreground text-sm">
+            Trained on official MediaHub Standard Operating Procedures with grounded Google Gemini AI and source citations
+          </p>
+        </div>
+
+        {isAdmin && (
+          <div className="flex items-center gap-2">
+            <Button
+              onClick={() => {
+                setUploadError(null);
+                setUploadModalOpen(true);
+              }}
+              className="bg-purple-600 hover:bg-purple-700 text-white gap-1.5 shadow-sm text-xs md:text-sm"
+            >
+              <Upload className="h-4 w-4" />
+              Upload SOP File
+            </Button>
+            <Button
+              variant="outline"
+              onClick={() => {
+                setUploadError(null);
+                setManualModalOpen(true);
+              }}
+              className="gap-1.5 text-xs md:text-sm"
+            >
+              <Plus className="h-4 w-4" />
+              Write SOP
+            </Button>
+          </div>
+        )}
+      </div>
+
+      {/* Tabs */}
+      <Tabs value={activeTab} onValueChange={(v) => setActiveTab(v as any)} className="w-full">
+        <TabsList className="grid w-full grid-cols-2 max-w-md">
+          <TabsTrigger value="assistant" className="gap-2">
+            <Sparkles className="h-4 w-4 text-purple-600 dark:text-purple-400" />
+            AI SOP Assistant
+          </TabsTrigger>
+          <TabsTrigger value="library" className="gap-2">
+            <BookOpen className="h-4 w-4 text-primary" />
+            SOP Library ({documents.length})
+          </TabsTrigger>
+        </TabsList>
+
+        {/* ══════════════════════════════════════════════════════════════════════
+            TAB 1: AI SOP ASSISTANT
+            ══════════════════════════════════════════════════════════════════════ */}
+        <TabsContent value="assistant" className="space-y-4 pt-2">
+          {documents.length === 0 && (
+            <div className="p-3 bg-amber-500/10 border border-amber-500/30 rounded-xl text-xs flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <AlertCircle className="h-4 w-4 text-amber-600 shrink-0" />
+                <span>No SOP documents uploaded yet. Upload SOP files in the <strong>SOP Library</strong> tab for the AI to train on!</span>
+              </div>
+              {isAdmin && (
+                <Button size="sm" variant="outline" onClick={() => setUploadModalOpen(true)} className="h-7 text-xs">
+                  Upload Now
+                </Button>
+              )}
+            </div>
+          )}
+
+          {/* Chat Container */}
+          <div className="border rounded-xl bg-card flex flex-col h-[650px] shadow-sm overflow-hidden">
+            {/* Messages Scroll Area */}
+            <div className="flex-1 overflow-y-auto p-4 md:p-6 space-y-4">
+              {messages.map((m) => (
+                <div
+                  key={m.id}
+                  className={`flex gap-3 ${m.role === "user" ? "justify-end" : "justify-start"}`}
+                >
+                  {m.role === "assistant" && (
+                    <div className="h-8 w-8 rounded-full bg-purple-600 text-white flex items-center justify-center shrink-0 shadow-sm">
+                      <Bot className="h-4.5 w-4.5" />
+                    </div>
+                  )}
+
+                  <div
+                    className={`rounded-2xl px-4 py-3 max-w-[85%] sm:max-w-[75%] space-y-2.5 shadow-xs ${
+                      m.role === "user"
+                        ? "bg-primary text-primary-foreground ml-8"
+                        : "bg-muted/50 border text-foreground mr-8"
+                    }`}
+                  >
+                    {/* Message Body */}
+                    <div className="text-sm leading-relaxed whitespace-pre-wrap">
+                      {m.content}
+                    </div>
+
+                    {/* Source Citations Box */}
+                    {m.citations && m.citations.length > 0 && (
+                      <div className="mt-3 pt-2.5 border-t border-border/60 space-y-1.5">
+                        <div className="flex items-center gap-1 text-[11px] font-semibold text-purple-700 dark:text-purple-300">
+                          <BookOpen className="h-3 w-3" />
+                          Verified SOP Sources ({m.citations.length}):
+                        </div>
+
+                        <div className="flex flex-wrap gap-1.5">
+                          {m.citations.map((cite, idx) => (
+                            <button
+                              key={idx}
+                              onClick={() => handleOpenCitation(cite)}
+                              title={cite.snippet}
+                              className="text-left flex items-center gap-1 px-2.5 py-1 rounded-md bg-purple-100 hover:bg-purple-200 dark:bg-purple-950/60 dark:hover:bg-purple-900/80 text-purple-950 dark:text-purple-200 border border-purple-300 dark:border-purple-800 text-[11px] font-medium transition-colors group cursor-pointer"
+                            >
+                              <FileText className="h-3 w-3 text-purple-600 dark:text-purple-400 shrink-0" />
+                              <span className="truncate max-w-[200px]">{cite.document_title}</span>
+                              <ExternalLink className="h-2.5 w-2.5 opacity-60 group-hover:opacity-100 shrink-0" />
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+
+                  {m.role === "user" && (
+                    <div className="h-8 w-8 rounded-full bg-primary/20 text-primary flex items-center justify-center shrink-0">
+                      <User className="h-4 w-4" />
+                    </div>
+                  )}
+                </div>
+              ))}
+
+              {chatLoading && (
+                <div className="flex gap-3 justify-start items-center text-xs text-muted-foreground py-2">
+                  <div className="h-8 w-8 rounded-full bg-purple-600 text-white flex items-center justify-center shrink-0 animate-pulse">
+                    <Sparkles className="h-4 w-4" />
+                  </div>
+                  <div className="bg-muted/40 border px-3 py-2 rounded-xl flex items-center gap-2">
+                    <RefreshCw className="h-3.5 w-3.5 animate-spin text-purple-600" />
+                    <span>Searching SOP documents & synthesizing answer…</span>
+                  </div>
+                </div>
+              )}
+
+              <div ref={chatBottomRef} />
+            </div>
+
+            {/* Quick Suggestion Chips */}
+            <div className="px-4 py-2 border-t bg-muted/20 flex gap-2 overflow-x-auto text-xs no-scrollbar">
+              <span className="text-muted-foreground font-semibold shrink-0 self-center">Try asking:</span>
+              {PRESET_QUESTIONS.map((pq, i) => (
+                <button
+                  key={i}
+                  onClick={() => handleSendMessage(pq)}
+                  className="whitespace-nowrap px-2.5 py-1 rounded-full bg-background border hover:border-primary hover:text-primary transition-colors text-[11px]"
+                >
+                  {pq}
+                </button>
+              ))}
+            </div>
+
+            {/* Input Form */}
+            <form
+              onSubmit={(e) => {
+                e.preventDefault();
+                handleSendMessage();
+              }}
+              className="p-3 border-t bg-background flex items-center gap-2"
+            >
+              <Input
+                placeholder="Ask any question about MediaHub SOPs, equipment protocols, or safety rules…"
+                value={inputQuery}
+                onChange={(e) => setInputQuery(e.target.value)}
+                disabled={chatLoading}
+                className="flex-1 text-sm h-11"
+              />
+              <Button
+                type="submit"
+                disabled={chatLoading || !inputQuery.trim()}
+                className="h-11 px-4 bg-purple-600 hover:bg-purple-700 text-white gap-1.5"
+              >
+                <Send className="h-4 w-4" />
+                Ask
+              </Button>
+            </form>
+          </div>
+        </TabsContent>
+
+        {/* ══════════════════════════════════════════════════════════════════════
+            TAB 2: SOP LIBRARY & UPLOADS
+            ══════════════════════════════════════════════════════════════════════ */}
+        <TabsContent value="library" className="space-y-4 pt-2">
+          {/* Filter Bar */}
+          <div className="flex flex-col sm:flex-row gap-3 items-stretch sm:items-center justify-between">
+            <div className="relative flex-1 max-w-md">
+              <Search className="h-4 w-4 absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground" />
+              <Input
+                placeholder="Search SOP title, content or file name…"
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                className="pl-9 text-sm"
+              />
+            </div>
+
+            <div className="flex flex-wrap gap-1.5 items-center">
+              {CATEGORIES.map((cat) => (
+                <button
+                  key={cat}
+                  onClick={() => setSelectedCategory(cat)}
+                  className={`px-3 py-1 rounded-full text-xs font-medium transition-colors ${
+                    selectedCategory === cat
+                      ? "bg-purple-600 text-white"
+                      : "bg-muted/60 text-muted-foreground hover:bg-muted hover:text-foreground"
+                  }`}
+                >
+                  {cat}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {/* Document Grid */}
+          {filteredDocuments.length === 0 ? (
+            <div className="text-center py-16 border rounded-xl bg-muted/10 space-y-3">
+              <FolderOpen className="h-12 w-12 text-muted-foreground/40 mx-auto" />
+              <div className="space-y-1">
+                <p className="text-sm font-semibold">No SOP documents found</p>
+                <p className="text-xs text-muted-foreground">
+                  {searchQuery ? "Try adjusting your search query." : "Upload SOP files (.pdf, .txt, .md) to build the knowledge base."}
+                </p>
+              </div>
+              {isAdmin && (
+                <Button onClick={() => setUploadModalOpen(true)} size="sm" className="bg-purple-600 hover:bg-purple-700 text-white gap-1.5 text-xs">
+                  <Upload className="h-3.5 w-3.5" />
+                  Upload First SOP
+                </Button>
+              )}
+            </div>
+          ) : (
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              {filteredDocuments.map((doc) => (
+                <div
+                  key={doc.id}
+                  className="border rounded-xl p-4 bg-card hover:border-purple-500/50 transition-all shadow-xs space-y-3 flex flex-col justify-between"
+                >
+                  <div className="space-y-2">
+                    <div className="flex items-start justify-between gap-2">
+                      <div className="flex items-center gap-2">
+                        <div className="h-8 w-8 rounded-lg bg-purple-100 dark:bg-purple-900/40 text-purple-700 dark:text-purple-300 flex items-center justify-center shrink-0">
+                          <BookOpen className="h-4 w-4" />
+                        </div>
+                        <div>
+                          <h4 className="font-bold text-sm leading-tight text-foreground">{doc.title}</h4>
+                          {doc.file_name && (
+                            <span className="text-[11px] text-muted-foreground font-mono truncate block">
+                              {doc.file_name}
+                            </span>
+                          )}
+                        </div>
+                      </div>
+
+                      <Badge variant="secondary" className="text-[10px] shrink-0">
+                        {doc.category}
+                      </Badge>
+                    </div>
+
+                    <p className="text-xs text-muted-foreground line-clamp-3 leading-relaxed">
+                      {doc.content.replace(/[#*`]/g, "").slice(0, 180)}...
+                    </p>
+                  </div>
+
+                  <div className="flex items-center justify-between border-t pt-3 text-[11px] text-muted-foreground">
+                    <span className="flex items-center gap-1">
+                      <Clock className="h-3 w-3" />
+                      {new Date(doc.updated_at).toLocaleDateString("en-GB")}
+                    </span>
+
+                    <div className="flex items-center gap-2">
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        onClick={() => {
+                          setPreviewDoc(doc);
+                          setPreviewCitation(null);
+                          setPreviewOpen(true);
+                        }}
+                        className="h-7 text-xs gap-1"
+                      >
+                        <FileText className="h-3 w-3 text-primary" />
+                        View Full SOP
+                      </Button>
+
+                      {isAdmin && (
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          onClick={() => handleDeleteDocument(doc.id, doc.title)}
+                          className="h-7 w-7 p-0 text-destructive hover:bg-destructive/10"
+                        >
+                          <Trash2 className="h-3.5 w-3.5" />
+                        </Button>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </TabsContent>
+      </Tabs>
+
+      {/* ══════════════════════════════════════════════════════════════════════
+          UPLOAD FILE MODAL
+          ══════════════════════════════════════════════════════════════════════ */}
+      <Dialog open={uploadModalOpen} onOpenChange={setUploadModalOpen}>
+        <DialogContent className="max-w-md w-[95vw]">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2 text-base font-bold">
+              <Upload className="h-4.5 w-4.5 text-purple-600" />
+              Upload SOP Document
+            </DialogTitle>
+          </DialogHeader>
+
+          <form onSubmit={handleFileUploadSubmit} className="space-y-4 py-2">
+            {uploadError && (
+              <p className="text-xs text-destructive bg-destructive/10 p-2.5 rounded-md font-medium">
+                {uploadError}
+              </p>
+            )}
+
+            <div className="space-y-1.5">
+              <Label htmlFor="upload-file">Select File (.pdf, .md, .txt) *</Label>
+              <Input
+                id="upload-file"
+                type="file"
+                accept=".pdf,.txt,.md,.markdown"
+                onChange={(e) => {
+                  const f = e.target.files?.[0];
+                  if (f) {
+                    setUploadFile(f);
+                    if (!uploadTitle) {
+                      setUploadTitle(f.name.replace(/\.[^/.]+$/, "").replace(/[-_]/g, " "));
+                    }
+                  }
+                }}
+                required
+              />
+              <p className="text-[11px] text-muted-foreground">
+                PDF text content and Markdown documents will be extracted and indexed automatically.
+              </p>
+            </div>
+
+            <div className="space-y-1.5">
+              <Label htmlFor="sop-title">Document Title</Label>
+              <Input
+                id="sop-title"
+                placeholder="e.g. Audio Cable Maintenance & Storage SOP"
+                value={uploadTitle}
+                onChange={(e) => setUploadTitle(e.target.value)}
+              />
+            </div>
+
+            <div className="space-y-1.5">
+              <Label htmlFor="sop-cat">Category</Label>
+              <select
+                id="sop-cat"
+                value={uploadCategory}
+                onChange={(e) => setUploadCategory(e.target.value)}
+                className="w-full h-9 rounded-md border border-input bg-background px-3 py-1 text-sm shadow-xs focus:outline-none focus:ring-1 focus:ring-ring"
+              >
+                <option value="General">General</option>
+                <option value="Photo">Photo</option>
+                <option value="Video">Video</option>
+                <option value="Audio/AV">Audio/AV</option>
+                <option value="Safety & Handling">Safety & Handling</option>
+                <option value="Events">Events</option>
+              </select>
+            </div>
+
+            <DialogFooter className="border-t pt-3">
+              <Button type="button" variant="outline" onClick={() => setUploadModalOpen(false)}>
+                Cancel
+              </Button>
+              <Button
+                type="submit"
+                disabled={uploading || !uploadFile}
+                className="bg-purple-600 hover:bg-purple-700 text-white"
+              >
+                {uploading ? "Extracting & Uploading…" : "Upload & Train AI"}
+              </Button>
+            </DialogFooter>
+          </form>
+        </DialogContent>
+      </Dialog>
+
+      {/* ══════════════════════════════════════════════════════════════════════
+          MANUAL SOP WRITE MODAL
+          ══════════════════════════════════════════════════════════════════════ */}
+      <Dialog open={manualModalOpen} onOpenChange={setManualModalOpen}>
+        <DialogContent className="max-w-xl w-[95vw]">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2 text-base font-bold">
+              <Plus className="h-4.5 w-4.5 text-primary" />
+              Write New SOP Document
+            </DialogTitle>
+          </DialogHeader>
+
+          <form onSubmit={handleManualSubmit} className="space-y-4 py-2">
+            {uploadError && (
+              <p className="text-xs text-destructive bg-destructive/10 p-2.5 rounded-md font-medium">
+                {uploadError}
+              </p>
+            )}
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <div className="space-y-1.5">
+                <Label htmlFor="manual-title">Document Title *</Label>
+                <Input
+                  id="manual-title"
+                  placeholder="e.g. Sony FX3 Setup Checklist"
+                  value={manualTitle}
+                  onChange={(e) => setManualTitle(e.target.value)}
+                  required
+                />
+              </div>
+
+              <div className="space-y-1.5">
+                <Label htmlFor="manual-cat">Category</Label>
+                <select
+                  id="manual-cat"
+                  value={manualCategory}
+                  onChange={(e) => setManualCategory(e.target.value)}
+                  className="w-full h-9 rounded-md border border-input bg-background px-3 py-1 text-sm shadow-xs focus:outline-none focus:ring-1 focus:ring-ring"
+                >
+                  <option value="General">General</option>
+                  <option value="Photo">Photo</option>
+                  <option value="Video">Video</option>
+                  <option value="Audio/AV">Audio/AV</option>
+                  <option value="Safety & Handling">Safety & Handling</option>
+                  <option value="Events">Events</option>
+                </select>
+              </div>
+            </div>
+
+            <div className="space-y-1.5">
+              <Label htmlFor="manual-content">SOP Content / Instructions *</Label>
+              <textarea
+                id="manual-content"
+                rows={10}
+                placeholder="Enter step-by-step operating procedures, warnings, and guidelines here..."
+                value={manualContent}
+                onChange={(e) => setManualContent(e.target.value)}
+                className="w-full rounded-md border border-input bg-background p-3 text-xs leading-relaxed shadow-xs focus:outline-none focus:ring-1 focus:ring-ring"
+                required
+              />
+            </div>
+
+            <DialogFooter className="border-t pt-3">
+              <Button type="button" variant="outline" onClick={() => setManualModalOpen(false)}>
+                Cancel
+              </Button>
+              <Button
+                type="submit"
+                disabled={uploading || !manualTitle.trim() || !manualContent.trim()}
+                className="bg-purple-600 hover:bg-purple-700 text-white"
+              >
+                {uploading ? "Saving…" : "Save SOP"}
+              </Button>
+            </DialogFooter>
+          </form>
+        </DialogContent>
+      </Dialog>
+
+      {/* ══════════════════════════════════════════════════════════════════════
+          SOP PREVIEW & CITATION MODAL
+          ══════════════════════════════════════════════════════════════════════ */}
+      <SOPPreviewModal
+        document={previewDoc}
+        citation={previewCitation}
+        open={previewOpen}
+        onClose={() => {
+          setPreviewOpen(false);
+          setPreviewDoc(null);
+          setPreviewCitation(null);
+        }}
+      />
+    </div>
+  );
+}
