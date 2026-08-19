@@ -20,6 +20,7 @@ import {
   FileCode,
   CheckCircle,
   FileUp,
+  RotateCcw,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -54,19 +55,37 @@ const PRESET_QUESTIONS = [
 
 const CATEGORIES = ["All", "General", "Photo", "Video", "Audio/AV", "Safety & Handling", "Events"];
 
+const SESSION_STORAGE_KEY = "mediahub_ai_chat_session";
+
+function getWelcomeMessage(name: string): AIChatMessage {
+  return {
+    id: "welcome",
+    role: "assistant",
+    content: `Hello ${name}! 👋 I am your **MediaHub AI Operations Assistant**, powered by Google Gemini.\n\nI have real-time access to:\n1. 📋 **Official SOPs & Guidelines** (handling rules, safety protocols, return checklists)\n2. 📦 **Live Inventory & Availability** (equipment status, storage locations, active checkouts)\n3. 🌐 **Technical Gear Specifications & Specs** (camera mass, lens compatibility, sensor specs)\n\nAsk me anything or tap one of the suggested prompts below!`,
+    created_at: new Date().toISOString(),
+  };
+}
+
 export function SOPManager({ initialDocuments, role, userName }: SOPManagerProps) {
   const [documents, setDocuments] = useState<SOPDocument[]>(initialDocuments);
   const [activeTab, setActiveTab] = useState<"assistant" | "library">("assistant");
 
-  // Chat State
-  const [messages, setMessages] = useState<AIChatMessage[]>([
-    {
-      id: "welcome",
-      role: "assistant",
-      content:
-        `Hello ${userName}! 👋 I am your **MediaHub AI Operations Assistant**, powered by Google Gemini.\n\nI have real-time access to:\n1. 📋 **Official SOPs & Guidelines** (handling rules, safety protocols, return checklists)\n2. 📦 **Live Inventory & Availability** (equipment status, storage locations, active checkouts)\n3. 🌐 **Technical Gear Specifications & Specs** (camera mass, lens compatibility, sensor specs)\n\nAsk me anything or tap one of the suggested prompts below!`,
-    },
-  ]);
+  // Chat State initialized from sessionStorage for current browser tab
+  const [messages, setMessages] = useState<AIChatMessage[]>(() => {
+    if (typeof window !== "undefined") {
+      try {
+        const saved = sessionStorage.getItem(SESSION_STORAGE_KEY);
+        if (saved) {
+          const parsed = JSON.parse(saved);
+          if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+        }
+      } catch (e) {
+        console.warn("Could not parse chat from sessionStorage", e);
+      }
+    }
+    return [getWelcomeMessage(userName)];
+  });
+
   const [inputQuery, setInputQuery] = useState("");
   const [chatLoading, setChatLoading] = useState(false);
   const chatBottomRef = useRef<HTMLDivElement>(null);
@@ -93,9 +112,31 @@ export function SOPManager({ initialDocuments, role, userName }: SOPManagerProps
 
   const isAdmin = role === "admin";
 
+  // Auto-save chat messages to sessionStorage on every change
+  useEffect(() => {
+    if (typeof window !== "undefined") {
+      try {
+        sessionStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify(messages));
+      } catch (e) {
+        console.warn("Could not save chat to sessionStorage", e);
+      }
+    }
+  }, [messages]);
+
   useEffect(() => {
     chatBottomRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages, chatLoading]);
+
+  // Clear Chat History
+  function handleClearChat() {
+    if (confirm("Reset and clear your conversation history?")) {
+      const reset = [getWelcomeMessage(userName)];
+      setMessages(reset);
+      try {
+        sessionStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify(reset));
+      } catch {}
+    }
+  }
 
   // Refresh documents list
   async function refreshDocuments() {
@@ -413,6 +454,35 @@ export function SOPManager({ initialDocuments, role, userName }: SOPManagerProps
 
           {/* Chat Container */}
           <div className="border rounded-xl bg-card flex flex-col h-[650px] shadow-sm overflow-hidden">
+            {/* Chat Header Bar */}
+            <div className="px-4 py-2.5 border-b bg-muted/30 flex items-center justify-between text-xs">
+              <div className="flex items-center gap-2">
+                <div className="h-2 w-2 rounded-full bg-emerald-500 animate-pulse" />
+                <span className="font-semibold text-foreground">MediaHub AI Agent</span>
+                <Badge variant="outline" className="text-[10px] font-normal py-0 h-4 bg-background">
+                  Gemini 3.5 Flash-Lite
+                </Badge>
+              </div>
+
+              <div className="flex items-center gap-2">
+                <span className="text-[11px] text-muted-foreground hidden sm:inline">
+                  {messages.length - 1} message{messages.length - 1 === 1 ? "" : "s"} in session
+                </span>
+                {messages.length > 1 && (
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    onClick={handleClearChat}
+                    className="h-6 px-2 text-[11px] text-muted-foreground hover:text-foreground gap-1"
+                    title="Clear current chat history"
+                  >
+                    <RotateCcw className="h-3 w-3" />
+                    New Chat
+                  </Button>
+                )}
+              </div>
+            </div>
+
             {/* Messages Scroll Area */}
             <div className="flex-1 overflow-y-auto p-4 md:p-6 space-y-4">
               {messages.map((m) => (
