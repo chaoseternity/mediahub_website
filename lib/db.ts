@@ -890,6 +890,13 @@ export async function createSOPDocument(params: {
 }): Promise<SOPDocument> {
   await ensureSchema();
   const category = params.category?.trim() || "General";
+
+  let validUserId: number | null = null;
+  if (params.uploaded_by) {
+    const userExists = await getUserById(params.uploaded_by);
+    if (userExists) validUserId = params.uploaded_by;
+  }
+
   const { rows } = await sql<SOPDocument>`
     INSERT INTO sop_documents (
       title,
@@ -907,7 +914,7 @@ export async function createSOPDocument(params: {
       ${params.file_name ?? null},
       ${params.file_type ?? null},
       ${params.file_size ?? null},
-      ${params.uploaded_by ?? null}
+      ${validUserId}
     )
     RETURNING *
   `;

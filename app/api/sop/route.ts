@@ -33,8 +33,9 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "Unauthorized. Please log in." }, { status: 401 });
     }
 
-    const currentUser = await getUserByEmail(session.user.email!);
-    const isAdmin = session.user.role === "admin" || currentUser?.role === "admin";
+    const email = session.user?.email;
+    const currentUser = email ? await getUserByEmail(email) : undefined;
+    const isAdmin = session.user?.role === "admin" || currentUser?.role === "admin";
 
     if (!isAdmin) {
       return NextResponse.json(
@@ -43,7 +44,7 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    const uploadedBy = currentUser?.id ?? null;
+    const uploadedBy = currentUser?.id ?? (session.user?.id ? Number(session.user.id) : null);
     const contentType = req.headers.get("content-type") || "";
 
     // 1. Multipart Form Data (File Upload)
