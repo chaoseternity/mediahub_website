@@ -14,33 +14,47 @@ const CreateSOPManualSchema = z.object({
 });
 
 export async function GET() {
-  const documents = await getAllSOPDocuments();
-  return NextResponse.json(documents);
+  try {
+    const documents = await getAllSOPDocuments();
+    return NextResponse.json(documents);
+  } catch (err: unknown) {
+    console.error("Failed to fetch SOP documents:", err);
+    return NextResponse.json(
+      { error: err instanceof Error ? err.message : "Failed to load SOP documents" },
+      { status: 500 }
+    );
+  }
 }
 
 export async function POST(req: NextRequest) {
-  const session = await auth();
-  if (!session) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  try {
+    const session = await auth();
+    if (!session) {
+      return NextResponse.json({ error: "Unauthorized. Please log in." }, { status: 401 });
+    }
 
-  if (session.user.role !== "admin") {
-    return NextResponse.json({ error: "Only admins can upload SOP documents" }, { status: 403 });
-  }
+    const currentUser = await getUserByEmail(session.user.email!);
+    const isAdmin = session.user.role === "admin" || currentUser?.role === "admin";
 
-  const currentUser = await getUserByEmail(session.user.email!);
-  const uploadedBy = currentUser?.id ?? null;
+    if (!isAdmin) {
+      return NextResponse.json(
+        { error: "Forbidden: Only Admin accounts can upload SOP documents." },
+        { status: 403 }
+      );
+    }
 
-  const contentType = req.headers.get("content-type") || "";
+    const uploadedBy = currentUser?.id ?? null;
+    const contentType = req.headers.get("content-type") || "";
 
-  // 1. Multipart Form Data (File Upload)
-  if (contentType.includes("multipart/form-data")) {
-    try {
+    // 1. Multipart Form Data (File Upload)
+    if (contentType.includes("multipart/form-data")) {
       const formData = await req.formData();
       const file = formData.get("file") as File | null;
       const customTitle = formData.get("title") as string | null;
       const category = (formData.get("category") as string | null) || "General";
 
       if (!file) {
-        return NextResponse.json({ error: "No file uploaded" }, { status: 400 });
+        return NextResponse.json({ error: "No file provided in upload request." }, { status: 400 });
       }
 
       const fileName = file.name;
@@ -49,7 +63,6 @@ export async function POST(req: NextRequest) {
       const title = customTitle?.trim() || fileName.replace(/\.[^/.]+$/, "").replace(/[-_]/g, " ");
 
       let extractedContent = "";
-
       const buffer = Buffer.from(await file.arrayBuffer());
 
       if (fileType === "application/pdf" || fileName.toLowerCase().endsWith(".pdf")) {
@@ -60,7 +73,7 @@ export async function POST(req: NextRequest) {
         } catch (pdfErr) {
           console.error("PDF parse error:", pdfErr);
           return NextResponse.json(
-            { error: "Failed to extract text from PDF. Please make sure the PDF is not password protected or corrupted." },
+            { error: "Failed to extract text from PDF. Please ensure the PDF contains selectable text and is not encrypted." },
             { status: 400 }
           );
         }
@@ -68,20 +81,21 @@ export async function POST(req: NextRequest) {
         fileName.toLowerCase().endsWith(".docx") ||
         fileName.toLowerCase().endsWith(".doc") ||
         fileType.includes("wordprocessingml") ||
-        fileType.includes("msword")
+        fileType.includes("msword") ||
+        fileType.includes("officedocument")
       ) {
         try {
           const result = await mammoth.extractRawText({ buffer });
-          extractedContent = result.value.trim();
+          extractedContent = (result.value || "").trim();
         } catch (docxErr) {
           console.error("DOCX parse error:", docxErr);
           return NextResponse.json(
-            { error: "Failed to extract text from Word document. Please ensure the file is not corrupted or password-protected." },
+            { error: "Failed to parse Word document (.docx). Please ensure it is a valid Microsoft Word .docx file." },
             { status: 400 }
           );
         }
       } else {
-        // Plain text, Markdown, CSV, etc.
+        // Plain text, Markdown, CSV
         extractedContent = buffer.toString("utf-8").trim();
       }
 
@@ -103,17 +117,9 @@ export async function POST(req: NextRequest) {
       });
 
       return NextResponse.json(doc, { status: 201 });
-    } catch (err: unknown) {
-      console.error("File upload error:", err);
-      return NextResponse.json(
-        { error: err instanceof Error ? err.message : "Failed to process file upload" },
-        { status: 500 }
-      );
     }
-  }
 
-  // 2. Direct JSON Body
-  try {
+    // 2. Direct JSON Body
     const body = await req.json();
     const parsed = CreateSOPManualSchema.safeParse(body);
     if (!parsed.success) {
@@ -128,7 +134,11 @@ export async function POST(req: NextRequest) {
     });
 
     return NextResponse.json(doc, { status: 201 });
-  } catch {
-    return NextResponse.json({ error: "Invalid request payload" }, { status: 400 });
+  } catch (err: unknown) {
+    console.error("SOP POST Error:", err);
+    return NextResponse.json(
+      { error: err instanceof Error ? err.message : "An unexpected server error occurred during SOP upload." },
+      { status: 500 }
+    );
   }
 }

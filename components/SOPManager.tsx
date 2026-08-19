@@ -209,8 +209,20 @@ export function SOPManager({ initialDocuments, role, userName }: SOPManagerProps
         body: formData,
       });
 
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || "Upload failed");
+      let data: any = null;
+      try {
+        const text = await res.text();
+        if (text) data = JSON.parse(text);
+      } catch {
+        // Response was not JSON
+      }
+
+      if (!res.ok) {
+        throw new Error(
+          (data && (data.error?.message || data.error)) ||
+          `Upload failed (${res.status}: ${res.statusText || "Server error"})`
+        );
+      }
 
       setUploadModalOpen(false);
       setUploadFile(null);
@@ -242,8 +254,20 @@ export function SOPManager({ initialDocuments, role, userName }: SOPManagerProps
         }),
       });
 
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || "Creation failed");
+      let data: any = null;
+      try {
+        const text = await res.text();
+        if (text) data = JSON.parse(text);
+      } catch {
+        // Response was not JSON
+      }
+
+      if (!res.ok) {
+        throw new Error(
+          (data && (data.error?.message || data.error)) ||
+          `Creation failed (${res.status}: ${res.statusText || "Server error"})`
+        );
+      }
 
       setManualModalOpen(false);
       setManualTitle("");
