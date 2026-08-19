@@ -36,6 +36,8 @@ import {
 import { SOPPreviewModal } from "./SOPPreviewModal";
 import type { SOPDocument, SOPCitation, AIChatMessage, Role } from "@/lib/types";
 import JSZip from "jszip";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
 
 interface SOPManagerProps {
   initialDocuments: SOPDocument[];
@@ -432,8 +434,41 @@ export function SOPManager({ initialDocuments, role, userName }: SOPManagerProps
                     }`}
                   >
                     {/* Message Body */}
-                    <div className="text-sm leading-relaxed whitespace-pre-wrap">
-                      {m.content}
+                    <div className="text-sm leading-relaxed max-w-none break-words">
+                      {m.role === "user" ? (
+                        <div className="whitespace-pre-wrap">{m.content}</div>
+                      ) : (
+                        <ReactMarkdown
+                          remarkPlugins={[remarkGfm]}
+                          components={{
+                            p: ({ children }) => <p className="mb-2.5 last:mb-0 leading-relaxed">{children}</p>,
+                            strong: ({ children }) => <strong className="font-semibold text-foreground">{children}</strong>,
+                            em: ({ children }) => <em className="italic">{children}</em>,
+                            ul: ({ children }) => <ul className="list-disc pl-5 my-2 space-y-1">{children}</ul>,
+                            ol: ({ children }) => <ol className="list-decimal pl-5 my-2 space-y-1">{children}</ol>,
+                            li: ({ children }) => <li className="leading-relaxed pl-0.5">{children}</li>,
+                            h1: ({ children }) => <h1 className="text-base font-bold my-2 text-foreground">{children}</h1>,
+                            h2: ({ children }) => <h2 className="text-sm font-bold my-2 text-foreground">{children}</h2>,
+                            h3: ({ children }) => <h3 className="text-xs font-bold my-1.5 uppercase tracking-wide text-purple-700 dark:text-purple-300">{children}</h3>,
+                            code: ({ children }) => (
+                              <code className="px-1.5 py-0.5 rounded bg-muted/80 text-foreground font-mono text-xs border">{children}</code>
+                            ),
+                            blockquote: ({ children }) => (
+                              <blockquote className="border-l-2 border-purple-500 pl-3 italic my-2 text-muted-foreground">{children}</blockquote>
+                            ),
+                            table: ({ children }) => (
+                              <div className="overflow-x-auto my-2 border rounded-lg">
+                                <table className="w-full text-xs text-left">{children}</table>
+                              </div>
+                            ),
+                            thead: ({ children }) => <thead className="bg-muted/60 border-b">{children}</thead>,
+                            th: ({ children }) => <th className="px-3 py-2 font-semibold">{children}</th>,
+                            td: ({ children }) => <td className="px-3 py-2 border-b border-muted/40">{children}</td>,
+                          }}
+                        >
+                          {m.content}
+                        </ReactMarkdown>
+                      )}
                     </div>
 
                     {/* Source Citations Box */}

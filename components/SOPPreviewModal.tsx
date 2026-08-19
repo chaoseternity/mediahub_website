@@ -11,6 +11,8 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { BookOpen, FileText, Calendar, User, Tag, ExternalLink } from "lucide-react";
 import type { SOPDocument, SOPCitation } from "@/lib/types";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
 
 interface SOPPreviewModalProps {
   document: SOPDocument | null;
@@ -31,9 +33,33 @@ export function SOPPreviewModal({
   const renderContent = () => {
     if (!citation?.snippet) {
       return (
-        <pre className="text-xs whitespace-pre-wrap font-sans leading-relaxed text-foreground/90 bg-muted/20 p-4 rounded-lg border">
-          {document.content}
-        </pre>
+        <div className="text-xs leading-relaxed text-foreground/90 bg-muted/20 p-4 rounded-lg border max-w-none">
+          <ReactMarkdown
+            remarkPlugins={[remarkGfm]}
+            components={{
+              p: ({ children }) => <p className="mb-2.5 last:mb-0 leading-relaxed">{children}</p>,
+              strong: ({ children }) => <strong className="font-semibold text-foreground">{children}</strong>,
+              ul: ({ children }) => <ul className="list-disc pl-5 my-2 space-y-1">{children}</ul>,
+              ol: ({ children }) => <ol className="list-decimal pl-5 my-2 space-y-1">{children}</ol>,
+              li: ({ children }) => <li className="leading-relaxed">{children}</li>,
+              h1: ({ children }) => <h1 className="text-base font-bold my-2 text-foreground">{children}</h1>,
+              h2: ({ children }) => <h2 className="text-sm font-bold my-2 text-foreground">{children}</h2>,
+              h3: ({ children }) => <h3 className="text-xs font-bold my-1.5 uppercase text-purple-700 dark:text-purple-300">{children}</h3>,
+              code: ({ children }) => (
+                <code className="px-1.5 py-0.5 rounded bg-muted/80 font-mono text-xs border">{children}</code>
+              ),
+              table: ({ children }) => (
+                <div className="overflow-x-auto my-2 border rounded-lg">
+                  <table className="w-full text-xs text-left">{children}</table>
+                </div>
+              ),
+              th: ({ children }) => <th className="px-3 py-2 font-semibold bg-muted/60 border-b">{children}</th>,
+              td: ({ children }) => <td className="px-3 py-2 border-b border-muted/40">{children}</td>,
+            }}
+          >
+            {document.content}
+          </ReactMarkdown>
+        </div>
       );
     }
 
