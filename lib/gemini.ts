@@ -18,6 +18,7 @@ export interface SOPQueryContext {
 export interface SOPAnswerResult {
   answer: string;
   citations: SOPCitation[];
+  modelUsed?: string;
 }
 
 /**
@@ -101,13 +102,6 @@ RULES:
 \`\`\`
 Do not omit the \`\`\`json_citations block. Ensure the JSON is valid.`;
 
-  // Use gemini-2.0-flash or gemini-1.5-flash
-  const modelName = "gemini-2.0-flash";
-  const model = genAI.getGenerativeModel({
-    model: modelName,
-    systemInstruction,
-  });
-
   const prompt = `Here are the official MediaHub SOP Documents for reference:
 
 ${contextText}
@@ -119,46 +113,89 @@ User Question: ${question}
 
 Please answer the user's question clearly according to the SOP documents and append the \`\`\`json_citations block.`;
 
-  try {
-    const result = await model.generateContent(prompt);
-    const responseText = result.response.text();
+  // Model fallback hierarchy as requested:
+  // 1. 3.5 Flash Lite
+  // 2. 3.1 Flash Lite
+  // 3. 3.7 Flash
+  // 4. 3.6 Flash
+  // 5. 3.5 Flash
+  // 6. 3 Flash
+  // 7. 2.5 Flash Lite
+  // 8. 2.5 Flash
+  // (with safety fallback to 2.0 Flash)
+  const modelsToTry = [
+    process.env.GEMINI_MODEL || "gemini-3.5-flash-lite",
+    process.env.GEMINI_BACKUP_MODEL || "gemini-3.1-flash-lite",
+    "gemini-3.7-flash",
+    "gemini-3.6-flash",
+    "gemini-3.5-flash",
+    "gemini-3-flash",
+    "gemini-3.0-flash",
+    "gemini-2.5-flash-lite",
+    "gemini-2.5-flash",
+    "gemini-2.0-flash",
+  ];
 
-    // Parse out json_citations block
-    let cleanAnswer = responseText;
-    let citations: SOPCitation[] = [];
+  // De-duplicate array while preserving exact priority order
+  const uniqueModels = Array.from(new Set(modelsToTry));
 
-    const citationMatch = responseText.match(/```json_citations\s*([\s\S]*?)\s*```/);
-    if (citationMatch && citationMatch[1]) {
-      try {
-        const parsed = JSON.parse(citationMatch[1]);
-        if (Array.isArray(parsed)) {
-          citations = parsed.map((item) => ({
-            document_id: Number(item.document_id) || relevantDocs[0]?.id || 0,
-            document_title: String(item.document_title || "SOP Document"),
-            section_title: item.section_title ? String(item.section_title) : undefined,
-            snippet: String(item.snippet || ""),
-          }));
+  let lastError: unknown = null;
+
+  for (const modelName of uniqueModels) {
+    try {
+      const model = genAI.getGenerativeModel({
+        model: modelName,
+        systemInstruction,
+      });
+
+      const result = await model.generateContent(prompt);
+      const responseText = result.response.text();
+
+      // Parse out json_citations block
+      let cleanAnswer = responseText;
+      let citations: SOPCitation[] = [];
+
+      const citationMatch = responseText.match(/```json_citations\s*([\s\S]*?)\s*```/);
+      if (citationMatch && citationMatch[1]) {
+        try {
+          const parsed = JSON.parse(citationMatch[1]);
+          if (Array.isArray(parsed)) {
+            citations = parsed.map((item) => ({
+              document_id: Number(item.document_id) || relevantDocs[0]?.id || 0,
+              document_title: String(item.document_title || "SOP Document"),
+              section_title: item.section_title ? String(item.section_title) : undefined,
+              snippet: String(item.snippet || ""),
+            }));
+          }
+        } catch (e) {
+          console.warn("Could not parse json_citations block:", e);
         }
-      } catch (e) {
-        console.warn("Could not parse json_citations block:", e);
+        cleanAnswer = responseText.replace(/```json_citations\s*[\s\S]*?\s*```/, "").trim();
+      } else {
+        // Fallback: If model didn't format json_citations, match top relevant docs
+        citations = relevantDocs.slice(0, 2).map((doc) => ({
+          document_id: doc.id,
+          document_title: doc.title,
+          section_title: doc.category,
+          snippet: doc.content.slice(0, 200) + "...",
+        }));
       }
-      cleanAnswer = responseText.replace(/```json_citations\s*[\s\S]*?\s*```/, "").trim();
-    } else {
-      // Fallback: If model didn't format json_citations, match top relevant docs
-      citations = relevantDocs.slice(0, 2).map((doc) => ({
-        document_id: doc.id,
-        document_title: doc.title,
-        section_title: doc.category,
-        snippet: doc.content.slice(0, 200) + "...",
-      }));
-    }
 
-    return {
-      answer: cleanAnswer,
-      citations,
-    };
-  } catch (err: unknown) {
-    console.error("Gemini API Error:", err);
-    throw new Error(err instanceof Error ? err.message : "Failed to generate AI response from Gemini API");
+      return {
+        answer: cleanAnswer,
+        citations,
+        modelUsed: modelName,
+      };
+    } catch (err: unknown) {
+      console.warn(`Model ${modelName} failed or unavailable, trying next model in chain:`, err);
+      lastError = err;
+    }
   }
+
+  console.error("All Gemini models in chain failed:", lastError);
+  throw new Error(
+    lastError instanceof Error
+      ? lastError.message
+      : "Failed to generate AI response from Gemini API models."
+  );
 }
