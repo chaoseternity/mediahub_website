@@ -1,15 +1,28 @@
 import JSZip from "jszip";
 import mammoth from "mammoth";
-import { PDFParse } from "pdf-parse";
+import { extractText } from "unpdf";
+
+function toBuffer(data: ArrayBuffer | Buffer | Uint8Array): Buffer {
+  if (Buffer.isBuffer(data)) return data;
+  if (data instanceof ArrayBuffer) return Buffer.from(new Uint8Array(data));
+  return Buffer.from(data);
+}
+
+function toUint8Array(data: ArrayBuffer | Buffer | Uint8Array): Uint8Array {
+  if (data instanceof Uint8Array) return data;
+  if (data instanceof ArrayBuffer) return new Uint8Array(data);
+  const buf = data as Buffer;
+  return new Uint8Array(buf.buffer, buf.byteOffset, buf.byteLength);
+}
 
 /**
  * Extracts plain text from a Word document (.docx) using pure JavaScript.
  * Attempts mammoth first for formatted markdown/text, then falls back to direct XML extraction from JSZip.
  */
-export async function extractTextFromDocx(data: ArrayBuffer | Buffer): Promise<string> {
+export async function extractTextFromDocx(data: ArrayBuffer | Buffer | Uint8Array): Promise<string> {
   // Method 1: Try mammoth
   try {
-    const buffer = Buffer.isBuffer(data) ? data : Buffer.from(data);
+    const buffer = toBuffer(data);
     const result = await mammoth.extractRawText({ buffer });
     if (result && result.value && result.value.trim().length > 0) {
       return result.value.trim();
@@ -28,7 +41,6 @@ export async function extractTextFromDocx(data: ArrayBuffer | Buffer): Promise<s
 
     const xmlText = await docXmlFile.async("text");
 
-    // Convert XML paragraphs and text nodes to readable text
     let cleanText = xmlText
       .replace(/<w:p[^>]*>/g, "\n")
       .replace(/<w:tab[^>]*\/>/g, "\t")
@@ -36,7 +48,6 @@ export async function extractTextFromDocx(data: ArrayBuffer | Buffer): Promise<s
       .replace(/<w:t[^>]*>([\s\S]*?)<\/w:t>/g, "$1")
       .replace(/<[^>]+>/g, "");
 
-    // Decode standard XML entities
     cleanText = cleanText
       .replace(/&amp;/g, "&")
       .replace(/&lt;/g, "<")
@@ -60,16 +71,23 @@ export async function extractTextFromDocx(data: ArrayBuffer | Buffer): Promise<s
 }
 
 /**
- * Extracts text from a PDF document buffer.
+ * Extracts text from a PDF document buffer using unpdf (pure JS, zero DOM dependencies).
  */
-export async function extractTextFromPdf(data: ArrayBuffer | Buffer): Promise<string> {
+export async function extractTextFromPdf(data: ArrayBuffer | Buffer | Uint8Array): Promise<string> {
   try {
-    const buffer = Buffer.isBuffer(data) ? data : Buffer.from(data);
-    const parser = new PDFParse({ data: buffer });
-    const textResult = await parser.getText();
-    const cleanText = (textResult.text || "").trim();
+    const uint8 = toUint8Array(data);
+    const result = await extractText(uint8);
+    const textRaw = result.text;
+    const cleanText = (
+      typeof textRaw === "string"
+        ? textRaw
+        : Array.isArray(textRaw)
+        ? (textRaw as string[]).join("\n\n")
+        : ""
+    ).trim();
+
     if (!cleanText) {
-      throw new Error("The PDF document contains no selectable text (it may be a scanned image).");
+      throw new Error("The PDF document contains no selectable text (it may be an image scan).");
     }
     return cleanText;
   } catch (err: unknown) {
@@ -84,7 +102,7 @@ export async function extractTextFromPdf(data: ArrayBuffer | Buffer): Promise<st
  * Universal document text extractor supporting .docx, .pdf, .txt, and .md.
  */
 export async function extractTextFromDocument(
-  data: ArrayBuffer | Buffer,
+  data: ArrayBuffer | Buffer | Uint8Array,
   fileName: string,
   fileType: string = ""
 ): Promise<string> {
@@ -108,7 +126,7 @@ export async function extractTextFromDocument(
   }
 
   // 3. Plain Text / Markdown (.txt, .md, .markdown, .csv)
-  const buffer = Buffer.isBuffer(data) ? data : Buffer.from(data);
+  const buffer = toBuffer(data);
   const text = buffer.toString("utf-8").trim();
   if (!text) {
     throw new Error("The text file is empty.");
