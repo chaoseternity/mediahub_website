@@ -835,8 +835,30 @@ export async function updateSectionRehearsalConfig(
 // SOP Document Helpers
 // ---------------------------------------------------------------------------
 
+async function ensureSOPTable(): Promise<void> {
+  try {
+    await ensureSchema();
+    await sql`
+      CREATE TABLE IF NOT EXISTS sop_documents (
+        id SERIAL PRIMARY KEY,
+        title TEXT NOT NULL,
+        category TEXT NOT NULL DEFAULT 'General',
+        content TEXT NOT NULL,
+        file_name TEXT,
+        file_type TEXT,
+        file_size INT,
+        uploaded_by INT REFERENCES users(id) ON DELETE SET NULL,
+        created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+      );
+    `;
+  } catch (e) {
+    console.warn("ensureSOPTable notice:", e);
+  }
+}
+
 export async function getAllSOPDocuments(): Promise<SOPDocument[]> {
-  await ensureSchema();
+  await ensureSOPTable();
   const { rows } = await sql<SOPDocument>`
     SELECT 
       s.id,
@@ -858,7 +880,7 @@ export async function getAllSOPDocuments(): Promise<SOPDocument[]> {
 }
 
 export async function getSOPDocumentById(id: number): Promise<SOPDocument | undefined> {
-  await ensureSchema();
+  await ensureSOPTable();
   const { rows } = await sql<SOPDocument>`
     SELECT 
       s.id,
@@ -888,7 +910,7 @@ export async function createSOPDocument(params: {
   file_size?: number | null;
   uploaded_by?: number | null;
 }): Promise<SOPDocument> {
-  await ensureSchema();
+  await ensureSOPTable();
   const category = params.category?.trim() || "General";
 
   let validUserId: number | null = null;
@@ -929,7 +951,7 @@ export async function updateSOPDocument(
     content?: string;
   }
 ): Promise<SOPDocument | undefined> {
-  await ensureSchema();
+  await ensureSOPTable();
   const existing = await getSOPDocumentById(id);
   if (!existing) return undefined;
 
@@ -951,13 +973,13 @@ export async function updateSOPDocument(
 }
 
 export async function deleteSOPDocument(id: number): Promise<{ success: boolean; error?: string }> {
-  await ensureSchema();
+  await ensureSOPTable();
   await sql`DELETE FROM sop_documents WHERE id = ${id}`;
   return { success: true };
 }
 
 export async function searchSOPDocuments(query: string): Promise<SOPDocument[]> {
-  await ensureSchema();
+  await ensureSOPTable();
   const pattern = `%${query}%`;
   const { rows } = await sql<SOPDocument>`
     SELECT 
