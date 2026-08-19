@@ -1,9 +1,8 @@
 import { auth } from "@/lib/auth";
 import { getAllSOPDocuments, createSOPDocument, getUserByEmail } from "@/lib/db";
+import { extractTextFromDocument } from "@/lib/doc-parser";
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
-import { PDFParse } from "pdf-parse";
-import mammoth from "mammoth";
 
 export const runtime = "nodejs";
 
@@ -11,6 +10,9 @@ const CreateSOPManualSchema = z.object({
   title: z.string().min(1, "Title is required"),
   category: z.string().optional(),
   content: z.string().min(1, "Content is required"),
+  file_name: z.string().nullable().optional(),
+  file_type: z.string().nullable().optional(),
+  file_size: z.number().nullable().optional(),
 });
 
 export async function GET() {
@@ -53,54 +55,26 @@ export async function POST(req: NextRequest) {
       const file = formData.get("file") as File | null;
       const customTitle = formData.get("title") as string | null;
       const category = (formData.get("category") as string | null) || "General";
+      const clientExtractedContent = formData.get("content") as string | null;
 
-      if (!file) {
-        return NextResponse.json({ error: "No file provided in upload request." }, { status: 400 });
+      if (!file && !clientExtractedContent) {
+        return NextResponse.json({ error: "No file or content provided." }, { status: 400 });
       }
 
-      const fileName = file.name;
-      const fileType = file.type || "application/octet-stream";
-      const fileSize = file.size;
+      const fileName = file?.name || "document.txt";
+      const fileType = file?.type || "application/octet-stream";
+      const fileSize = file?.size || null;
       const title = customTitle?.trim() || fileName.replace(/\.[^/.]+$/, "").replace(/[-_]/g, " ");
 
-      let extractedContent = "";
-      const buffer = Buffer.from(await file.arrayBuffer());
+      let content = clientExtractedContent?.trim() || "";
 
-      if (fileType === "application/pdf" || fileName.toLowerCase().endsWith(".pdf")) {
-        try {
-          const parser = new PDFParse({ data: buffer });
-          const textResult = await parser.getText();
-          extractedContent = (textResult.text || "").trim();
-        } catch (pdfErr) {
-          console.error("PDF parse error:", pdfErr);
-          return NextResponse.json(
-            { error: "Failed to extract text from PDF. Please ensure the PDF contains selectable text and is not encrypted." },
-            { status: 400 }
-          );
-        }
-      } else if (
-        fileName.toLowerCase().endsWith(".docx") ||
-        fileName.toLowerCase().endsWith(".doc") ||
-        fileType.includes("wordprocessingml") ||
-        fileType.includes("msword") ||
-        fileType.includes("officedocument")
-      ) {
-        try {
-          const result = await mammoth.extractRawText({ buffer });
-          extractedContent = (result.value || "").trim();
-        } catch (docxErr) {
-          console.error("DOCX parse error:", docxErr);
-          return NextResponse.json(
-            { error: "Failed to parse Word document (.docx). Please ensure it is a valid Microsoft Word .docx file." },
-            { status: 400 }
-          );
-        }
-      } else {
-        // Plain text, Markdown, CSV
-        extractedContent = buffer.toString("utf-8").trim();
+      // If text was not already extracted on the client, extract on the server
+      if (!content && file) {
+        const buffer = Buffer.from(await file.arrayBuffer());
+        content = await extractTextFromDocument(buffer, fileName, fileType);
       }
 
-      if (!extractedContent) {
+      if (!content) {
         return NextResponse.json(
           { error: "The uploaded file contains no readable text content." },
           { status: 400 }
@@ -110,7 +84,7 @@ export async function POST(req: NextRequest) {
       const doc = await createSOPDocument({
         title,
         category,
-        content: extractedContent,
+        content,
         file_name: fileName,
         file_type: fileType,
         file_size: fileSize,
@@ -131,14 +105,17 @@ export async function POST(req: NextRequest) {
       title: parsed.data.title,
       category: parsed.data.category || "General",
       content: parsed.data.content,
+      file_name: parsed.data.file_name ?? null,
+      file_type: parsed.data.file_type ?? null,
+      file_size: parsed.data.file_size ?? null,
       uploaded_by: uploadedBy,
     });
 
     return NextResponse.json(doc, { status: 201 });
   } catch (err: unknown) {
-    console.error("SOP POST Error:", err);
+    console.error("SOP Upload API Error:", err);
     return NextResponse.json(
-      { error: err instanceof Error ? err.message : "An unexpected server error occurred during SOP upload." },
+      { error: err instanceof Error ? err.message : "Failed to process SOP document." },
       { status: 500 }
     );
   }

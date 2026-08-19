@@ -11,14 +11,15 @@ import {
   Plus,
   Sparkles,
   Search,
-  CheckCircle2,
   AlertCircle,
   Clock,
   User,
-  ArrowRight,
   ExternalLink,
   RefreshCw,
   FolderOpen,
+  FileCode,
+  CheckCircle,
+  FileUp,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -34,6 +35,7 @@ import {
 } from "@/components/ui/dialog";
 import { SOPPreviewModal } from "./SOPPreviewModal";
 import type { SOPDocument, SOPCitation, AIChatMessage, Role } from "@/lib/types";
+import JSZip from "jszip";
 
 interface SOPManagerProps {
   initialDocuments: SOPDocument[];
@@ -60,7 +62,7 @@ export function SOPManager({ initialDocuments, role, userName }: SOPManagerProps
       id: "welcome",
       role: "assistant",
       content:
-        `Hello ${userName}! 👋 I am your **MediaHub SOP AI Assistant**, powered by Google Gemini.\n\nI can answer questions regarding standard operating procedures, equipment handling guidelines, safety rules, and event protocols based on our official SOP library.\n\nAsk me anything or pick a topic below!`,
+        `Hello ${userName}! 👋 I am your **MediaHub SOP AI Assistant**, powered by Google Gemini.\n\nI can answer questions regarding standard operating procedures, equipment handling guidelines, safety rules, and event protocols based on our official SOP library.\n\nAsk me anything or pick a suggested question below!`,
     },
   ]);
   const [inputQuery, setInputQuery] = useState("");
@@ -71,19 +73,16 @@ export function SOPManager({ initialDocuments, role, userName }: SOPManagerProps
   const [searchQuery, setSearchQuery] = useState("");
   const [selectedCategory, setSelectedCategory] = useState("All");
   const [uploadModalOpen, setUploadModalOpen] = useState(false);
-  const [manualModalOpen, setManualModalOpen] = useState(false);
-  const [uploading, setUploading] = useState(false);
-  const [uploadError, setUploadError] = useState<string | null>(null);
+  const [uploadModalTab, setUploadModalTab] = useState<"file" | "manual">("file");
 
-  // Manual SOP form
-  const [manualTitle, setManualTitle] = useState("");
-  const [manualCategory, setManualCategory] = useState("General");
-  const [manualContent, setManualContent] = useState("");
-
-  // File Upload form
+  // File Upload state & Live Preview
   const [uploadFile, setUploadFile] = useState<File | null>(null);
-  const [uploadTitle, setUploadTitle] = useState("");
-  const [uploadCategory, setUploadCategory] = useState("General");
+  const [docTitle, setDocTitle] = useState("");
+  const [docCategory, setDocCategory] = useState("General");
+  const [docContent, setDocContent] = useState("");
+  const [parsingFile, setParsingFile] = useState(false);
+  const [savingDoc, setSavingDoc] = useState(false);
+  const [formError, setFormError] = useState<string | null>(null);
 
   // Preview Modal State
   const [previewDoc, setPreviewDoc] = useState<SOPDocument | null>(null);
@@ -106,6 +105,141 @@ export function SOPManager({ initialDocuments, role, userName }: SOPManagerProps
       }
     } catch (e) {
       console.error("Failed to refresh SOP documents", e);
+    }
+  }
+
+  // Handle Client-Side File Extraction
+  async function handleFileSelect(file: File) {
+    setUploadFile(file);
+    setFormError(null);
+    setParsingFile(true);
+
+    const baseTitle = file.name.replace(/\.[^/.]+$/, "").replace(/[-_]/g, " ");
+    if (!docTitle) setDocTitle(baseTitle);
+
+    const nameLower = file.name.toLowerCase();
+
+    try {
+      // 1. Microsoft Word (.docx) client extraction via JSZip
+      if (nameLower.endsWith(".docx")) {
+        const arrayBuffer = await file.arrayBuffer();
+        const zip = await JSZip.loadAsync(arrayBuffer);
+        const docXmlFile = zip.file("word/document.xml");
+
+        if (docXmlFile) {
+          const xml = await docXmlFile.async("text");
+          let clean = xml
+            .replace(/<w:p[^>]*>/g, "\n")
+            .replace(/<w:tab[^>]*\/>/g, "\t")
+            .replace(/<w:br[^>]*\/>/g, "\n")
+            .replace(/<w:t[^>]*>([\s\S]*?)<\/w:t>/g, "$1")
+            .replace(/<[^>]+>/g, "")
+            .replace(/&amp;/g, "&")
+            .replace(/&lt;/g, "<")
+            .replace(/&gt;/g, ">")
+            .replace(/&quot;/g, '"')
+            .replace(/&apos;/g, "'")
+            .replace(/\n\s*\n/g, "\n\n")
+            .trim();
+
+          setDocContent(clean);
+          setParsingFile(false);
+          return;
+        }
+      }
+
+      // 2. Plain Text / Markdown (.txt, .md, .csv)
+      if (
+        nameLower.endsWith(".txt") ||
+        nameLower.endsWith(".md") ||
+        nameLower.endsWith(".markdown") ||
+        file.type.includes("text")
+      ) {
+        const text = await file.text();
+        setDocContent(text.trim());
+        setParsingFile(false);
+        return;
+      }
+
+      // 3. For PDF or binary documents, send to server
+      setDocContent(`[File selected: ${file.name} (${(file.size / 1024).toFixed(1)} KB)]\nText will be extracted on the server.`);
+    } catch (err: unknown) {
+      console.warn("Client parsing fallback:", err);
+      setDocContent(`[File selected: ${file.name}]\nText will be extracted on the server.`);
+    } finally {
+      setParsingFile(false);
+    }
+  }
+
+  // Handle Save Document (File or Manual)
+  async function handleSaveDocument(e: React.FormEvent) {
+    e.preventDefault();
+    if (!docTitle.trim()) {
+      setFormError("Please provide a document title.");
+      return;
+    }
+
+    setSavingDoc(true);
+    setFormError(null);
+
+    try {
+      let res: Response;
+
+      if (uploadFile) {
+        const formData = new FormData();
+        formData.append("file", uploadFile);
+        formData.append("title", docTitle.trim());
+        formData.append("category", docCategory);
+        if (docContent && !docContent.startsWith("[File selected:")) {
+          formData.append("content", docContent.trim());
+        }
+
+        res = await fetch("/api/sop", {
+          method: "POST",
+          body: formData,
+        });
+      } else {
+        if (!docContent.trim()) {
+          throw new Error("Please enter SOP content or select a file.");
+        }
+
+        res = await fetch("/api/sop", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            title: docTitle.trim(),
+            category: docCategory,
+            content: docContent.trim(),
+          }),
+        });
+      }
+
+      let data: any = null;
+      try {
+        const text = await res.text();
+        if (text) data = JSON.parse(text);
+      } catch {
+        // Non-JSON response
+      }
+
+      if (!res.ok) {
+        throw new Error(
+          (data && (data.error?.message || data.error)) ||
+          `Save failed (${res.status}: ${res.statusText || "Server error"})`
+        );
+      }
+
+      // Success
+      setUploadModalOpen(false);
+      setUploadFile(null);
+      setDocTitle("");
+      setDocContent("");
+      setDocCategory("General");
+      refreshDocuments();
+    } catch (err: unknown) {
+      setFormError(err instanceof Error ? err.message : "Failed to save SOP document.");
+    } finally {
+      setSavingDoc(false);
     }
   }
 
@@ -178,7 +312,6 @@ export function SOPManager({ initialDocuments, role, userName }: SOPManagerProps
       setPreviewCitation(citation);
       setPreviewOpen(true);
     } else {
-      // Fetch document directly
       fetch(`/api/sop/${citation.document_id}`)
         .then((res) => res.json())
         .then((doc) => {
@@ -187,96 +320,6 @@ export function SOPManager({ initialDocuments, role, userName }: SOPManagerProps
           setPreviewOpen(true);
         })
         .catch((e) => console.error("Could not fetch cited doc", e));
-    }
-  }
-
-  // Handle File Upload Submit
-  async function handleFileUploadSubmit(e: React.FormEvent) {
-    e.preventDefault();
-    if (!uploadFile) return;
-
-    setUploading(true);
-    setUploadError(null);
-
-    const formData = new FormData();
-    formData.append("file", uploadFile);
-    if (uploadTitle.trim()) formData.append("title", uploadTitle.trim());
-    formData.append("category", uploadCategory);
-
-    try {
-      const res = await fetch("/api/sop", {
-        method: "POST",
-        body: formData,
-      });
-
-      let data: any = null;
-      try {
-        const text = await res.text();
-        if (text) data = JSON.parse(text);
-      } catch {
-        // Response was not JSON
-      }
-
-      if (!res.ok) {
-        throw new Error(
-          (data && (data.error?.message || data.error)) ||
-          `Upload failed (${res.status}: ${res.statusText || "Server error"})`
-        );
-      }
-
-      setUploadModalOpen(false);
-      setUploadFile(null);
-      setUploadTitle("");
-      refreshDocuments();
-    } catch (err: unknown) {
-      setUploadError(err instanceof Error ? err.message : "Upload failed");
-    } finally {
-      setUploading(false);
-    }
-  }
-
-  // Handle Manual Document Submit
-  async function handleManualSubmit(e: React.FormEvent) {
-    e.preventDefault();
-    if (!manualTitle.trim() || !manualContent.trim()) return;
-
-    setUploading(true);
-    setUploadError(null);
-
-    try {
-      const res = await fetch("/api/sop", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          title: manualTitle.trim(),
-          category: manualCategory,
-          content: manualContent.trim(),
-        }),
-      });
-
-      let data: any = null;
-      try {
-        const text = await res.text();
-        if (text) data = JSON.parse(text);
-      } catch {
-        // Response was not JSON
-      }
-
-      if (!res.ok) {
-        throw new Error(
-          (data && (data.error?.message || data.error)) ||
-          `Creation failed (${res.status}: ${res.statusText || "Server error"})`
-        );
-      }
-
-      setManualModalOpen(false);
-      setManualTitle("");
-      setManualContent("");
-      refreshDocuments();
-    } catch (err: unknown) {
-      setUploadError(err instanceof Error ? err.message : "Creation failed");
-    } finally {
-      setUploading(false);
     }
   }
 
@@ -318,29 +361,19 @@ export function SOPManager({ initialDocuments, role, userName }: SOPManagerProps
         </div>
 
         {isAdmin && (
-          <div className="flex items-center gap-2">
-            <Button
-              onClick={() => {
-                setUploadError(null);
-                setUploadModalOpen(true);
-              }}
-              className="bg-purple-600 hover:bg-purple-700 text-white gap-1.5 shadow-sm text-xs md:text-sm"
-            >
-              <Upload className="h-4 w-4" />
-              Upload SOP File
-            </Button>
-            <Button
-              variant="outline"
-              onClick={() => {
-                setUploadError(null);
-                setManualModalOpen(true);
-              }}
-              className="gap-1.5 text-xs md:text-sm"
-            >
-              <Plus className="h-4 w-4" />
-              Write SOP
-            </Button>
-          </div>
+          <Button
+            onClick={() => {
+              setFormError(null);
+              setDocTitle("");
+              setDocContent("");
+              setUploadFile(null);
+              setUploadModalOpen(true);
+            }}
+            className="bg-purple-600 hover:bg-purple-700 text-white gap-1.5 shadow-sm text-xs md:text-sm"
+          >
+            <Upload className="h-4 w-4" />
+            Add SOP Document
+          </Button>
         )}
       </div>
 
@@ -362,14 +395,14 @@ export function SOPManager({ initialDocuments, role, userName }: SOPManagerProps
             ══════════════════════════════════════════════════════════════════════ */}
         <TabsContent value="assistant" className="space-y-4 pt-2">
           {documents.length === 0 && (
-            <div className="p-3 bg-amber-500/10 border border-amber-500/30 rounded-xl text-xs flex items-center justify-between">
+            <div className="p-3.5 bg-amber-500/10 border border-amber-500/30 rounded-xl text-xs flex items-center justify-between">
               <div className="flex items-center gap-2">
                 <AlertCircle className="h-4 w-4 text-amber-600 shrink-0" />
-                <span>No SOP documents uploaded yet. Upload SOP files in the <strong>SOP Library</strong> tab for the AI to train on!</span>
+                <span>No SOP documents uploaded yet. Upload SOP files in the <strong>SOP Library</strong> tab for the AI to learn from!</span>
               </div>
               {isAdmin && (
                 <Button size="sm" variant="outline" onClick={() => setUploadModalOpen(true)} className="h-7 text-xs">
-                  Upload Now
+                  Add SOP Now
                 </Button>
               )}
             </div>
@@ -443,7 +476,7 @@ export function SOPManager({ initialDocuments, role, userName }: SOPManagerProps
                   </div>
                   <div className="bg-muted/40 border px-3 py-2 rounded-xl flex items-center gap-2">
                     <RefreshCw className="h-3.5 w-3.5 animate-spin text-purple-600" />
-                    <span>Searching SOP documents & synthesizing answer…</span>
+                    <span>Searching SOP knowledge base & synthesizing answer…</span>
                   </div>
                 </div>
               )}
@@ -532,13 +565,13 @@ export function SOPManager({ initialDocuments, role, userName }: SOPManagerProps
               <div className="space-y-1">
                 <p className="text-sm font-semibold">No SOP documents found</p>
                 <p className="text-xs text-muted-foreground">
-                  {searchQuery ? "Try adjusting your search query." : "Upload SOP files (.pdf, .txt, .md) to build the knowledge base."}
+                  {searchQuery ? "Try adjusting your search query." : "Upload SOP files (.docx, .pdf, .txt, .md) to build the knowledge base."}
                 </p>
               </div>
               {isAdmin && (
                 <Button onClick={() => setUploadModalOpen(true)} size="sm" className="bg-purple-600 hover:bg-purple-700 text-white gap-1.5 text-xs">
                   <Upload className="h-3.5 w-3.5" />
-                  Upload First SOP
+                  Add First SOP
                 </Button>
               )}
             </div>
@@ -616,126 +649,94 @@ export function SOPManager({ initialDocuments, role, userName }: SOPManagerProps
       </Tabs>
 
       {/* ══════════════════════════════════════════════════════════════════════
-          UPLOAD FILE MODAL
+          COMBINED SOP UPLOAD & LIVE PREVIEW MODAL
           ══════════════════════════════════════════════════════════════════════ */}
       <Dialog open={uploadModalOpen} onOpenChange={setUploadModalOpen}>
-        <DialogContent className="max-w-md w-[95vw]">
+        <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto w-[95vw]">
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2 text-base font-bold">
               <Upload className="h-4.5 w-4.5 text-purple-600" />
-              Upload SOP Document
+              Add Standard Operating Procedure (SOP)
             </DialogTitle>
           </DialogHeader>
 
-          <form onSubmit={handleFileUploadSubmit} className="space-y-4 py-2">
-            {uploadError && (
+          {/* Mode Switch: File Upload vs Manual Entry */}
+          <div className="flex gap-2 border-b pb-2">
+            <button
+              type="button"
+              onClick={() => setUploadModalTab("file")}
+              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors ${
+                uploadModalTab === "file"
+                  ? "bg-purple-600 text-white"
+                  : "bg-muted text-muted-foreground hover:bg-accent"
+              }`}
+            >
+              <FileUp className="h-3.5 w-3.5" />
+              Upload Document (.docx, .pdf, .txt, .md)
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                setUploadModalTab("manual");
+                setUploadFile(null);
+              }}
+              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors ${
+                uploadModalTab === "manual"
+                  ? "bg-purple-600 text-white"
+                  : "bg-muted text-muted-foreground hover:bg-accent"
+              }`}
+            >
+              <FileCode className="h-3.5 w-3.5" />
+              Write / Paste SOP Text
+            </button>
+          </div>
+
+          <form onSubmit={handleSaveDocument} className="space-y-4 py-2">
+            {formError && (
               <p className="text-xs text-destructive bg-destructive/10 p-2.5 rounded-md font-medium">
-                {uploadError}
+                {formError}
               </p>
             )}
 
-            <div className="space-y-1.5">
-              <Label htmlFor="upload-file">Select File (.docx, .pdf, .md, .txt) *</Label>
-              <Input
-                id="upload-file"
-                type="file"
-                accept=".docx,.doc,.pdf,.txt,.md,.markdown"
-                onChange={(e) => {
-                  const f = e.target.files?.[0];
-                  if (f) {
-                    setUploadFile(f);
-                    if (!uploadTitle) {
-                      setUploadTitle(f.name.replace(/\.[^/.]+$/, "").replace(/[-_]/g, " "));
-                    }
-                  }
-                }}
-                required
-              />
-              <p className="text-[11px] text-muted-foreground">
-                Word documents (.docx), PDFs, and Markdown files will be extracted and indexed automatically.
-              </p>
-            </div>
-
-            <div className="space-y-1.5">
-              <Label htmlFor="sop-title">Document Title</Label>
-              <Input
-                id="sop-title"
-                placeholder="e.g. Audio Cable Maintenance & Storage SOP"
-                value={uploadTitle}
-                onChange={(e) => setUploadTitle(e.target.value)}
-              />
-            </div>
-
-            <div className="space-y-1.5">
-              <Label htmlFor="sop-cat">Category</Label>
-              <select
-                id="sop-cat"
-                value={uploadCategory}
-                onChange={(e) => setUploadCategory(e.target.value)}
-                className="w-full h-9 rounded-md border border-input bg-background px-3 py-1 text-sm shadow-xs focus:outline-none focus:ring-1 focus:ring-ring"
-              >
-                <option value="General">General</option>
-                <option value="Photo">Photo</option>
-                <option value="Video">Video</option>
-                <option value="Audio/AV">Audio/AV</option>
-                <option value="Safety & Handling">Safety & Handling</option>
-                <option value="Events">Events</option>
-              </select>
-            </div>
-
-            <DialogFooter className="border-t pt-3">
-              <Button type="button" variant="outline" onClick={() => setUploadModalOpen(false)}>
-                Cancel
-              </Button>
-              <Button
-                type="submit"
-                disabled={uploading || !uploadFile}
-                className="bg-purple-600 hover:bg-purple-700 text-white"
-              >
-                {uploading ? "Extracting & Uploading…" : "Upload & Train AI"}
-              </Button>
-            </DialogFooter>
-          </form>
-        </DialogContent>
-      </Dialog>
-
-      {/* ══════════════════════════════════════════════════════════════════════
-          MANUAL SOP WRITE MODAL
-          ══════════════════════════════════════════════════════════════════════ */}
-      <Dialog open={manualModalOpen} onOpenChange={setManualModalOpen}>
-        <DialogContent className="max-w-xl w-[95vw]">
-          <DialogHeader>
-            <DialogTitle className="flex items-center gap-2 text-base font-bold">
-              <Plus className="h-4.5 w-4.5 text-primary" />
-              Write New SOP Document
-            </DialogTitle>
-          </DialogHeader>
-
-          <form onSubmit={handleManualSubmit} className="space-y-4 py-2">
-            {uploadError && (
-              <p className="text-xs text-destructive bg-destructive/10 p-2.5 rounded-md font-medium">
-                {uploadError}
-              </p>
-            )}
-
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            {/* File Picker Zone */}
+            {uploadModalTab === "file" && (
               <div className="space-y-1.5">
-                <Label htmlFor="manual-title">Document Title *</Label>
+                <Label htmlFor="upload-file-input">Select Word, PDF, or Text File *</Label>
                 <Input
-                  id="manual-title"
-                  placeholder="e.g. Sony FX3 Setup Checklist"
-                  value={manualTitle}
-                  onChange={(e) => setManualTitle(e.target.value)}
+                  id="upload-file-input"
+                  type="file"
+                  accept=".docx,.doc,.pdf,.txt,.md,.markdown"
+                  onChange={(e) => {
+                    const f = e.target.files?.[0];
+                    if (f) handleFileSelect(f);
+                  }}
+                  required={!uploadFile && !docContent}
+                />
+                <p className="text-[11px] text-muted-foreground">
+                  Supported formats: <strong>.docx (Word)</strong>, <strong>.pdf</strong>, <strong>.md (Markdown)</strong>, <strong>.txt</strong>
+                </p>
+              </div>
+            )}
+
+            {/* Document Title & Category */}
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+              <div className="sm:col-span-2 space-y-1.5">
+                <Label htmlFor="sop-doc-title">Document Title *</Label>
+                <Input
+                  id="sop-doc-title"
+                  placeholder="e.g. Sony Camera Setup & Battery SOP"
+                  value={docTitle}
+                  onChange={(e) => setDocTitle(e.target.value)}
                   required
                 />
               </div>
 
               <div className="space-y-1.5">
-                <Label htmlFor="manual-cat">Category</Label>
+                <Label htmlFor="sop-doc-cat">Category</Label>
                 <select
-                  id="manual-cat"
-                  value={manualCategory}
-                  onChange={(e) => setManualCategory(e.target.value)}
+                  id="sop-doc-cat"
+                  value={docCategory}
+                  onChange={(e) => setDocCategory(e.target.value)}
                   className="w-full h-9 rounded-md border border-input bg-background px-3 py-1 text-sm shadow-xs focus:outline-none focus:ring-1 focus:ring-ring"
                 >
                   <option value="General">General</option>
@@ -748,29 +749,51 @@ export function SOPManager({ initialDocuments, role, userName }: SOPManagerProps
               </div>
             </div>
 
+            {/* Content & Live Preview Box */}
             <div className="space-y-1.5">
-              <Label htmlFor="manual-content">SOP Content / Instructions *</Label>
-              <textarea
-                id="manual-content"
-                rows={10}
-                placeholder="Enter step-by-step operating procedures, warnings, and guidelines here..."
-                value={manualContent}
-                onChange={(e) => setManualContent(e.target.value)}
-                className="w-full rounded-md border border-input bg-background p-3 text-xs leading-relaxed shadow-xs focus:outline-none focus:ring-1 focus:ring-ring"
-                required
-              />
+              <div className="flex items-center justify-between">
+                <Label htmlFor="sop-doc-content">
+                  {uploadModalTab === "file" ? "Extracted Text Preview" : "SOP Content & Instructions *"}
+                </Label>
+                {docContent && (
+                  <span className="text-[11px] text-muted-foreground font-mono">
+                    {docContent.split(/\s+/).filter(Boolean).length} words ({docContent.length} characters)
+                  </span>
+                )}
+              </div>
+
+              {parsingFile ? (
+                <div className="p-8 border border-dashed rounded-lg text-center text-xs text-muted-foreground flex items-center justify-center gap-2 bg-muted/20">
+                  <RefreshCw className="h-4 w-4 animate-spin text-purple-600" />
+                  <span>Extracting document text…</span>
+                </div>
+              ) : (
+                <textarea
+                  id="sop-doc-content"
+                  rows={8}
+                  placeholder={
+                    uploadModalTab === "file"
+                      ? "Select a file above to view extracted text here..."
+                      : "Type or paste SOP guidelines, equipment safety rules, and step-by-step instructions here..."
+                  }
+                  value={docContent}
+                  onChange={(e) => setDocContent(e.target.value)}
+                  className="w-full rounded-md border border-input bg-background p-3 text-xs leading-relaxed font-sans shadow-xs focus:outline-none focus:ring-1 focus:ring-ring"
+                  required
+                />
+              )}
             </div>
 
             <DialogFooter className="border-t pt-3">
-              <Button type="button" variant="outline" onClick={() => setManualModalOpen(false)}>
+              <Button type="button" variant="outline" onClick={() => setUploadModalOpen(false)}>
                 Cancel
               </Button>
               <Button
                 type="submit"
-                disabled={uploading || !manualTitle.trim() || !manualContent.trim()}
+                disabled={savingDoc || parsingFile || !docTitle.trim() || !docContent.trim()}
                 className="bg-purple-600 hover:bg-purple-700 text-white"
               >
-                {uploading ? "Saving…" : "Save SOP"}
+                {savingDoc ? "Saving & Training AI…" : "Save SOP to Database"}
               </Button>
             </DialogFooter>
           </form>
