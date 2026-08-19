@@ -5,7 +5,19 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { signOut } from "next-auth/react";
 import { useTheme } from "next-themes";
-import { LayoutGrid, Calendar, Tag, QrCode, Users as UsersIcon, Moon, Sun, LogOut, ChevronLeft, ChevronRight, Bot } from "lucide-react";
+import {
+  LayoutGrid,
+  Calendar,
+  Tag,
+  QrCode,
+  Users as UsersIcon,
+  Moon,
+  Sun,
+  LogOut,
+  ChevronLeft,
+  ChevronRight,
+  Bot,
+} from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { cn, roleBadgeClass } from "@/lib/utils";
@@ -16,13 +28,38 @@ interface SidebarProps {
   role: Role;
 }
 
-const allNavItems = [
-  { href: "/dashboard",        label: "Equipment", icon: LayoutGrid,  roles: ["admin", "verified", "viewer"] as Role[] },
-  { href: "/dashboard/events", label: "Events",    icon: Calendar,    roles: ["admin", "verified", "viewer"] as Role[] },
-  { href: "/dashboard/sop",    label: "SOP & AI",  icon: Bot,         roles: ["admin", "verified", "viewer"] as Role[] },
-  { href: "/dashboard/tags",   label: "Tags",      icon: Tag,          roles: ["admin", "verified", "viewer"] as Role[] },
-  { href: "/dashboard/scan",   label: "Scan QR",   icon: QrCode,       roles: ["admin", "verified"] as Role[] },
-  { href: "/dashboard/users",  label: "Users",     icon: UsersIcon,    roles: ["admin"] as Role[] },
+interface NavGroup {
+  title: string;
+  items: {
+    href: string;
+    label: string;
+    icon: any;
+    roles: Role[];
+  }[];
+}
+
+const navGroups: NavGroup[] = [
+  {
+    title: "Equipment & Events",
+    items: [
+      { href: "/dashboard", label: "Equipment", icon: LayoutGrid, roles: ["admin", "verified", "viewer"] },
+      { href: "/dashboard/events", label: "Events", icon: Calendar, roles: ["admin", "verified", "viewer"] },
+      { href: "/dashboard/scan", label: "Scan QR", icon: QrCode, roles: ["admin", "verified"] },
+    ],
+  },
+  {
+    title: "SOP & AI Assistant",
+    items: [
+      { href: "/dashboard/sop", label: "SOP & AI", icon: Bot, roles: ["admin", "verified", "viewer"] },
+    ],
+  },
+  {
+    title: "Admin & Settings",
+    items: [
+      { href: "/dashboard/tags", label: "Tags", icon: Tag, roles: ["admin", "verified", "viewer"] },
+      { href: "/dashboard/users", label: "Users", icon: UsersIcon, roles: ["admin"] },
+    ],
+  },
 ];
 
 const STORAGE_KEY = "sidebar-collapsed";
@@ -33,10 +70,9 @@ export function Sidebar({ userName, role }: SidebarProps) {
   const mounted = useSyncExternalStore(
     () => () => {},
     () => true,
-    () => false,
+    () => false
   );
   const [collapsed, setCollapsed] = useState(false);
-  const navItems = allNavItems.filter((item) => item.roles.includes(role));
 
   // Restore preference after hydration to avoid SSR mismatch
   useEffect(() => {
@@ -51,6 +87,14 @@ export function Sidebar({ userName, role }: SidebarProps) {
     });
   }
 
+  // Filter groups based on user role
+  const visibleGroups = navGroups
+    .map((group) => ({
+      ...group,
+      items: group.items.filter((item) => item.roles.includes(role)),
+    }))
+    .filter((group) => group.items.length > 0);
+
   return (
     <aside
       className={cn(
@@ -58,7 +102,7 @@ export function Sidebar({ userName, role }: SidebarProps) {
         collapsed ? "w-16" : "w-60"
       )}
     >
-      {/* Collapse / expand toggle — tall rectangle flush with the right edge, vertically centred */}
+      {/* Collapse / expand toggle */}
       <Button
         variant="ghost"
         aria-label={collapsed ? "Expand sidebar" : "Collapse sidebar"}
@@ -70,29 +114,43 @@ export function Sidebar({ userName, role }: SidebarProps) {
 
       {/* Logo */}
       <div className="flex items-center px-4 py-4 border-b min-w-0">
-        {!collapsed && (
-          <h1 className="font-bold text-lg tracking-tight truncate">MediaHub</h1>
-        )}
+        {!collapsed && <h1 className="font-bold text-lg tracking-tight truncate">MediaHub</h1>}
       </div>
 
-      {/* Nav with larger text and icons */}
-      <nav className="flex-1 px-2.5 py-3 space-y-1">
-        {navItems.map(({ href, label, icon: Icon }) => (
-          <Link
-            key={href}
-            href={href}
-            title={collapsed ? label : undefined}
-            className={cn(
-              "flex items-center gap-3 px-3.5 py-2.5 rounded-lg text-base transition-colors",
-              collapsed && "justify-center px-2 py-2.5",
-              pathname === href
-                ? "bg-primary text-primary-foreground font-semibold shadow-sm"
-                : "text-muted-foreground hover:text-foreground hover:bg-accent font-medium"
+      {/* Grouped Nav */}
+      <nav className="flex-1 px-2.5 py-3 space-y-4 overflow-y-auto">
+        {visibleGroups.map((group, groupIdx) => (
+          <div key={group.title} className="space-y-1">
+            {/* Section Header */}
+            {!collapsed ? (
+              <div className="px-3 pt-1 pb-1">
+                <span className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground/70">
+                  {group.title}
+                </span>
+              </div>
+            ) : (
+              groupIdx > 0 && <div className="border-t my-2 mx-1 border-border/50" />
             )}
-          >
-            <Icon className="h-5 w-5 shrink-0" />
-            {!collapsed && <span className="truncate">{label}</span>}
-          </Link>
+
+            {/* Nav Items */}
+            {group.items.map(({ href, label, icon: Icon }) => (
+              <Link
+                key={href}
+                href={href}
+                title={collapsed ? label : undefined}
+                className={cn(
+                  "flex items-center gap-3 px-3.5 py-2 rounded-lg text-sm transition-colors",
+                  collapsed && "justify-center px-2 py-2",
+                  pathname === href
+                    ? "bg-primary text-primary-foreground font-semibold shadow-sm"
+                    : "text-muted-foreground hover:text-foreground hover:bg-accent font-medium"
+                )}
+              >
+                <Icon className="h-4.5 w-4.5 shrink-0" />
+                {!collapsed && <span className="truncate">{label}</span>}
+              </Link>
+            ))}
+          </div>
         ))}
       </nav>
 
@@ -101,9 +159,7 @@ export function Sidebar({ userName, role }: SidebarProps) {
         {!collapsed && (
           <div className="flex items-center gap-2 px-1">
             <span className="text-sm font-semibold truncate flex-1 min-w-0">{userName}</span>
-            <Badge className={cn(roleBadgeClass[role], "shrink-0")}>
-              {role}
-            </Badge>
+            <Badge className={cn(roleBadgeClass[role], "shrink-0")}>{role}</Badge>
           </div>
         )}
         <div className={cn("flex gap-1.5", collapsed && "flex-col items-center")}>

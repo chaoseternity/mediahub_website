@@ -5,7 +5,19 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { signOut } from "next-auth/react";
 import { useTheme } from "next-themes";
-import { LayoutGrid, Calendar, Tag, QrCode, Users as UsersIcon, Moon, Sun, LogOut, Menu, X, Bot } from "lucide-react";
+import {
+  LayoutGrid,
+  Calendar,
+  Tag,
+  QrCode,
+  Users as UsersIcon,
+  Moon,
+  Sun,
+  LogOut,
+  Menu,
+  X,
+  Bot,
+} from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { cn, roleBadgeClass } from "@/lib/utils";
@@ -16,25 +28,56 @@ interface MobileNavProps {
   role: Role;
 }
 
-const allNavItems = [
-  { href: "/dashboard",        label: "Equipment", icon: LayoutGrid,  roles: ["admin", "verified", "viewer"] as Role[] },
-  { href: "/dashboard/events", label: "Events",    icon: Calendar,    roles: ["admin", "verified", "viewer"] as Role[] },
-  { href: "/dashboard/sop",    label: "SOP & AI",  icon: Bot,         roles: ["admin", "verified", "viewer"] as Role[] },
-  { href: "/dashboard/tags",   label: "Tags",      icon: Tag,          roles: ["admin", "verified", "viewer"] as Role[] },
-  { href: "/dashboard/scan",   label: "Scan QR",   icon: QrCode,       roles: ["admin", "verified"] as Role[] },
-  { href: "/dashboard/users",  label: "Users",     icon: UsersIcon,    roles: ["admin"] as Role[] },
+interface NavGroup {
+  title: string;
+  items: {
+    href: string;
+    label: string;
+    icon: any;
+    roles: Role[];
+  }[];
+}
+
+const navGroups: NavGroup[] = [
+  {
+    title: "Equipment & Events",
+    items: [
+      { href: "/dashboard", label: "Equipment", icon: LayoutGrid, roles: ["admin", "verified", "viewer"] },
+      { href: "/dashboard/events", label: "Events", icon: Calendar, roles: ["admin", "verified", "viewer"] },
+      { href: "/dashboard/scan", label: "Scan QR", icon: QrCode, roles: ["admin", "verified"] },
+    ],
+  },
+  {
+    title: "SOP & AI Assistant",
+    items: [
+      { href: "/dashboard/sop", label: "SOP & AI", icon: Bot, roles: ["admin", "verified", "viewer"] },
+    ],
+  },
+  {
+    title: "Admin & Settings",
+    items: [
+      { href: "/dashboard/tags", label: "Tags", icon: Tag, roles: ["admin", "verified", "viewer"] },
+      { href: "/dashboard/users", label: "Users", icon: UsersIcon, roles: ["admin"] },
+    ],
+  },
 ];
 
 export function MobileNav({ userName, role }: MobileNavProps) {
   const [open, setOpen] = useState(false);
-  const navItems = allNavItems.filter((item) => item.roles.includes(role));
   const pathname = usePathname();
   const { resolvedTheme, setTheme } = useTheme();
   const mounted = useSyncExternalStore(
     () => () => {},
     () => true,
-    () => false,
+    () => false
   );
+
+  const visibleGroups = navGroups
+    .map((group) => ({
+      ...group,
+      items: group.items.filter((item) => item.roles.includes(role)),
+    }))
+    .filter((group) => group.items.length > 0);
 
   return (
     <>
@@ -87,22 +130,32 @@ export function MobileNav({ userName, role }: MobileNavProps) {
           </Button>
         </div>
 
-        <nav className="flex-1 px-3 py-3 space-y-1">
-          {navItems.map(({ href, label, icon: Icon }) => (
-            <Link
-              key={href}
-              href={href}
-              onClick={() => setOpen(false)}
-              className={cn(
-                "flex items-center gap-3 px-3.5 py-2.5 rounded-lg text-base transition-colors",
-                pathname === href
-                  ? "bg-primary text-primary-foreground font-semibold shadow-sm"
-                  : "text-muted-foreground hover:text-foreground hover:bg-accent font-medium"
-              )}
-            >
-              <Icon className="h-5 w-5 shrink-0" />
-              {label}
-            </Link>
+        <nav className="flex-1 px-3 py-3 space-y-4 overflow-y-auto">
+          {visibleGroups.map((group) => (
+            <div key={group.title} className="space-y-1">
+              <div className="px-3 pt-1 pb-1">
+                <span className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground/70">
+                  {group.title}
+                </span>
+              </div>
+
+              {group.items.map(({ href, label, icon: Icon }) => (
+                <Link
+                  key={href}
+                  href={href}
+                  onClick={() => setOpen(false)}
+                  className={cn(
+                    "flex items-center gap-3 px-3.5 py-2.5 rounded-lg text-sm transition-colors",
+                    pathname === href
+                      ? "bg-primary text-primary-foreground font-semibold shadow-sm"
+                      : "text-muted-foreground hover:text-foreground hover:bg-accent font-medium"
+                  )}
+                >
+                  <Icon className="h-4.5 w-4.5 shrink-0" />
+                  {label}
+                </Link>
+              ))}
+            </div>
           ))}
         </nav>
 
