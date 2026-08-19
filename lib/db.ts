@@ -847,11 +847,20 @@ async function ensureSOPTable(): Promise<void> {
         file_name TEXT,
         file_type TEXT,
         file_size INT,
-        uploaded_by INT REFERENCES users(id) ON DELETE SET NULL,
+        uploaded_by INT,
         created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
         updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
       );
     `;
+    try {
+      await sql`ALTER TABLE sop_documents ADD COLUMN IF NOT EXISTS file_name TEXT;`;
+      await sql`ALTER TABLE sop_documents ADD COLUMN IF NOT EXISTS file_type TEXT;`;
+      await sql`ALTER TABLE sop_documents ADD COLUMN IF NOT EXISTS file_size INT;`;
+      await sql`ALTER TABLE sop_documents ADD COLUMN IF NOT EXISTS uploaded_by INT;`;
+      await sql`ALTER TABLE sop_documents ADD COLUMN IF NOT EXISTS category TEXT DEFAULT 'General';`;
+    } catch {
+      // Columns may already exist
+    }
   } catch (e) {
     console.warn("ensureSOPTable notice:", e);
   }
@@ -915,8 +924,12 @@ export async function createSOPDocument(params: {
 
   let validUserId: number | null = null;
   if (params.uploaded_by) {
-    const userExists = await getUserById(params.uploaded_by);
-    if (userExists) validUserId = params.uploaded_by;
+    try {
+      const userExists = await getUserById(params.uploaded_by);
+      if (userExists) validUserId = params.uploaded_by;
+    } catch {
+      validUserId = null;
+    }
   }
 
   const { rows } = await sql<SOPDocument>`

@@ -20,11 +20,9 @@ export async function GET() {
     const documents = await getAllSOPDocuments();
     return NextResponse.json(documents);
   } catch (err: unknown) {
+    const errMsg = err instanceof Error ? `${err.name}: ${err.message}` : "Failed to load SOP documents";
     console.error("Failed to fetch SOP documents:", err);
-    return NextResponse.json(
-      { error: err instanceof Error ? err.message : "Failed to load SOP documents" },
-      { status: 500 }
-    );
+    return NextResponse.json({ error: errMsg }, { status: 500 });
   }
 }
 
@@ -32,7 +30,7 @@ export async function POST(req: NextRequest) {
   try {
     const session = await auth();
     if (!session) {
-      return NextResponse.json({ error: "Unauthorized. Please log in." }, { status: 401 });
+      return NextResponse.json({ error: "Unauthorized. Please log in to MediaHub." }, { status: 401 });
     }
 
     const email = session.user?.email;
@@ -41,7 +39,7 @@ export async function POST(req: NextRequest) {
 
     if (!isAdmin) {
       return NextResponse.json(
-        { error: "Forbidden: Only Admin accounts can upload SOP documents." },
+        { error: "Forbidden: Only Admin accounts can upload and manage SOP documents." },
         { status: 403 }
       );
     }
@@ -49,7 +47,31 @@ export async function POST(req: NextRequest) {
     const uploadedBy = currentUser?.id ?? (session.user?.id ? Number(session.user.id) : null);
     const contentType = req.headers.get("content-type") || "";
 
-    // 1. Multipart Form Data (File Upload)
+    // 1. JSON Request (Client pre-extracted text or manual input)
+    if (contentType.includes("application/json")) {
+      const body = await req.json();
+      const parsed = CreateSOPManualSchema.safeParse(body);
+      if (!parsed.success) {
+        return NextResponse.json(
+          { error: parsed.error.issues.map((i) => i.message).join(", ") },
+          { status: 400 }
+        );
+      }
+
+      const doc = await createSOPDocument({
+        title: parsed.data.title.trim(),
+        category: parsed.data.category || "General",
+        content: parsed.data.content.trim(),
+        file_name: parsed.data.file_name ?? null,
+        file_type: parsed.data.file_type ?? null,
+        file_size: parsed.data.file_size ?? null,
+        uploaded_by: uploadedBy,
+      });
+
+      return NextResponse.json(doc, { status: 201 });
+    }
+
+    // 2. Multipart Form Data (Raw File Upload)
     if (contentType.includes("multipart/form-data")) {
       const formData = await req.formData();
       const file = formData.get("file") as File | null;
@@ -58,7 +80,7 @@ export async function POST(req: NextRequest) {
       const clientExtractedContent = formData.get("content") as string | null;
 
       if (!file && !clientExtractedContent) {
-        return NextResponse.json({ error: "No file or content provided." }, { status: 400 });
+        return NextResponse.json({ error: "No file or text content provided in upload." }, { status: 400 });
       }
 
       const fileName = file?.name || "document.txt";
@@ -68,7 +90,7 @@ export async function POST(req: NextRequest) {
 
       let content = clientExtractedContent?.trim() || "";
 
-      // If text was not already extracted on the client, extract on the server
+      // If content was not extracted client-side, extract on the server
       if (!content && file) {
         const buffer = Buffer.from(await file.arrayBuffer());
         content = await extractTextFromDocument(buffer, fileName, fileType);
@@ -94,29 +116,10 @@ export async function POST(req: NextRequest) {
       return NextResponse.json(doc, { status: 201 });
     }
 
-    // 2. Direct JSON Body
-    const body = await req.json();
-    const parsed = CreateSOPManualSchema.safeParse(body);
-    if (!parsed.success) {
-      return NextResponse.json({ error: parsed.error.flatten() }, { status: 400 });
-    }
-
-    const doc = await createSOPDocument({
-      title: parsed.data.title,
-      category: parsed.data.category || "General",
-      content: parsed.data.content,
-      file_name: parsed.data.file_name ?? null,
-      file_type: parsed.data.file_type ?? null,
-      file_size: parsed.data.file_size ?? null,
-      uploaded_by: uploadedBy,
-    });
-
-    return NextResponse.json(doc, { status: 201 });
+    return NextResponse.json({ error: "Unsupported Content-Type header." }, { status: 400 });
   } catch (err: unknown) {
-    console.error("SOP Upload API Error:", err);
-    return NextResponse.json(
-      { error: err instanceof Error ? err.message : "Failed to process SOP document." },
-      { status: 500 }
-    );
+    const errorDetail = err instanceof Error ? `${err.name}: ${err.message}` : "Internal server error occurred.";
+    console.error("SOP Upload API Error Detail:", err);
+    return NextResponse.json({ error: errorDetail }, { status: 500 });
   }
 }

@@ -185,24 +185,8 @@ export function SOPManager({ initialDocuments, role, userName }: SOPManagerProps
     try {
       let res: Response;
 
-      if (uploadFile) {
-        const formData = new FormData();
-        formData.append("file", uploadFile);
-        formData.append("title", docTitle.trim());
-        formData.append("category", docCategory);
-        if (docContent && !docContent.startsWith("[File selected:")) {
-          formData.append("content", docContent.trim());
-        }
-
-        res = await fetch("/api/sop", {
-          method: "POST",
-          body: formData,
-        });
-      } else {
-        if (!docContent.trim()) {
-          throw new Error("Please enter SOP content or select a file.");
-        }
-
+      if (docContent && !docContent.startsWith("[File selected:")) {
+        // Send fast, clean, reliable JSON payload with extracted text
         res = await fetch("/api/sop", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -210,23 +194,40 @@ export function SOPManager({ initialDocuments, role, userName }: SOPManagerProps
             title: docTitle.trim(),
             category: docCategory,
             content: docContent.trim(),
+            file_name: uploadFile?.name ?? null,
+            file_type: uploadFile?.type ?? null,
+            file_size: uploadFile?.size ?? null,
           }),
         });
+      } else if (uploadFile) {
+        const formData = new FormData();
+        formData.append("file", uploadFile);
+        formData.append("title", docTitle.trim());
+        formData.append("category", docCategory);
+
+        res = await fetch("/api/sop", {
+          method: "POST",
+          body: formData,
+        });
+      } else {
+        throw new Error("Please select a file or enter SOP content.");
       }
 
       let data: any = null;
+      let rawText = "";
       try {
-        const text = await res.text();
-        if (text) data = JSON.parse(text);
+        rawText = await res.text();
+        if (rawText) data = JSON.parse(rawText);
       } catch {
         // Non-JSON response
       }
 
       if (!res.ok) {
-        throw new Error(
-          (data && (data.error?.message || data.error)) ||
-          `Save failed (${res.status}: ${res.statusText || "Server error"})`
-        );
+        const errorMsg =
+          (data && (typeof data.error === "string" ? data.error : data.error?.message)) ||
+          rawText ||
+          `Server error (HTTP ${res.status})`;
+        throw new Error(errorMsg);
       }
 
       // Success
