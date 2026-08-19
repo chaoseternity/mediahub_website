@@ -46,10 +46,10 @@ interface SOPManagerProps {
 }
 
 const PRESET_QUESTIONS = [
-  "What is the procedure for returning damaged or missing equipment?",
-  "How should audio cables and XLRs be wrapped and stored?",
-  "What are the pre-event battery and SD card check protocols?",
-  "Who is responsible for equipment handover during event rehearsals?",
+  "What is our procedure for returning damaged equipment?",
+  "Which cameras and lenses are currently available in inventory?",
+  "What is the mass/weight and specs of a Sony FX3 camera?",
+  "Where are our wireless microphone kits stored?",
 ];
 
 const CATEGORIES = ["All", "General", "Photo", "Video", "Audio/AV", "Safety & Handling", "Events"];
@@ -64,7 +64,7 @@ export function SOPManager({ initialDocuments, role, userName }: SOPManagerProps
       id: "welcome",
       role: "assistant",
       content:
-        `Hello ${userName}! 👋 I am your **MediaHub SOP AI Assistant**, powered by Google Gemini.\n\nI can answer questions regarding standard operating procedures, equipment handling guidelines, safety rules, and event protocols based on our official SOP library.\n\nAsk me anything or pick a suggested question below!`,
+        `Hello ${userName}! 👋 I am your **MediaHub AI Operations Assistant**, powered by Google Gemini.\n\nI have real-time access to:\n1. 📋 **Official SOPs & Guidelines** (handling rules, safety protocols, return checklists)\n2. 📦 **Live Inventory & Availability** (equipment status, storage locations, active checkouts)\n3. 🌐 **Technical Gear Specifications & Specs** (camera mass, lens compatibility, sensor specs)\n\nAsk me anything or tap one of the suggested prompts below!`,
     },
   ]);
   const [inputQuery, setInputQuery] = useState("");

@@ -1,5 +1,5 @@
 import { auth } from "@/lib/auth";
-import { getAllSOPDocuments } from "@/lib/db";
+import { getAllSOPDocuments, getAllEquipment, getAllEvents } from "@/lib/db";
 import { askSOPAssistant } from "@/lib/gemini";
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
@@ -31,13 +31,19 @@ export async function POST(req: NextRequest) {
 
     const { question, history } = parsed.data;
 
-    // Fetch all current SOP documents from PostgreSQL
-    const sopDocuments = await getAllSOPDocuments();
+    // Fetch SOP documents, live equipment inventory, and events in parallel
+    const [sopDocuments, equipmentList, events] = await Promise.all([
+      getAllSOPDocuments().catch(() => []),
+      getAllEquipment().catch(() => []),
+      getAllEvents().catch(() => []),
+    ]);
 
     const result = await askSOPAssistant({
       question,
       history,
       sopDocuments,
+      equipmentList,
+      events,
     });
 
     return NextResponse.json(result);

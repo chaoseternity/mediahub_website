@@ -1,5 +1,5 @@
 import { GoogleGenerativeAI } from "@google/generative-ai";
-import type { SOPDocument, SOPCitation } from "./types";
+import type { SOPDocument, SOPCitation, Equipment, AppEvent } from "./types";
 
 function getGeminiClient(): GoogleGenerativeAI {
   const apiKey = process.env.GEMINI_API_KEY;
@@ -13,6 +13,8 @@ export interface SOPQueryContext {
   question: string;
   history?: { role: "user" | "assistant"; content: string }[];
   sopDocuments: SOPDocument[];
+  equipmentList?: Equipment[];
+  events?: AppEvent[];
 }
 
 export interface SOPAnswerResult {
@@ -59,70 +61,113 @@ export async function askSOPAssistant({
   question,
   history = [],
   sopDocuments,
+  equipmentList = [],
+  events = [],
 }: SOPQueryContext): Promise<SOPAnswerResult> {
   const genAI = getGeminiClient();
 
-  if (!sopDocuments || sopDocuments.length === 0) {
-    return {
-      answer:
-        "There are currently no SOP documents uploaded in MediaHub. Please ask an Admin to upload Standard Operating Procedure documents in the SOP Library tab before asking questions.",
-      citations: [],
-    };
-  }
-
   const relevantDocs = retrieveRelevantDocuments(question, sopDocuments);
 
-  // Build context payload
-  const contextText = relevantDocs
-    .map(
-      (doc) =>
-        `=== SOP DOCUMENT [ID: ${doc.id}] ===\nTitle: ${doc.title}\nCategory: ${doc.category}\n${
-          doc.file_name ? `File: ${doc.file_name}\n` : ""
-        }Content:\n${doc.content}\n=== END DOCUMENT [ID: ${doc.id}] ===`
-    )
-    .join("\n\n");
+  // 1. Build SOP Context
+  let sopContextText = "";
+  if (relevantDocs.length > 0) {
+    sopContextText = relevantDocs
+      .map(
+        (doc) =>
+          `=== SOP DOCUMENT [ID: ${doc.id}] ===\nTitle: ${doc.title}\nCategory: ${doc.category}\n${
+            doc.file_name ? `File: ${doc.file_name}\n` : ""
+          }Content:\n${doc.content}\n=== END DOCUMENT [ID: ${doc.id}] ===`
+      )
+      .join("\n\n");
+  } else {
+    sopContextText = "No official SOP documents uploaded yet.";
+  }
 
-  const systemInstruction = `You are the official MediaHub SOP (Standard Operating Procedure) AI Assistant.
-Your mission is to provide accurate, helpful, and concise operational instructions to media team members (Photo, Video, Audio/AV, and Event In-Charges) based strictly on the provided SOP documents.
+  // 2. Build Live Equipment Inventory Context
+  let inventoryContextText = "";
+  if (equipmentList.length > 0) {
+    inventoryContextText = equipmentList
+      .map((item) => {
+        let statusText: string = item.status;
+        if (item.status === "Checked Out" && item.checked_out_by_name) {
+          statusText = `Checked Out by ${item.checked_out_by_name}${
+            item.expected_return_at ? ` (Expected Return: ${item.expected_return_at})` : ""
+          }${item.checkout_location ? ` at ${item.checkout_location}` : ""}`;
+        } else if (item.status.startsWith("In Event") && item.active_event_name) {
+          statusText = `${item.status} ("${item.active_event_name}" @ ${item.active_event_location || "Event Venue"})`;
+        }
 
-RULES:
-1. Grounding: Rely strictly on the information in the provided SOP Documents. Do NOT make up rules or policies not found in the documents.
-2. If the answer is not contained in the provided SOPs, state clearly: "I couldn't find specific instructions for this in the uploaded SOPs. Please check with an Admin or Section In-Charge."
-3. Formatting: Use structured Markdown with bold key terms, numbered steps for procedures, and bullet points.
-4. Source Attribution: At the very end of your response, you MUST output a JSON block of cited sources in the exact format:
+        return `• [ID: ${item.id}] ${item.name} | Status: ${statusText} | Location: ${item.location} | Condition: ${item.condition}${
+          item.serial_number ? ` | S/N: ${item.serial_number}` : ""
+        }${item.tags && item.tags.length > 0 ? ` | Tags: ${item.tags.join(", ")}` : ""}${
+          item.description ? ` | Desc: ${item.description}` : ""
+        }`;
+      })
+      .join("\n");
+  } else {
+    inventoryContextText = "No equipment currently registered in inventory.";
+  }
+
+  // 3. Build Upcoming Events Context
+  let eventsContextText = "";
+  if (events.length > 0) {
+    eventsContextText = events
+      .slice(0, 10)
+      .map(
+        (ev) =>
+          `• [Event #${ev.id}] "${ev.name}" | Location: ${ev.location} | Time: ${new Date(
+            ev.start_time
+          ).toLocaleString("en-GB")} to ${new Date(ev.end_time).toLocaleString("en-GB")}${
+            ev.has_rehearsal ? " (Includes Rehearsal)" : ""
+          }`
+      )
+      .join("\n");
+  } else {
+    eventsContextText = "No upcoming events scheduled.";
+  }
+
+  const systemInstruction = `You are the official MediaHub AI Assistant — an intelligent operations partner for media production teams (Photo, Video, Audio/AV, and Event In-Charges).
+
+YOU HAVE 3 CORE CAPABILITIES:
+1. Standard Operating Procedures (SOP): Answer guidelines, rules, checklists, and handling procedures based on the provided SOP Documents. When referencing SOPs, always append the source citations JSON block.
+2. Live Equipment Inventory & Availability: Answer real-time questions about equipment status (Available, Checked Out, In Event, Maintenance), storage locations, who has items checked out, and upcoming event allocations based on the Live Inventory Data.
+3. Technical Specifications & Web Knowledge: Answer questions regarding technical camera/lens specs, mass/weight (e.g. Sony FX3 mass, lens mounts, sensor specs), audio settings, best practices, and equipment comparisons using comprehensive technical and web knowledge.
+
+FORMATTING & CITATION RULES:
+• Formatting: Use structured Markdown with bold keywords, numbered steps for procedures, and tables when listing or comparing items.
+• Tone: Professional, clear, concise, and helpful.
+• Source Attribution: If and only if your answer references specific uploaded SOP Documents, append a json_citations block at the very end in this exact format:
 \`\`\`json_citations
 [
   {
     "document_id": <number>,
     "document_title": "<exact document title>",
     "section_title": "<section heading or topic>",
-    "snippet": "<exact 1-2 sentence excerpt from the SOP document that supports this answer>"
+    "snippet": "<exact 1-2 sentence excerpt from the SOP document>"
   }
 ]
 \`\`\`
-Do not omit the \`\`\`json_citations block. Ensure the JSON is valid.`;
+If answering purely about live inventory availability, technical gear specs, or general knowledge, you may omit or output an empty \`\`\`json_citations []\`\`\` block.`;
 
-  const prompt = `Here are the official MediaHub SOP Documents for reference:
+  const prompt = `=== SYSTEM DATA & KNOWLEDGE BASE ===
 
-${contextText}
+[1. LIVE MEDIAHUB INVENTORY & EQUIPMENT STATUS]
+${inventoryContextText}
 
-Previous Conversation History:
+[2. UPCOMING EVENTS & SCHEDULE]
+${eventsContextText}
+
+[3. OFFICIAL STANDARD OPERATING PROCEDURES (SOP)]
+${sopContextText}
+
+=== CONVERSATION HISTORY ===
 ${history.map((h) => `${h.role === "user" ? "User" : "Assistant"}: ${h.content}`).join("\n")}
 
 User Question: ${question}
 
-Please answer the user's question clearly according to the SOP documents and append the \`\`\`json_citations block.`;
+Please answer the user's question clearly and accurately using the appropriate knowledge source (Live Inventory, SOPs, or Technical/Web specs).`;
 
-  // Model fallback hierarchy as requested:
-  // 1. 3.5 Flash Lite
-  // 2. 3.1 Flash Lite
-  // 3. 3.7 Flash
-  // 4. 3.6 Flash
-  // 5. 3.5 Flash
-  // 6. 3 Flash
-  // 7. 2.5 Flash Lite
-  // 8. 2.5 Flash
-  // (with safety fallback to 2.0 Flash)
+  // Model fallback hierarchy
   const modelsToTry = [
     process.env.GEMINI_MODEL || "gemini-3.5-flash-lite",
     process.env.GEMINI_BACKUP_MODEL || "gemini-3.1-flash-lite",
@@ -136,9 +181,7 @@ Please answer the user's question clearly according to the SOP documents and app
     "gemini-2.0-flash",
   ];
 
-  // De-duplicate array while preserving exact priority order
   const uniqueModels = Array.from(new Set(modelsToTry));
-
   let lastError: unknown = null;
 
   for (const modelName of uniqueModels) {
@@ -160,25 +203,19 @@ Please answer the user's question clearly according to the SOP documents and app
         try {
           const parsed = JSON.parse(citationMatch[1]);
           if (Array.isArray(parsed)) {
-            citations = parsed.map((item) => ({
-              document_id: Number(item.document_id) || relevantDocs[0]?.id || 0,
-              document_title: String(item.document_title || "SOP Document"),
-              section_title: item.section_title ? String(item.section_title) : undefined,
-              snippet: String(item.snippet || ""),
-            }));
+            citations = parsed
+              .filter((item) => item && item.document_id)
+              .map((item) => ({
+                document_id: Number(item.document_id) || relevantDocs[0]?.id || 0,
+                document_title: String(item.document_title || "SOP Document"),
+                section_title: item.section_title ? String(item.section_title) : undefined,
+                snippet: String(item.snippet || ""),
+              }));
           }
         } catch (e) {
           console.warn("Could not parse json_citations block:", e);
         }
         cleanAnswer = responseText.replace(/```json_citations\s*[\s\S]*?\s*```/, "").trim();
-      } else {
-        // Fallback: If model didn't format json_citations, match top relevant docs
-        citations = relevantDocs.slice(0, 2).map((doc) => ({
-          document_id: doc.id,
-          document_title: doc.title,
-          section_title: doc.category,
-          snippet: doc.content.slice(0, 200) + "...",
-        }));
       }
 
       return {
@@ -187,7 +224,7 @@ Please answer the user's question clearly according to the SOP documents and app
         modelUsed: modelName,
       };
     } catch (err: unknown) {
-      console.warn(`Model ${modelName} failed or unavailable, trying next model in chain:`, err);
+      console.warn(`Model ${modelName} failed, attempting next model:`, err);
       lastError = err;
     }
   }
