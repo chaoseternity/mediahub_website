@@ -1,19 +1,29 @@
 import { auth } from "@/lib/auth";
 import {
   getEventById,
+  getUserById,
   getUserByEmail,
   attachEquipmentToEventSection,
   detachEquipmentFromEventSection,
   addDeploymentToEventSection,
   removeDeploymentFromEventSection,
   updateSectionRehearsalConfig,
+  resendDeploymentEmail,
 } from "@/lib/db";
+import { sendDeploymentInvitationEmail } from "@/lib/email";
 import type { EventSection } from "@/lib/types";
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 
 const SectionEquipmentSchema = z.object({
-  action: z.enum(["add_equipment", "remove_equipment", "add_deployment", "remove_deployment", "update_rehearsal"]),
+  action: z.enum([
+    "add_equipment",
+    "remove_equipment",
+    "add_deployment",
+    "remove_deployment",
+    "update_rehearsal",
+    "resend_deployment_email",
+  ]),
   section: z.enum(["photo", "video", "av"]),
   equipment_id: z.number().int().optional(),
   user_id: z.number().int().optional(),
@@ -66,6 +76,7 @@ export async function POST(
   }
 
   const currentUser = await getUserByEmail(session.user.email!);
+  const origin = req.nextUrl.origin;
 
   if (action === "add_equipment") {
     if (!parsed.data.equipment_id) return NextResponse.json({ error: "equipment_id required" }, { status: 400 });
@@ -75,7 +86,39 @@ export async function POST(
     await detachEquipmentFromEventSection(eventId, parsed.data.equipment_id, section);
   } else if (action === "add_deployment") {
     if (!parsed.data.user_id) return NextResponse.json({ error: "user_id required" }, { status: 400 });
-    await addDeploymentToEventSection(eventId, parsed.data.user_id, section, parsed.data.attending_rehearsal ?? false, currentUser?.id ?? null);
+    const result = await addDeploymentToEventSection(
+      eventId,
+      parsed.data.user_id,
+      section,
+      parsed.data.attending_rehearsal ?? false,
+      currentUser?.id ?? null
+    );
+
+    // Trigger invitation email
+    const event = await getEventById(eventId);
+    const deployedUser = await getUserById(parsed.data.user_id);
+    if (event && deployedUser) {
+      const rehConfig = event.section_rehearsals[section];
+      await sendDeploymentInvitationEmail({
+        toEmail: deployedUser.email,
+        recipientName: deployedUser.name,
+        eventName: event.name,
+        eventDescription: event.description,
+        section,
+        startTime: event.start_time,
+        endTime: event.end_time,
+        location: event.location,
+        hasRehearsal: event.has_rehearsal && rehConfig?.participating,
+        rehearsalStartTime: event.rehearsal_start_time,
+        rehearsalEndTime: event.rehearsal_end_time,
+        attendingRehearsal: parsed.data.attending_rehearsal ?? false,
+        token: result.token,
+        origin,
+      }).catch((e) => console.error("Non-blocking email send error:", e));
+    }
+  } else if (action === "resend_deployment_email") {
+    if (!parsed.data.user_id) return NextResponse.json({ error: "user_id required" }, { status: 400 });
+    await resendDeploymentEmail(eventId, parsed.data.user_id, section, origin);
   } else if (action === "remove_deployment") {
     if (!parsed.data.user_id) return NextResponse.json({ error: "user_id required" }, { status: 400 });
     await removeDeploymentFromEventSection(eventId, parsed.data.user_id, section);

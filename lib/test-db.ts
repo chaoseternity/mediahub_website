@@ -100,6 +100,10 @@ export const SCHEMA_SQL = `
     attending_rehearsal INTEGER DEFAULT 0,
     added_by            INTEGER REFERENCES users(id) ON DELETE SET NULL,
     added_at            TEXT    NOT NULL DEFAULT (datetime('now')),
+    response_status     TEXT    NOT NULL DEFAULT 'pending' CHECK(response_status IN ('pending', 'confirmed', 'declined')),
+    response_token      TEXT,
+    responded_at        TEXT,
+    response_note       TEXT,
     PRIMARY KEY (event_id, user_id, section)
   );
 

@@ -20,8 +20,12 @@ import {
   Package,
   X,
   FileText,
+  Mail,
+  CheckCircle2,
+  XCircle,
+  Loader2,
 } from "lucide-react";
-import type { AppEvent } from "@/lib/types";
+import type { AppEvent, EventSection } from "@/lib/types";
 
 interface EventDetailModalProps {
   eventId: number | null;
@@ -56,6 +60,7 @@ function fmtDateTime(s: string | null | undefined): string {
 export function EventDetailModal({ eventId, open, onClose }: EventDetailModalProps) {
   const [event, setEvent] = useState<AppEvent | null>(null);
   const [loading, setLoading] = useState(false);
+  const [resendingKey, setResendingKey] = useState<string | null>(null);
 
   useEffect(() => {
     if (open && eventId) {
@@ -71,6 +76,34 @@ export function EventDetailModal({ eventId, open, onClose }: EventDetailModalPro
       setEvent(null);
     }
   }, [open, eventId]);
+
+  async function handleResendEmail(section: EventSection, userId: number) {
+    if (!eventId) return;
+    const key = `${section}-${userId}`;
+    try {
+      setResendingKey(key);
+      const res = await fetch(`/api/events/${eventId}/section`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          action: "resend_deployment_email",
+          section,
+          user_id: userId,
+        }),
+      });
+      if (res.ok) {
+        alert("Availability invitation email resent successfully!");
+      } else {
+        const err = await res.json().catch(() => ({}));
+        alert(err.error || "Failed to resend invitation email");
+      }
+    } catch (e) {
+      console.error("Error resending email:", e);
+      alert("Failed to resend invitation email");
+    } finally {
+      setResendingKey(null);
+    }
+  }
 
   if (!open) return null;
 
@@ -257,18 +290,75 @@ export function EventDetailModal({ eventId, open, onClose }: EventDetailModalPro
                       </div>
 
                       <div className="border-t pt-2">
-                        <span className="text-[11px] font-semibold text-muted-foreground block mb-1">
-                          Deployed Members ({depList.length})
-                        </span>
+                        <div className="flex items-center justify-between mb-1.5">
+                          <span className="text-[11px] font-semibold text-muted-foreground">
+                            Deployed Members ({depList.length})
+                          </span>
+                        </div>
                         {depList.length === 0 ? (
                           <p className="text-[11px] text-muted-foreground">No members deployed</p>
                         ) : (
-                          <div className="flex flex-wrap gap-1">
-                            {depList.map((m) => (
-                              <Badge key={m.id} variant="outline" className="text-[10px] py-0">
-                                {m.name}
-                              </Badge>
-                            ))}
+                          <div className="space-y-1.5">
+                            {depList.map((m) => {
+                              const isConfirmed = m.response_status === "confirmed";
+                              const isDeclined = m.response_status === "declined";
+                              const isPending = !m.response_status || m.response_status === "pending";
+                              const isResending = resendingKey === `${sec}-${m.id}`;
+
+                              return (
+                                <div
+                                  key={m.id}
+                                  className="text-xs bg-muted/40 border border-border/50 p-1.5 rounded flex flex-col gap-1"
+                                >
+                                  <div className="flex items-center justify-between gap-1">
+                                    <span className="font-medium truncate text-foreground">{m.name}</span>
+                                    
+                                    <div className="flex items-center gap-1 shrink-0">
+                                      {isConfirmed && (
+                                        <Badge className="bg-emerald-600/90 text-white text-[9px] px-1.5 py-0 h-4 gap-0.5">
+                                          <CheckCircle2 className="h-2.5 w-2.5" />
+                                          Free
+                                        </Badge>
+                                      )}
+                                      {isDeclined && (
+                                        <Badge className="bg-red-600/90 text-white text-[9px] px-1.5 py-0 h-4 gap-0.5">
+                                          <XCircle className="h-2.5 w-2.5" />
+                                          Not Free
+                                        </Badge>
+                                      )}
+                                      {isPending && (
+                                        <Badge variant="outline" className="text-amber-600 dark:text-amber-400 border-amber-500/30 text-[9px] px-1.5 py-0 h-4 gap-0.5">
+                                          <Clock className="h-2.5 w-2.5" />
+                                          Pending
+                                        </Badge>
+                                      )}
+
+                                      {/* Resend Email Button */}
+                                      <Button
+                                        size="icon"
+                                        variant="ghost"
+                                        onClick={() => handleResendEmail(sec, m.id)}
+                                        disabled={isResending}
+                                        className="h-5 w-5 p-0 text-muted-foreground hover:text-foreground"
+                                        title="Resend availability invitation email"
+                                      >
+                                        {isResending ? (
+                                          <Loader2 className="h-3 w-3 animate-spin" />
+                                        ) : (
+                                          <Mail className="h-3 w-3" />
+                                        )}
+                                      </Button>
+                                    </div>
+                                  </div>
+
+                                  {m.response_note && (
+                                    <p className="text-[10px] text-muted-foreground italic bg-background/50 px-1.5 py-0.5 rounded border border-muted">
+                                      "{m.response_note}"
+                                    </p>
+                                  )}
+                                </div>
+                              );
+                            })}
                           </div>
                         )}
                       </div>

@@ -108,6 +108,8 @@ import {
   attachEquipmentToEventSection,
   addDeploymentToEventSection,
   updateSectionRehearsalConfig,
+  getDeploymentByToken,
+  updateDeploymentRSVP,
   getEventById,
   deleteEvent,
 } from "@/lib/db";
@@ -187,12 +189,24 @@ describe("Smoke — lib/db.ts (Vercel Postgres mock)", () => {
       expect(event.section_ics.photo).toHaveLength(1);
 
       await attachEquipmentToEventSection(event.id, eq.id, "photo", true, photoIc.id);
-      await addDeploymentToEventSection(event.id, crewMember.id, "photo", true, photoIc.id);
+      const depRes = await addDeploymentToEventSection(event.id, crewMember.id, "photo", true, photoIc.id);
+      expect(depRes.success).toBe(true);
+      expect(depRes.token).toBeDefined();
+
+      const depTokenDetails = await getDeploymentByToken(depRes.token);
+      expect(depTokenDetails?.user.id).toBe(crewMember.id);
+      expect(depTokenDetails?.response_status).toBe("pending");
+
+      const rsvpRes = await updateDeploymentRSVP(depRes.token, "confirmed", "I am available early");
+      expect(rsvpRes.success).toBe(true);
+
       await updateSectionRehearsalConfig(event.id, "photo", true, [eq.id], [crewMember.id]);
 
       const fetchedEvent = await getEventById(event.id);
       expect(fetchedEvent?.section_equipment.photo).toHaveLength(1);
       expect(fetchedEvent?.section_deployments.photo).toHaveLength(1);
+      expect(fetchedEvent?.section_deployments.photo[0].response_status).toBe("confirmed");
+      expect(fetchedEvent?.section_deployments.photo[0].response_note).toBe("I am available early");
       expect(fetchedEvent?.section_rehearsals.photo.participating).toBe(true);
 
       const delRes = await deleteEvent(event.id);

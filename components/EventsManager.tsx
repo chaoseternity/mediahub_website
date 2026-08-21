@@ -16,7 +16,10 @@ import {
   Edit,
   Sliders,
   CheckCircle,
+  CheckCircle2,
   XCircle,
+  Mail,
+  X,
 } from "lucide-react";
 import { CreateEventModal } from "./CreateEventModal";
 import { EditEventModal } from "./EditEventModal";
@@ -375,28 +378,56 @@ export function EventsManager({ initialEvents, role, currentUserId }: EventsMana
                             {secDeps.length === 0 ? (
                               <p className="text-xs text-muted-foreground italic">No members deployed</p>
                             ) : (
-                              secDeps.map((dep) => (
-                                <div key={dep.id} className="flex items-center justify-between bg-muted/40 px-2 py-1 rounded text-xs">
-                                  <div className="flex items-center gap-1.5 truncate mr-1">
-                                    <span className="font-medium truncate">{dep.name}</span>
-                                    {dep.attending_rehearsal && (
-                                      <Badge variant="outline" className="text-[9px] px-1 py-0 border-purple-400 text-purple-700 dark:text-purple-300">
-                                        Rehearsal
-                                      </Badge>
-                                    )}
+                              secDeps.map((dep) => {
+                                const isConfirmed = dep.response_status === "confirmed";
+                                const isDeclined = dep.response_status === "declined";
+                                const isPending = !dep.response_status || dep.response_status === "pending";
+
+                                return (
+                                  <div key={dep.id} className="flex items-center justify-between bg-muted/40 px-2 py-1 rounded text-xs gap-1">
+                                    <div className="flex items-center gap-1.5 truncate mr-1">
+                                      <span className="font-medium truncate">{dep.name}</span>
+                                      {dep.attending_rehearsal && (
+                                        <Badge variant="outline" className="text-[9px] px-1 py-0 border-purple-400 text-purple-700 dark:text-purple-300">
+                                          Rehearsal
+                                        </Badge>
+                                      )}
+                                    </div>
+
+                                    <div className="flex items-center gap-1 shrink-0">
+                                      {isConfirmed && (
+                                        <Badge className="bg-emerald-600/90 text-white text-[9px] px-1 py-0 h-4 gap-0.5">
+                                          <CheckCircle2 className="h-2.5 w-2.5" />
+                                          Free
+                                        </Badge>
+                                      )}
+                                      {isDeclined && (
+                                        <Badge className="bg-red-600/90 text-white text-[9px] px-1 py-0 h-4 gap-0.5">
+                                          <XCircle className="h-2.5 w-2.5" />
+                                          Not Free
+                                        </Badge>
+                                      )}
+                                      {isPending && (
+                                        <Badge variant="outline" className="text-amber-600 dark:text-amber-400 border-amber-500/30 text-[9px] px-1 py-0 h-4 gap-0.5">
+                                          <Clock className="h-2.5 w-2.5" />
+                                          Pending
+                                        </Badge>
+                                      )}
+
+                                      {isAllowedToEditSec && (
+                                        <button
+                                          type="button"
+                                          onClick={() => handleRemoveDeployment(ev.id, sec, dep.id)}
+                                          className="text-destructive hover:text-destructive/80 p-0.5"
+                                          title="Remove member"
+                                        >
+                                          <X className="h-3 w-3" />
+                                        </button>
+                                      )}
+                                    </div>
                                   </div>
-                                  {isAllowedToEditSec && (
-                                    <button
-                                      type="button"
-                                      onClick={() => handleRemoveDeployment(ev.id, sec, dep.id)}
-                                      className="text-destructive hover:text-destructive/80 p-0.5"
-                                      title="Remove member"
-                                    >
-                                      <X className="h-3 w-3" />
-                                    </button>
-                                  )}
-                                </div>
-                              ))
+                                );
+                              })
                             )}
                           </div>
                         </div>
@@ -459,13 +490,5 @@ export function EventsManager({ initialEvents, role, currentUserId }: EventsMana
         onUpdated={refresh}
       />
     </div>
-  );
-}
-
-function X({ className }: { className?: string }) {
-  return (
-    <svg className={className} fill="none" viewBox="0 0 24 24" stroke="currentColor">
-      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-    </svg>
   );
 }

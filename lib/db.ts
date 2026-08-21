@@ -21,7 +21,9 @@ import type {
   SectionRehearsalMap,
   SectionRehearsalConfig,
   SOPDocument,
+  DeploymentResponseStatus,
 } from "./types";
+import { sendDeploymentInvitationEmail } from "./email";
 
 function getAdminEmails(): Set<string> {
   const raw = process.env.ADMIN_EMAILS ?? "";
@@ -576,15 +578,33 @@ export async function getEventById(id: number): Promise<AppEvent | undefined> {
 
   // Fetch Section Deployments
   const section_deployments: SectionDeploymentMap = { photo: [], video: [], av: [] };
-  const { rows: depRows } = await sql<User & { section: EventSection; attending_rehearsal: boolean }>`
-    SELECT u.id, u.name, u.email, u.username, u.google_id, u.image, u.role, u.provider, u.created_at, ed.section, ed.attending_rehearsal
+  const { rows: depRows } = await sql<
+    User & {
+      section: EventSection;
+      attending_rehearsal: boolean;
+      response_status?: DeploymentResponseStatus;
+      response_token?: string;
+      responded_at?: string | null;
+      response_note?: string | null;
+    }
+  >`
+    SELECT 
+      u.id, u.name, u.email, u.username, u.google_id, u.image, u.role, u.provider, u.created_at, 
+      ed.section, ed.attending_rehearsal, ed.response_status, ed.response_token, ed.responded_at, ed.response_note
     FROM users u
     JOIN event_deployments ed ON ed.user_id = u.id
     WHERE ed.event_id = ${id}
     ORDER BY u.name ASC
   `;
   for (const dep of depRows) {
-    const item: SectionDeploymentItem = { ...dep, attending_rehearsal: Boolean(dep.attending_rehearsal) };
+    const item: SectionDeploymentItem = {
+      ...dep,
+      attending_rehearsal: Boolean(dep.attending_rehearsal),
+      response_status: dep.response_status || "pending",
+      response_token: dep.response_token || undefined,
+      responded_at: dep.responded_at || null,
+      response_note: dep.response_note || null,
+    };
     if (section_deployments[dep.section]) {
       section_deployments[dep.section].push(item);
     }
@@ -764,14 +784,125 @@ export async function addDeploymentToEventSection(
   section: EventSection,
   attendingRehearsal = false,
   addedBy: number | null = null
-): Promise<{ success: boolean; error?: string }> {
+): Promise<{ success: boolean; token: string; error?: string }> {
   await ensureSchema();
+  const token = crypto.randomUUID();
   await sql`DELETE FROM event_deployments WHERE event_id = ${eventId} AND user_id = ${userId} AND section = ${section}`;
   await sql`
-    INSERT INTO event_deployments (event_id, user_id, section, attending_rehearsal, added_by)
-    VALUES (${eventId}, ${userId}, ${section}, ${attendingRehearsal}, ${addedBy})
+    INSERT INTO event_deployments (event_id, user_id, section, attending_rehearsal, added_by, response_status, response_token)
+    VALUES (${eventId}, ${userId}, ${section}, ${attendingRehearsal}, ${addedBy}, 'pending', ${token})
   `;
+  return { success: true, token };
+}
+
+export interface DeploymentTokenDetails {
+  event: AppEvent;
+  user: User;
+  section: EventSection;
+  attending_rehearsal: boolean;
+  response_status: DeploymentResponseStatus;
+  response_token: string;
+  responded_at: string | null;
+  response_note: string | null;
+}
+
+export async function getDeploymentByToken(token: string): Promise<DeploymentTokenDetails | null> {
+  await ensureSchema();
+  const { rows } = await sql<{
+    event_id: number;
+    user_id: number;
+    section: EventSection;
+    attending_rehearsal: boolean;
+    response_status: DeploymentResponseStatus;
+    response_token: string;
+    responded_at: string | null;
+    response_note: string | null;
+  }>`
+    SELECT event_id, user_id, section, attending_rehearsal, response_status, response_token, responded_at, response_note
+    FROM event_deployments
+    WHERE response_token = ${token}
+    LIMIT 1
+  `;
+  if (rows.length === 0) return null;
+  const dep = rows[0];
+  const event = await getEventById(dep.event_id);
+  const user = await getUserById(dep.user_id);
+  if (!event || !user) return null;
+
+  return {
+    event,
+    user,
+    section: dep.section,
+    attending_rehearsal: Boolean(dep.attending_rehearsal),
+    response_status: dep.response_status || "pending",
+    response_token: dep.response_token,
+    responded_at: dep.responded_at,
+    response_note: dep.response_note,
+  };
+}
+
+export async function updateDeploymentRSVP(
+  token: string,
+  status: "confirmed" | "declined",
+  note?: string
+): Promise<{ success: boolean; error?: string }> {
+  await ensureSchema();
+  const { rowCount } = await sql`
+    UPDATE event_deployments
+    SET 
+      response_status = ${status},
+      responded_at = CURRENT_TIMESTAMP,
+      response_note = ${note || null}
+    WHERE response_token = ${token}
+  `;
+  if (!rowCount || rowCount === 0) {
+    return { success: false, error: "Invalid or expired invitation link" };
+  }
   return { success: true };
+}
+
+export async function resendDeploymentEmail(
+  eventId: number,
+  userId: number,
+  section: EventSection,
+  origin?: string
+): Promise<{ success: boolean; error?: string }> {
+  await ensureSchema();
+  const event = await getEventById(eventId);
+  const user = await getUserById(userId);
+  if (!event || !user) return { success: false, error: "Event or User not found" };
+
+  const depItem = event.section_deployments[section]?.find((d) => d.id === userId);
+  if (!depItem) return { success: false, error: "Deployment record not found" };
+
+  let token = depItem.response_token;
+  if (!token) {
+    token = crypto.randomUUID();
+    await sql`
+      UPDATE event_deployments
+      SET response_token = ${token}
+      WHERE event_id = ${eventId} AND user_id = ${userId} AND section = ${section}
+    `;
+  }
+
+  const rehConfig = event.section_rehearsals[section];
+
+  return sendDeploymentInvitationEmail({
+    toEmail: user.email,
+    recipientName: user.name,
+    eventName: event.name,
+    eventDescription: event.description,
+    section,
+    startTime: event.start_time,
+    endTime: event.end_time,
+    location: event.location,
+    hasRehearsal: event.has_rehearsal && rehConfig?.participating,
+    rehearsalStartTime: event.rehearsal_start_time,
+    rehearsalEndTime: event.rehearsal_end_time,
+    attendingRehearsal: depItem.attending_rehearsal,
+    token,
+    origin,
+  });
 }
 
 export async function removeDeploymentFromEventSection(
