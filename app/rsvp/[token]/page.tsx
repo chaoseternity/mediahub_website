@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, Suspense } from "react";
+import { useEffect, useState, useCallback, Suspense } from "react";
 import { useParams, useSearchParams } from "next/navigation";
 import {
   Calendar,
@@ -62,6 +62,43 @@ function RSVPContent() {
   const [note, setNote] = useState("");
   const [submittedStatus, setSubmittedStatus] = useState<"confirmed" | "declined" | null>(null);
 
+  const handleRSVP = useCallback(
+    async (status: "confirmed" | "declined") => {
+      if (!token) return;
+      try {
+        setSubmitting(true);
+        setError(null);
+        const res = await fetch("/api/rsvp", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ token, status, note }),
+        });
+
+        if (!res.ok) {
+          const errData = await res.json().catch(() => ({}));
+          throw new Error(errData.error || "Failed to update availability");
+        }
+
+        setSubmittedStatus(status);
+        setData((prev) =>
+          prev
+            ? {
+                ...prev,
+                responseStatus: status,
+                respondedAt: new Date().toISOString(),
+                responseNote: note,
+              }
+            : null
+        );
+      } catch (err: unknown) {
+        setError(err instanceof Error ? err.message : "Failed to submit response");
+      } finally {
+        setSubmitting(false);
+      }
+    },
+    [token, note]
+  );
+
   // Load RSVP Data
   useEffect(() => {
     if (!token) return;
@@ -94,39 +131,7 @@ function RSVPContent() {
     }
 
     loadData();
-  }, [token]);
-
-  async function handleRSVP(status: "confirmed" | "declined") {
-    if (!token) return;
-    try {
-      setSubmitting(true);
-      setError(null);
-      const res = await fetch("/api/rsvp", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ token, status, note }),
-      });
-
-      if (!res.ok) {
-        const errData = await res.json().catch(() => ({}));
-        throw new Error(errData.error || "Failed to update availability");
-      }
-
-      setSubmittedStatus(status);
-      if (data) {
-        setData({
-          ...data,
-          responseStatus: status,
-          respondedAt: new Date().toISOString(),
-          responseNote: note,
-        });
-      }
-    } catch (err: unknown) {
-      setError(err instanceof Error ? err.message : "Failed to submit response");
-    } finally {
-      setSubmitting(false);
-    }
-  }
+  }, [token, initialAction, handleRSVP]);
 
   if (loading) {
     return (

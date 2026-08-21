@@ -63,7 +63,7 @@ jest.mock("@vercel/postgres", () => {
         } else {
           const stmt = testDb.prepare(sqliteQuery);
           const info = stmt.run(...(sanitizedValues as []));
-          let returnedRows: Array<Record<string, unknown>> = [];
+          const returnedRows: Array<Record<string, unknown>> = [];
           if (isReturning && info.lastInsertRowid) {
             let table = "users";
             if (/INSERT INTO equipment/i.test(sqliteQuery)) table = "equipment";
@@ -89,21 +89,8 @@ jest.mock("@vercel/postgres", () => {
 import {
   getAllEquipment,
   createEquipment,
-  getEquipmentById,
-  updateEquipment,
-  deleteEquipment,
-  createCheckout,
-  returnCheckout,
-  getAllTags,
   createTag,
-  deleteTag,
   upsertUser,
-  updateUserRole,
-  getAllUsers,
-  getEquipmentByTagId,
-  addTagToEquipment,
-  removeTagFromEquipment,
-  getAllEvents,
   createEvent,
   attachEquipmentToEventSection,
   addDeploymentToEventSection,

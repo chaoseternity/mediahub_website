@@ -18,7 +18,6 @@ import {
   CheckCircle,
   CheckCircle2,
   XCircle,
-  Mail,
   X,
 } from "lucide-react";
 import { CreateEventModal } from "./CreateEventModal";

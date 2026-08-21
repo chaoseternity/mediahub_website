@@ -18,7 +18,6 @@ import {
   ShieldAlert,
   UserCheck,
   Package,
-  X,
   FileText,
   Mail,
   CheckCircle2,
@@ -353,7 +352,7 @@ export function EventDetailModal({ eventId, open, onClose }: EventDetailModalPro
 
                                   {m.response_note && (
                                     <p className="text-[10px] text-muted-foreground italic bg-background/50 px-1.5 py-0.5 rounded border border-muted">
-                                      "{m.response_note}"
+                                      &ldquo;{m.response_note}&rdquo;
                                     </p>
                                   )}
                                 </div>

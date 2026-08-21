@@ -17,6 +17,7 @@ import {
   ChevronLeft,
   ChevronRight,
   Bot,
+  type LucideIcon,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -33,7 +34,7 @@ interface NavGroup {
   items: {
     href: string;
     label: string;
-    icon: any;
+    icon: LucideIcon;
     roles: Role[];
   }[];
 }

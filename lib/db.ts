@@ -19,7 +19,6 @@ import type {
   SectionDeploymentMap,
   SectionDeploymentItem,
   SectionRehearsalMap,
-  SectionRehearsalConfig,
   SOPDocument,
   DeploymentResponseStatus,
 } from "./types";

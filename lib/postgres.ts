@@ -2,7 +2,7 @@ import { sql } from "@vercel/postgres";
 
 let initialized = false;
 
-async function runSafe(queryFn: () => Promise<any>, description: string): Promise<void> {
+async function runSafe(queryFn: () => Promise<unknown>, description: string): Promise<void> {
   try {
     await queryFn();
   } catch (err) {

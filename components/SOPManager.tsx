@@ -8,7 +8,6 @@ import {
   Send,
   Trash2,
   FileText,
-  Plus,
   Sparkles,
   Search,
   AlertCircle,
@@ -18,7 +17,6 @@ import {
   RefreshCw,
   FolderOpen,
   FileCode,
-  CheckCircle,
   FileUp,
   RotateCcw,
 } from "lucide-react";
@@ -171,7 +169,7 @@ export function SOPManager({ initialDocuments, role, userName }: SOPManagerProps
 
         if (docXmlFile) {
           const xml = await docXmlFile.async("text");
-          let clean = xml
+          const clean = xml
             .replace(/<w:p[^>]*>/g, "\n")
             .replace(/<w:tab[^>]*\/>/g, "\t")
             .replace(/<w:br[^>]*\/>/g, "\n")
@@ -256,7 +254,7 @@ export function SOPManager({ initialDocuments, role, userName }: SOPManagerProps
         throw new Error("Please select a file or enter SOP content.");
       }
 
-      let data: any = null;
+      let data: Record<string, unknown> | null = null;
       let rawText = "";
       try {
         rawText = await res.text();
@@ -267,7 +265,7 @@ export function SOPManager({ initialDocuments, role, userName }: SOPManagerProps
 
       if (!res.ok) {
         const errorMsg =
-          (data && (typeof data.error === "string" ? data.error : data.error?.message)) ||
+          (data && (typeof data.error === "string" ? data.error : (data.error as { message?: string })?.message)) ||
           rawText ||
           `Server error (HTTP ${res.status})`;
         throw new Error(errorMsg);
@@ -422,7 +420,7 @@ export function SOPManager({ initialDocuments, role, userName }: SOPManagerProps
       </div>
 
       {/* Tabs */}
-      <Tabs value={activeTab} onValueChange={(v) => setActiveTab(v as any)} className="w-full">
+      <Tabs value={activeTab} onValueChange={(v) => setActiveTab(v as "assistant" | "library")} className="w-full">
         <TabsList className="grid w-full grid-cols-2 max-w-md">
           <TabsTrigger value="assistant" className="gap-2">
             <Sparkles className="h-4 w-4 text-purple-600 dark:text-purple-400" />

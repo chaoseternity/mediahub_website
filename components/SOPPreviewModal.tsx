@@ -9,7 +9,7 @@ import {
 } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { BookOpen, FileText, Calendar, User, Tag, ExternalLink } from "lucide-react";
+import { BookOpen, FileText, Calendar, User } from "lucide-react";
 import type { SOPDocument, SOPCitation } from "@/lib/types";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -74,7 +74,7 @@ export function SOPPreviewModal({
             <span className="font-semibold text-amber-700 dark:text-amber-300 block mb-1">
               Cited Reference Snippet:
             </span>
-            <p className="italic text-foreground/90">"{citation.snippet}"</p>
+            <p className="italic text-foreground/90">&ldquo;{citation.snippet}&rdquo;</p>
           </div>
           <pre className="text-xs whitespace-pre-wrap font-sans leading-relaxed text-foreground/90 bg-muted/20 p-4 rounded-lg border">
             {document.content}

@@ -4,7 +4,7 @@ import { useEffect, useState } from "react";
 import { useForm, useWatch } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
-import { Pencil, QrCode, Printer, Calendar, Clock, MapPin, ArrowRight, ExternalLink } from "lucide-react";
+import { Pencil, QrCode, Calendar, MapPin, ArrowRight } from "lucide-react";
 import {
   Dialog,
   DialogContent,
@@ -127,7 +127,6 @@ export function EquipmentModal({
       setPrintModalOpen(false);
       return;
     }
-    // eslint-disable-next-line react-hooks/set-state-in-effect
     setLoading(true);
     setShowCheckout(false);
     setPrintModalOpen(false);

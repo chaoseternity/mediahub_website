@@ -87,7 +87,6 @@ export function QRScannerClient({ equipment, role, userName }: QRScannerClientPr
   const [selectedId, setSelectedId] = useState<number | null>(null);
   const [modalOpen, setModalOpen] = useState(false);
   const [notFound, setNotFound] = useState<string | null>(null);
-  const [lastScanned, setLastScanned] = useState<string | null>(null);
   const [cameraError, setCameraError] = useState<string | null>(null);
   const [manualCode, setManualCode] = useState("");
 
@@ -104,7 +103,6 @@ export function QRScannerClient({ equipment, role, userName }: QRScannerClientPr
   function handleCodeRecognized(rawCode: string) {
     const code = rawCode.trim();
     if (!code) return;
-    setLastScanned(code);
 
     const found = findEquipmentByCode(equipmentRef.current, code);
     if (found) {

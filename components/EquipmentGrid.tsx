@@ -9,7 +9,6 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { Button } from "@/components/ui/button";
 import { EquipmentCard } from "@/components/EquipmentCard";
 import { EquipmentModal } from "@/components/EquipmentModal";
 import { parseEquipmentId, sortEquipmentById } from "@/lib/utils";
@@ -24,7 +23,7 @@ interface EquipmentGridProps {
 
 const ALL = "all";
 
-export function EquipmentGrid({ initialData, role, onAddNew, userName }: EquipmentGridProps) {
+export function EquipmentGrid({ initialData, role, onAddNew: _onAddNew, userName }: EquipmentGridProps) {
   const [items, setItems] = useState<Equipment[]>(initialData);
   const [search, setSearch] = useState("");
   const [tagFilter, setTagFilter] = useState(ALL);
