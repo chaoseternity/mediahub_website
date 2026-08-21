@@ -14,10 +14,14 @@ import {
   Mic,
   Loader2,
   Sparkles,
+  Check,
+  X,
+  MessageSquare,
+  ShieldCheck,
 } from "lucide-react";
-import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
+import { cn } from "@/lib/utils";
 
 interface RSVPData {
   eventName: string;
@@ -37,16 +41,25 @@ interface RSVPData {
   responseNote: string | null;
 }
 
-const SECTION_ICONS = {
-  photo: Camera,
-  video: Video,
-  av: Mic,
-};
-
-const SECTION_LABELS = {
-  photo: "Photography Team",
-  video: "Videography Team",
-  av: "Audio / AV Team",
+const SECTION_CONFIG = {
+  photo: {
+    icon: Camera,
+    label: "Photography Team",
+    color: "from-blue-600 to-indigo-600",
+    badge: "bg-blue-50 text-blue-700 dark:bg-blue-950/60 dark:text-blue-300 border-blue-200 dark:border-blue-800",
+  },
+  video: {
+    icon: Video,
+    label: "Videography Team",
+    color: "from-purple-600 to-pink-600",
+    badge: "bg-purple-50 text-purple-700 dark:bg-purple-950/60 dark:text-purple-300 border-purple-200 dark:border-purple-800",
+  },
+  av: {
+    icon: Mic,
+    label: "Audio / AV Team",
+    color: "from-amber-600 to-orange-600",
+    badge: "bg-amber-50 text-amber-700 dark:bg-amber-950/60 dark:text-amber-300 border-amber-200 dark:border-amber-800",
+  },
 };
 
 function RSVPContent() {
@@ -61,17 +74,19 @@ function RSVPContent() {
   const [error, setError] = useState<string | null>(null);
   const [note, setNote] = useState("");
   const [submittedStatus, setSubmittedStatus] = useState<"confirmed" | "declined" | null>(null);
+  const [noteSavedFeedback, setNoteSavedFeedback] = useState(false);
 
   const handleRSVP = useCallback(
-    async (status: "confirmed" | "declined") => {
+    async (status: "confirmed" | "declined", overrideNote?: string) => {
       if (!token) return;
+      const targetNote = overrideNote !== undefined ? overrideNote : note;
       try {
         setSubmitting(true);
         setError(null);
         const res = await fetch("/api/rsvp", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ token, status, note }),
+          body: JSON.stringify({ token, status, note: targetNote }),
         });
 
         if (!res.ok) {
@@ -86,7 +101,7 @@ function RSVPContent() {
                 ...prev,
                 responseStatus: status,
                 respondedAt: new Date().toISOString(),
-                responseNote: note,
+                responseNote: targetNote,
               }
             : null
         );
@@ -133,12 +148,24 @@ function RSVPContent() {
     loadData();
   }, [token, initialAction, handleRSVP]);
 
+  const handleSaveNote = async () => {
+    if (!currentStatus || currentStatus === "pending") return;
+    await handleRSVP(currentStatus, note);
+    setNoteSavedFeedback(true);
+    setTimeout(() => setNoteSavedFeedback(false), 2500);
+  };
+
   if (loading) {
     return (
-      <div className="min-h-screen bg-muted/30 flex items-center justify-center p-4">
+      <div className="min-h-screen bg-linear-to-b from-slate-50 to-slate-100 dark:from-slate-950 dark:to-slate-900 flex items-center justify-center p-4">
         <div className="flex flex-col items-center gap-3 text-center">
-          <Loader2 className="h-8 w-8 animate-spin text-purple-600" />
-          <p className="text-sm font-medium text-muted-foreground">Loading deployment invitation...</p>
+          <div className="relative">
+            <div className="w-12 h-12 rounded-2xl bg-purple-600/10 dark:bg-purple-500/20 flex items-center justify-center animate-pulse">
+              <Sparkles className="h-6 w-6 text-purple-600 dark:text-purple-400" />
+            </div>
+            <Loader2 className="h-5 w-5 animate-spin text-purple-600 absolute -top-1 -right-1" />
+          </div>
+          <p className="text-sm font-medium text-muted-foreground animate-pulse">Loading deployment invitation...</p>
         </div>
       </div>
     );
@@ -146,112 +173,148 @@ function RSVPContent() {
 
   if (error || !data) {
     return (
-      <div className="min-h-screen bg-muted/30 flex items-center justify-center p-4">
-        <Card className="max-w-md w-full border shadow-sm">
+      <div className="min-h-screen bg-linear-to-b from-slate-50 to-slate-100 dark:from-slate-950 dark:to-slate-900 flex items-center justify-center p-4">
+        <Card className="max-w-md w-full border shadow-xl bg-card">
           <CardHeader className="text-center pb-2">
-            <div className="mx-auto h-12 w-12 rounded-full bg-red-100 dark:bg-red-950/50 flex items-center justify-center text-red-600 mb-2">
-              <AlertCircle className="h-6 w-6" />
+            <div className="mx-auto h-14 w-14 rounded-2xl bg-red-100 dark:bg-red-950/60 flex items-center justify-center text-red-600 mb-3 shadow-inner">
+              <AlertCircle className="h-7 w-7" />
             </div>
-            <CardTitle className="text-lg">Invitation Link Invalid</CardTitle>
-            <CardDescription>{error || "This invitation link is invalid or has expired."}</CardDescription>
+            <CardTitle className="text-lg font-bold">Invitation Link Invalid</CardTitle>
+            <CardDescription className="text-xs">{error || "This invitation link is invalid or has expired."}</CardDescription>
           </CardHeader>
         </Card>
       </div>
     );
   }
 
-  const SectionIcon = SECTION_ICONS[data.section] || Camera;
+  const sectionMeta = SECTION_CONFIG[data.section] || SECTION_CONFIG.photo;
+  const SectionIcon = sectionMeta.icon;
   const currentStatus = submittedStatus || data.responseStatus;
+  const isConfirmed = currentStatus === "confirmed";
+  const isDeclined = currentStatus === "declined";
 
   return (
-    <div className="min-h-screen bg-muted/30 py-8 px-4 sm:px-6 flex items-center justify-center">
-      <div className="max-w-lg w-full space-y-4">
-        {/* Header Branding */}
-        <div className="text-center space-y-1">
-          <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-purple-100 dark:bg-purple-950/60 text-purple-700 dark:text-purple-300 text-xs font-semibold">
+    <div className="min-h-screen bg-linear-to-b from-slate-50 via-slate-50/80 to-slate-100 dark:from-slate-950 dark:via-slate-900/90 dark:to-slate-950 py-10 px-4 sm:px-6 flex items-center justify-center relative overflow-hidden">
+      {/* Background glow effects */}
+      <div className="absolute top-1/4 -left-32 w-80 h-80 bg-purple-500/10 rounded-full blur-3xl pointer-events-none" />
+      <div className="absolute bottom-1/4 -right-32 w-80 h-80 bg-emerald-500/10 rounded-full blur-3xl pointer-events-none" />
+
+      <div className="max-w-lg w-full space-y-4 relative z-10">
+        {/* Top Header Badge */}
+        <div className="text-center space-y-1.5">
+          <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-purple-100/80 dark:bg-purple-950/80 text-purple-700 dark:text-purple-300 text-xs font-semibold backdrop-blur-xs border border-purple-200/50 dark:border-purple-800/50 shadow-xs">
             <Sparkles className="h-3.5 w-3.5" />
             MediaHub Production Crew
           </div>
-          <h1 className="text-2xl font-bold tracking-tight text-foreground">Deployment Availability</h1>
-          <p className="text-xs text-muted-foreground">Please confirm if you are free to crew for this event</p>
+          <h1 className="text-2xl sm:text-3xl font-extrabold tracking-tight text-foreground">
+            Deployment Availability
+          </h1>
+          <p className="text-xs text-muted-foreground">
+            Please confirm your availability to crew for this production
+          </p>
         </div>
 
-        {/* Status Confirmation Banner if already submitted */}
-        {currentStatus === "confirmed" && (
-          <div className="p-4 rounded-xl bg-emerald-50 dark:bg-emerald-950/40 border border-emerald-200 dark:border-emerald-800 flex items-center gap-3 text-emerald-800 dark:text-emerald-200">
-            <CheckCircle2 className="h-5 w-5 text-emerald-600 shrink-0" />
-            <div className="text-xs">
-              <p className="font-semibold text-sm">You are confirmed for this event!</p>
-              <p className="text-emerald-700 dark:text-emerald-300">
-                Thank you, {data.userName}. The Section In-Charge has been notified of your availability.
+        {/* Dynamic Status Banner */}
+        {isConfirmed && (
+          <div className="p-4 rounded-2xl bg-linear-to-r from-emerald-500/15 via-emerald-500/10 to-teal-500/15 dark:from-emerald-950/60 dark:via-emerald-900/40 dark:to-teal-950/60 border-2 border-emerald-500/30 dark:border-emerald-500/40 flex items-start gap-3.5 shadow-md shadow-emerald-500/5 backdrop-blur-xs animate-in fade-in zoom-in-95 duration-300">
+            <div className="h-8 w-8 rounded-xl bg-emerald-600 text-white flex items-center justify-center shrink-0 shadow-sm">
+              <Check className="h-5 w-5 stroke-[2.5]" />
+            </div>
+            <div className="space-y-0.5 flex-1">
+              <div className="flex items-center justify-between">
+                <p className="font-bold text-sm text-emerald-900 dark:text-emerald-200">You are Confirmed!</p>
+                <span className="text-[10px] font-medium text-emerald-700 dark:text-emerald-400 bg-emerald-100/80 dark:bg-emerald-950 px-2 py-0.5 rounded-full border border-emerald-300/60 dark:border-emerald-800">
+                  Ready to deploy
+                </span>
+              </div>
+              <p className="text-xs text-emerald-800/90 dark:text-emerald-300/90 leading-relaxed">
+                Thank you, <span className="font-semibold">{data.userName}</span>. Your Section In-Charge has been notified.
               </p>
             </div>
           </div>
         )}
 
-        {currentStatus === "declined" && (
-          <div className="p-4 rounded-xl bg-red-50 dark:bg-red-950/40 border border-red-200 dark:border-red-800 flex items-center gap-3 text-red-800 dark:text-red-200">
-            <XCircle className="h-5 w-5 text-red-600 shrink-0" />
-            <div className="text-xs">
-              <p className="font-semibold text-sm">Marked as Not Free</p>
-              <p className="text-red-700 dark:text-red-300">
-                You have declined this deployment. The team will look for alternate crew members.
+        {isDeclined && (
+          <div className="p-4 rounded-2xl bg-linear-to-r from-rose-500/15 via-rose-500/10 to-red-500/15 dark:from-rose-950/60 dark:via-rose-900/40 dark:to-red-950/60 border-2 border-rose-500/30 dark:border-rose-500/40 flex items-start gap-3.5 shadow-md shadow-rose-500/5 backdrop-blur-xs animate-in fade-in zoom-in-95 duration-300">
+            <div className="h-8 w-8 rounded-xl bg-rose-600 text-white flex items-center justify-center shrink-0 shadow-sm">
+              <X className="h-5 w-5 stroke-[2.5]" />
+            </div>
+            <div className="space-y-0.5 flex-1">
+              <div className="flex items-center justify-between">
+                <p className="font-bold text-sm text-rose-900 dark:text-rose-200">Marked as Not Available</p>
+                <span className="text-[10px] font-medium text-rose-700 dark:text-rose-400 bg-rose-100/80 dark:bg-rose-950 px-2 py-0.5 rounded-full border border-rose-300/60 dark:border-rose-800">
+                  Declined
+                </span>
+              </div>
+              <p className="text-xs text-rose-800/90 dark:text-rose-300/90 leading-relaxed">
+                You have declined this deployment. You can change your response below if your availability changes.
               </p>
             </div>
           </div>
         )}
 
         {/* Main Event Card */}
-        <Card className="border shadow-sm">
-          <CardHeader className="pb-3 border-b bg-card">
-            <div className="flex items-center justify-between gap-2">
-              <Badge variant="outline" className="gap-1.5 py-1 px-2.5 bg-background font-medium text-xs">
-                <SectionIcon className="h-3.5 w-3.5 text-purple-600" />
-                {SECTION_LABELS[data.section]}
+        <Card className="border-border/60 shadow-xl bg-card/95 backdrop-blur-md overflow-hidden rounded-2xl">
+          {/* Card Top Accent Bar */}
+          <div className={cn("h-2 w-full bg-linear-to-r", sectionMeta.color)} />
+
+          <CardHeader className="pb-4 pt-5 px-5 sm:px-6 border-b bg-muted/15">
+            <div className="flex items-center justify-between gap-2 flex-wrap">
+              <Badge variant="outline" className={cn("gap-1.5 py-1 px-3 font-semibold text-xs border shadow-2xs", sectionMeta.badge)}>
+                <SectionIcon className="h-3.5 w-3.5" />
+                {sectionMeta.label}
               </Badge>
 
               <Badge
-                className={
-                  currentStatus === "confirmed"
-                    ? "bg-emerald-600 text-white"
-                    : currentStatus === "declined"
-                    ? "bg-red-600 text-white"
-                    : "bg-amber-500 text-white"
-                }
+                className={cn(
+                  "font-bold text-xs py-1 px-3 shadow-xs transition-all",
+                  isConfirmed
+                    ? "bg-emerald-600 text-white hover:bg-emerald-700"
+                    : isDeclined
+                    ? "bg-rose-600 text-white hover:bg-rose-700"
+                    : "bg-amber-500 text-white hover:bg-amber-600"
+                )}
               >
-                {currentStatus === "confirmed"
-                  ? "✓ Available"
-                  : currentStatus === "declined"
-                  ? "✕ Not Free"
-                  : "⏳ Pending RSVP"}
+                {isConfirmed ? "✓ Confirmed" : isDeclined ? "✕ Not Free" : "⏳ Pending Your Response"}
               </Badge>
             </div>
 
-            <CardTitle className="text-xl font-bold mt-2 text-foreground">{data.eventName}</CardTitle>
+            <CardTitle className="text-xl sm:text-2xl font-bold mt-3 text-foreground tracking-tight">
+              {data.eventName}
+            </CardTitle>
             {data.eventDescription && (
-              <CardDescription className="text-xs leading-relaxed text-muted-foreground">
+              <CardDescription className="text-xs leading-relaxed text-muted-foreground mt-1">
                 {data.eventDescription}
               </CardDescription>
             )}
           </CardHeader>
 
-          <CardContent className="p-5 space-y-4 text-xs">
-            {/* Crew Member Info */}
-            <div className="p-3 bg-muted/40 rounded-lg flex items-center justify-between">
-              <div>
-                <span className="text-muted-foreground block text-[11px]">Assigned Crew Member</span>
-                <span className="font-semibold text-sm text-foreground">{data.userName}</span>
+          <CardContent className="p-5 sm:p-6 space-y-5 text-xs">
+            {/* Crew Member Summary Pill */}
+            <div className="p-3.5 bg-muted/40 dark:bg-muted/20 rounded-xl flex items-center justify-between border border-border/40">
+              <div className="flex items-center gap-2.5">
+                <div className="w-8 h-8 rounded-full bg-purple-600 text-white flex items-center justify-center font-bold text-xs shadow-xs">
+                  {data.userName.charAt(0).toUpperCase()}
+                </div>
+                <div>
+                  <span className="text-[10px] text-muted-foreground font-medium block">Crew Member</span>
+                  <span className="font-semibold text-xs text-foreground">{data.userName}</span>
+                </div>
               </div>
-              <span className="text-muted-foreground text-[11px]">{data.userEmail}</span>
+              <span className="text-muted-foreground text-[11px] font-mono bg-background/60 px-2 py-1 rounded border border-border/50">
+                {data.userEmail}
+              </span>
             </div>
 
-            {/* Event Schedule & Location Details */}
-            <div className="space-y-2.5">
-              <div className="flex items-start gap-2.5 text-foreground/90">
-                <Calendar className="h-4 w-4 text-purple-600 shrink-0 mt-0.5" />
-                <div>
-                  <span className="font-semibold block">Date & Event Time</span>
-                  <span>
+            {/* Event Timing & Location */}
+            <div className="space-y-3 bg-muted/20 p-4 rounded-xl border border-border/40">
+              <div className="flex items-start gap-3 text-foreground/90">
+                <div className="p-1.5 rounded-lg bg-purple-100 dark:bg-purple-950/60 text-purple-600 shrink-0 mt-0.5">
+                  <Calendar className="h-4 w-4" />
+                </div>
+                <div className="flex-1">
+                  <span className="font-semibold block text-foreground">Event Schedule</span>
+                  <span className="text-muted-foreground">
                     {new Date(data.startTime).toLocaleString("en-US", {
                       weekday: "short",
                       month: "short",
@@ -271,81 +334,203 @@ function RSVPContent() {
                 </div>
               </div>
 
-              <div className="flex items-start gap-2.5 text-foreground/90">
-                <MapPin className="h-4 w-4 text-purple-600 shrink-0 mt-0.5" />
-                <div>
-                  <span className="font-semibold block">Location</span>
-                  <span>{data.location}</span>
+              <div className="flex items-start gap-3 text-foreground/90">
+                <div className="p-1.5 rounded-lg bg-purple-100 dark:bg-purple-950/60 text-purple-600 shrink-0 mt-0.5">
+                  <MapPin className="h-4 w-4" />
+                </div>
+                <div className="flex-1">
+                  <span className="font-semibold block text-foreground">Location</span>
+                  <span className="text-muted-foreground">{data.location}</span>
                 </div>
               </div>
 
               {/* Rehearsal Details */}
               {data.hasRehearsal && data.rehearsalStartTime && data.rehearsalEndTime && (
-                <div className="p-3 bg-amber-500/10 border border-amber-500/20 rounded-lg space-y-1">
-                  <div className="flex items-center gap-1.5 font-semibold text-amber-800 dark:text-amber-300">
-                    <Clock className="h-3.5 w-3.5" />
-                    <span>Rehearsal Session</span>
+                <div className="mt-2 pt-3 border-t border-border/40 flex items-start gap-3 text-amber-900 dark:text-amber-200">
+                  <div className="p-1.5 rounded-lg bg-amber-100 dark:bg-amber-950/60 text-amber-600 shrink-0 mt-0.5">
+                    <Clock className="h-4 w-4" />
                   </div>
-                  <p className="text-muted-foreground">
-                    {new Date(data.rehearsalStartTime).toLocaleString("en-US", {
-                      weekday: "short",
-                      month: "short",
-                      day: "numeric",
-                      hour: "numeric",
-                      minute: "2-digit",
-                      hour12: true,
-                    })}{" "}
-                    –{" "}
-                    {new Date(data.rehearsalEndTime).toLocaleString("en-US", {
-                      hour: "numeric",
-                      minute: "2-digit",
-                      hour12: true,
-                    })}
-                  </p>
-                  {data.attendingRehearsal && (
-                    <span className="inline-block font-semibold text-emerald-700 dark:text-emerald-400 text-[11px]">
-                      ✓ You are scheduled to attend this rehearsal session.
-                    </span>
-                  )}
+                  <div className="flex-1 space-y-0.5">
+                    <div className="flex items-center gap-2">
+                      <span className="font-semibold text-foreground">Rehearsal Session</span>
+                      {data.attendingRehearsal && (
+                        <span className="text-[10px] font-bold text-amber-700 dark:text-amber-400 bg-amber-100 dark:bg-amber-950/80 px-1.5 py-0.2 rounded border border-amber-300 dark:border-amber-800">
+                          Required
+                        </span>
+                      )}
+                    </div>
+                    <p className="text-muted-foreground">
+                      {new Date(data.rehearsalStartTime).toLocaleString("en-US", {
+                        weekday: "short",
+                        month: "short",
+                        day: "numeric",
+                        hour: "numeric",
+                        minute: "2-digit",
+                        hour12: true,
+                      })}{" "}
+                      –{" "}
+                      {new Date(data.rehearsalEndTime).toLocaleString("en-US", {
+                        hour: "numeric",
+                        minute: "2-digit",
+                        hour12: true,
+                      })}
+                    </p>
+                  </div>
                 </div>
               )}
             </div>
 
-            {/* Optional Note Box */}
-            <div className="pt-2 border-t space-y-1.5">
-              <label className="text-xs font-semibold text-foreground flex items-center justify-between">
-                <span>Optional Note / Remarks</span>
-                <span className="text-[10px] text-muted-foreground font-normal">e.g. arrival time constraints</span>
-              </label>
-              <textarea
-                placeholder="Add any details or notes for your Section IC..."
-                value={note}
-                onChange={(e) => setNote(e.target.value)}
-                rows={2}
-                className="w-full rounded-md border border-input bg-background px-3 py-2 text-xs shadow-xs focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring resize-none"
-              />
+            {/* ══════════════════════════════════════════════════════════════════
+                INTERACTIVE RSVP ACTION BUTTONS
+                ══════════════════════════════════════════════════════════════════ */}
+            <div className="space-y-3 pt-2">
+              <div className="flex items-center justify-between">
+                <span className="text-xs font-bold text-foreground uppercase tracking-wider">
+                  Select Your Availability
+                </span>
+                {submitting && (
+                  <span className="text-[11px] text-purple-600 flex items-center gap-1 font-medium">
+                    <Loader2 className="h-3 w-3 animate-spin" /> Saving response...
+                  </span>
+                )}
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                {/* 🟢 Option 1: Confirm Availability */}
+                <button
+                  type="button"
+                  onClick={() => handleRSVP("confirmed")}
+                  disabled={submitting}
+                  className={cn(
+                    "relative group text-left p-4 rounded-2xl border-2 transition-all duration-200 cursor-pointer select-none",
+                    "focus:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500 focus-visible:ring-offset-2",
+                    "active:scale-[0.98] disabled:opacity-60 disabled:cursor-not-allowed",
+                    isConfirmed
+                      ? "bg-linear-to-br from-emerald-50 to-teal-50/80 dark:from-emerald-950/80 dark:to-teal-950/60 border-emerald-500 shadow-md shadow-emerald-500/10 ring-2 ring-emerald-500/20"
+                      : "bg-card hover:bg-emerald-50/50 dark:hover:bg-emerald-950/20 border-border/80 hover:border-emerald-300 dark:hover:border-emerald-800 shadow-xs hover:shadow-md"
+                  )}
+                >
+                  <div className="flex items-start justify-between gap-2">
+                    <div className="flex items-center gap-2.5">
+                      <div
+                        className={cn(
+                          "w-7 h-7 rounded-xl flex items-center justify-center transition-colors",
+                          isConfirmed
+                            ? "bg-emerald-600 text-white shadow-xs"
+                            : "bg-emerald-100 text-emerald-700 dark:bg-emerald-950 dark:text-emerald-400 group-hover:bg-emerald-600 group-hover:text-white"
+                        )}
+                      >
+                        <CheckCircle2 className="h-4 w-4" />
+                      </div>
+                      <div>
+                        <span className="font-bold text-sm text-foreground block">
+                          I am Free
+                        </span>
+                        <span className="text-[11px] text-muted-foreground block font-normal">
+                          Confirm availability
+                        </span>
+                      </div>
+                    </div>
+
+                    {isConfirmed && (
+                      <span className="h-5 px-1.5 rounded-full bg-emerald-600 text-white text-[10px] font-bold flex items-center justify-center">
+                        Selected
+                      </span>
+                    )}
+                  </div>
+                </button>
+
+                {/* 🔴 Option 2: Decline */}
+                <button
+                  type="button"
+                  onClick={() => handleRSVP("declined")}
+                  disabled={submitting}
+                  className={cn(
+                    "relative group text-left p-4 rounded-2xl border-2 transition-all duration-200 cursor-pointer select-none",
+                    "focus:outline-none focus-visible:ring-2 focus-visible:ring-rose-500 focus-visible:ring-offset-2",
+                    "active:scale-[0.98] disabled:opacity-60 disabled:cursor-not-allowed",
+                    isDeclined
+                      ? "bg-linear-to-br from-rose-50 to-red-50/80 dark:from-rose-950/80 dark:to-red-950/60 border-rose-500 shadow-md shadow-rose-500/10 ring-2 ring-rose-500/20"
+                      : "bg-card hover:bg-rose-50/50 dark:hover:bg-rose-950/20 border-border/80 hover:border-rose-300 dark:hover:border-rose-800 shadow-xs hover:shadow-md"
+                  )}
+                >
+                  <div className="flex items-start justify-between gap-2">
+                    <div className="flex items-center gap-2.5">
+                      <div
+                        className={cn(
+                          "w-7 h-7 rounded-xl flex items-center justify-center transition-colors",
+                          isDeclined
+                            ? "bg-rose-600 text-white shadow-xs"
+                            : "bg-rose-100 text-rose-700 dark:bg-rose-950 dark:text-rose-400 group-hover:bg-rose-600 group-hover:text-white"
+                        )}
+                      >
+                        <XCircle className="h-4 w-4" />
+                      </div>
+                      <div>
+                        <span className="font-bold text-sm text-foreground block">
+                          Not Free
+                        </span>
+                        <span className="text-[11px] text-muted-foreground block font-normal">
+                          Decline deployment
+                        </span>
+                      </div>
+                    </div>
+
+                    {isDeclined && (
+                      <span className="h-5 px-1.5 rounded-full bg-rose-600 text-white text-[10px] font-bold flex items-center justify-center">
+                        Selected
+                      </span>
+                    )}
+                  </div>
+                </button>
+              </div>
             </div>
 
-            {/* Action Buttons */}
-            <div className="pt-2 flex flex-col sm:flex-row gap-2.5">
-              <Button
-                onClick={() => handleRSVP("confirmed")}
-                disabled={submitting}
-                className="flex-1 bg-emerald-600 hover:bg-emerald-700 text-white font-semibold gap-1.5 h-11"
-              >
-                {submitting ? <Loader2 className="h-4 w-4 animate-spin" /> : <CheckCircle2 className="h-4 w-4" />}
-                {currentStatus === "confirmed" ? "Keep as Confirmed" : "I am Free (Confirm)"}
-              </Button>
+            {/* Optional Note Box */}
+            <div className="pt-2 border-t border-border/50 space-y-2">
+              <div className="flex items-center justify-between">
+                <label className="text-xs font-semibold text-foreground flex items-center gap-1.5">
+                  <MessageSquare className="h-3.5 w-3.5 text-purple-600" />
+                  <span>Optional Note for Section IC</span>
+                </label>
+                <span className="text-[10px] text-muted-foreground font-normal">
+                  e.g. &ldquo;Can arrive 20m early&rdquo;, &ldquo;Need gear ride&rdquo;
+                </span>
+              </div>
+              <div className="relative">
+                <textarea
+                  placeholder="Add any details or constraints for your team leads..."
+                  value={note}
+                  onChange={(e) => setNote(e.target.value)}
+                  rows={2}
+                  className="w-full rounded-xl border border-input bg-background/80 px-3.5 py-2.5 text-xs shadow-2xs focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-purple-500 resize-none transition-all"
+                />
+              </div>
 
-              <Button
-                onClick={() => handleRSVP("declined")}
-                disabled={submitting}
-                variant="outline"
-                className="flex-1 border-red-200 text-red-600 hover:bg-red-50 dark:hover:bg-red-950/30 dark:border-red-900 font-semibold gap-1.5 h-11"
-              >
-                {submitting ? <Loader2 className="h-4 w-4 animate-spin" /> : <XCircle className="h-4 w-4" />}
-                {currentStatus === "declined" ? "Keep as Not Free" : "Not Free (Decline)"}
-              </Button>
+              {/* Save Note Button when status is already selected */}
+              {currentStatus !== "pending" && (
+                <div className="flex justify-end items-center gap-2">
+                  {noteSavedFeedback && (
+                    <span className="text-[11px] text-emerald-600 font-semibold flex items-center gap-1 animate-in fade-in">
+                      <Check className="h-3.5 w-3.5 stroke-[3]" /> Note updated!
+                    </span>
+                  )}
+                  <button
+                    type="button"
+                    onClick={handleSaveNote}
+                    disabled={submitting}
+                    className="px-3 py-1.5 rounded-lg bg-muted hover:bg-muted/80 text-foreground font-semibold text-xs border border-border/60 transition-all active:scale-95 disabled:opacity-50 cursor-pointer"
+                  >
+                    Save Note
+                  </button>
+                </div>
+              )}
+            </div>
+
+            {/* Footer Assurance */}
+            <div className="pt-3 border-t border-border/40 flex items-center justify-center gap-1.5 text-[11px] text-muted-foreground">
+              <ShieldCheck className="h-3.5 w-3.5 text-purple-600" />
+              <span>Token-authenticated MediaHub RSVP • Instant synchronization</span>
             </div>
           </CardContent>
         </Card>
@@ -358,7 +543,7 @@ export default function RSVPPage() {
   return (
     <Suspense
       fallback={
-        <div className="min-h-screen bg-muted/30 flex items-center justify-center p-4">
+        <div className="min-h-screen bg-linear-to-b from-slate-50 to-slate-100 dark:from-slate-950 dark:to-slate-900 flex items-center justify-center p-4">
           <Loader2 className="h-8 w-8 animate-spin text-purple-600" />
         </div>
       }
