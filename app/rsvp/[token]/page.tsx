@@ -16,7 +16,6 @@ import {
   Sparkles,
   Check,
   X,
-  MessageSquare,
   ShieldCheck,
 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
@@ -38,7 +37,6 @@ interface RSVPData {
   section: "photo" | "video" | "av";
   responseStatus: "pending" | "confirmed" | "declined";
   respondedAt: string | null;
-  responseNote: string | null;
 }
 
 const SECTION_CONFIG = {
@@ -72,21 +70,18 @@ function RSVPContent() {
   const [submitting, setSubmitting] = useState(false);
   const [data, setData] = useState<RSVPData | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [note, setNote] = useState("");
   const [submittedStatus, setSubmittedStatus] = useState<"confirmed" | "declined" | null>(null);
-  const [noteSavedFeedback, setNoteSavedFeedback] = useState(false);
 
   const handleRSVP = useCallback(
-    async (status: "confirmed" | "declined", overrideNote?: string) => {
+    async (status: "confirmed" | "declined") => {
       if (!token) return;
-      const targetNote = overrideNote !== undefined ? overrideNote : note;
       try {
         setSubmitting(true);
         setError(null);
         const res = await fetch("/api/rsvp", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ token, status, note: targetNote }),
+          body: JSON.stringify({ token, status }),
         });
 
         if (!res.ok) {
@@ -101,7 +96,6 @@ function RSVPContent() {
                 ...prev,
                 responseStatus: status,
                 respondedAt: new Date().toISOString(),
-                responseNote: targetNote,
               }
             : null
         );
@@ -111,7 +105,7 @@ function RSVPContent() {
         setSubmitting(false);
       }
     },
-    [token, note]
+    [token]
   );
 
   // Load RSVP Data
@@ -128,9 +122,6 @@ function RSVPContent() {
         }
         const rsvpData: RSVPData = await res.json();
         setData(rsvpData);
-        if (rsvpData.responseNote) {
-          setNote(rsvpData.responseNote);
-        }
 
         // If URL contained ?action=confirm or ?action=decline, auto-respond if currently pending
         if (initialAction === "confirm" && rsvpData.responseStatus === "pending") {
@@ -147,13 +138,6 @@ function RSVPContent() {
 
     loadData();
   }, [token, initialAction, handleRSVP]);
-
-  const handleSaveNote = async () => {
-    if (!currentStatus || currentStatus === "pending") return;
-    await handleRSVP(currentStatus, note);
-    setNoteSavedFeedback(true);
-    setTimeout(() => setNoteSavedFeedback(false), 2500);
-  };
 
   if (loading) {
     return (
@@ -484,47 +468,6 @@ function RSVPContent() {
                   </div>
                 </button>
               </div>
-            </div>
-
-            {/* Optional Note Box */}
-            <div className="pt-2 border-t border-border/50 space-y-2">
-              <div className="flex items-center justify-between">
-                <label className="text-xs font-semibold text-foreground flex items-center gap-1.5">
-                  <MessageSquare className="h-3.5 w-3.5 text-purple-600" />
-                  <span>Optional Note for Section IC</span>
-                </label>
-                <span className="text-[10px] text-muted-foreground font-normal">
-                  e.g. &ldquo;Can arrive 20m early&rdquo;, &ldquo;Need gear ride&rdquo;
-                </span>
-              </div>
-              <div className="relative">
-                <textarea
-                  placeholder="Add any details or constraints for your team leads..."
-                  value={note}
-                  onChange={(e) => setNote(e.target.value)}
-                  rows={2}
-                  className="w-full rounded-xl border border-input bg-background/80 px-3.5 py-2.5 text-xs shadow-2xs focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-purple-500 resize-none transition-all"
-                />
-              </div>
-
-              {/* Save Note Button when status is already selected */}
-              {currentStatus !== "pending" && (
-                <div className="flex justify-end items-center gap-2">
-                  {noteSavedFeedback && (
-                    <span className="text-[11px] text-emerald-600 font-semibold flex items-center gap-1 animate-in fade-in">
-                      <Check className="h-3.5 w-3.5 stroke-[3]" /> Note updated!
-                    </span>
-                  )}
-                  <button
-                    type="button"
-                    onClick={handleSaveNote}
-                    disabled={submitting}
-                    className="px-3 py-1.5 rounded-lg bg-muted hover:bg-muted/80 text-foreground font-semibold text-xs border border-border/60 transition-all active:scale-95 disabled:opacity-50 cursor-pointer"
-                  >
-                    Save Note
-                  </button>
-                </div>
-              )}
             </div>
 
             {/* Footer Assurance */}
