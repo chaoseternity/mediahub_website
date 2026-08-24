@@ -22,6 +22,9 @@ import {
   X,
   CheckCircle2,
   Plus,
+  Eye,
+  ChevronDown,
+  ChevronUp,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -34,6 +37,7 @@ import {
   DialogHeader,
   DialogTitle,
   DialogFooter,
+  DialogDescription,
 } from "@/components/ui/dialog";
 import { SOPPreviewModal } from "./SOPPreviewModal";
 import type { SOPDocument, SOPCitation, AIChatMessage, Role } from "@/lib/types";
@@ -56,6 +60,7 @@ interface StagedFile {
   status: "ready" | "extracting" | "error";
   error?: string;
   wordCount: number;
+  isExpanded?: boolean;
 }
 
 const PRESET_QUESTIONS = [
@@ -116,6 +121,9 @@ export function SOPManager({ initialDocuments, role, userName }: SOPManagerProps
   const [isDragOver, setIsDragOver] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
+  // Inspected Staged File Modal (for full-screen extracted text inspection & editing)
+  const [inspectingFileId, setInspectingFileId] = useState<string | null>(null);
+
   // Manual Entry Form State
   const [manualTitle, setManualTitle] = useState("");
   const [manualCategory, setManualCategory] = useState("General");
@@ -169,7 +177,7 @@ export function SOPManager({ initialDocuments, role, userName }: SOPManagerProps
     }
   }
 
-  // Extract text from a single file client-side
+  // Extract text from a file (client-side for .docx, .txt, .md or server for .pdf)
   const extractFileText = useCallback(async (file: File): Promise<{ content: string; wordCount: number }> => {
     const nameLower = file.name.toLowerCase();
 
@@ -197,10 +205,12 @@ export function SOPManager({ initialDocuments, role, userName }: SOPManagerProps
             .trim();
 
           const words = clean.split(/\s+/).filter(Boolean).length;
-          return { content: clean, wordCount: words };
+          if (clean.length > 0) {
+            return { content: clean, wordCount: words };
+          }
         }
       } catch (err) {
-        console.warn("Word docx extraction fallback to server:", err);
+        console.warn("Client docx extraction fallback to parse API:", err);
       }
     }
 
@@ -221,7 +231,26 @@ export function SOPManager({ initialDocuments, role, userName }: SOPManagerProps
       }
     }
 
-    // 3. For PDF or binary documents, mark for server-side processing
+    // 3. For PDF or server-supported documents, call parse API
+    try {
+      const formData = new FormData();
+      formData.append("file", file);
+      const res = await fetch("/api/sop/parse", {
+        method: "POST",
+        body: formData,
+      });
+
+      if (res.ok) {
+        const parseData = await res.json();
+        return {
+          content: parseData.content,
+          wordCount: parseData.wordCount || parseData.content.split(/\s+/).filter(Boolean).length,
+        };
+      }
+    } catch (err) {
+      console.warn("Server parse API fallback:", err);
+    }
+
     return {
       content: `[File selected: ${file.name} (${(file.size / 1024).toFixed(1)} KB)]\nText will be extracted on the server.`,
       wordCount: 0,
@@ -247,13 +276,14 @@ export function SOPManager({ initialDocuments, role, userName }: SOPManagerProps
           content: "",
           status: "extracting",
           wordCount: 0,
+          isExpanded: false,
         };
       });
 
       // Append to queue immediately with "extracting" status
       setStagedFiles((prev) => [...prev, ...newItems]);
 
-      // Extract each file in parallel
+      // Extract each file
       for (const item of newItems) {
         try {
           const { content, wordCount } = await extractFileText(item.file);
@@ -283,6 +313,7 @@ export function SOPManager({ initialDocuments, role, userName }: SOPManagerProps
   // Remove a wrongly uploaded file from the staging queue
   function removeStagedFile(id: string) {
     setStagedFiles((prev) => prev.filter((f) => f.id !== id));
+    if (inspectingFileId === id) setInspectingFileId(null);
   }
 
   // Update title of a staged file
@@ -293,6 +324,19 @@ export function SOPManager({ initialDocuments, role, userName }: SOPManagerProps
   // Update category of a staged file
   function updateStagedCategory(id: string, category: string) {
     setStagedFiles((prev) => prev.map((f) => (f.id === id ? { ...f, category } : f)));
+  }
+
+  // Update content of a staged file
+  function updateStagedContent(id: string, content: string) {
+    const wordCount = content.split(/\s+/).filter(Boolean).length;
+    setStagedFiles((prev) => prev.map((f) => (f.id === id ? { ...f, content, wordCount } : f)));
+  }
+
+  // Toggle inline expansion of extracted text
+  function toggleExpandStagedFile(id: string) {
+    setStagedFiles((prev) =>
+      prev.map((f) => (f.id === id ? { ...f, isExpanded: !f.isExpanded } : f))
+    );
   }
 
   // Handle Batch Upload of All Staged Files
@@ -513,6 +557,8 @@ export function SOPManager({ initialDocuments, role, userName }: SOPManagerProps
 
     return matchesSearch && matchesCategory;
   });
+
+  const inspectingFile = stagedFiles.find((f) => f.id === inspectingFileId) || null;
 
   return (
     <div className="px-4 py-4 md:px-6 md:py-6 w-full space-y-6 max-w-6xl mx-auto">
@@ -888,7 +934,7 @@ export function SOPManager({ initialDocuments, role, userName }: SOPManagerProps
           COMBINED MULTI-FILE UPLOAD & LIVE PREVIEW MODAL
           ══════════════════════════════════════════════════════════════════════ */}
       <Dialog open={uploadModalOpen} onOpenChange={setUploadModalOpen}>
-        <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto w-[95vw]">
+        <DialogContent className="max-w-3xl max-h-[90vh] overflow-y-auto w-[95vw]">
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2 text-base font-bold">
               <Upload className="h-4.5 w-4.5 text-purple-600" />
@@ -964,7 +1010,7 @@ export function SOPManager({ initialDocuments, role, userName }: SOPManagerProps
                   onChange={(e) => {
                     if (e.target.files) {
                       handleFilesAdded(e.target.files);
-                      e.target.value = ""; // Reset input so user can add more of the same if needed
+                      e.target.value = ""; // Reset input so user can add more files
                     }
                   }}
                   className="hidden"
@@ -1017,84 +1063,128 @@ export function SOPManager({ initialDocuments, role, userName }: SOPManagerProps
                     </div>
                   </div>
 
-                  {/* List of Files with delete and edit controls */}
-                  <div className="space-y-2 max-h-[300px] overflow-y-auto pr-1">
+                  {/* List of Files with inspection, editing, and delete controls */}
+                  <div className="space-y-2.5 max-h-[360px] overflow-y-auto pr-1">
                     {stagedFiles.map((item, index) => (
                       <div
                         key={item.id}
-                        className="p-3 border rounded-xl bg-card flex flex-col sm:flex-row sm:items-center justify-between gap-3 shadow-2xs group hover:border-border transition-colors"
+                        className="p-3 border rounded-xl bg-card space-y-2.5 shadow-2xs group hover:border-border transition-colors"
                       >
-                        <div className="flex items-center gap-2.5 flex-1 min-w-0">
-                          <span className="text-xs font-mono font-bold text-muted-foreground w-5 shrink-0 text-center">
-                            #{index + 1}
-                          </span>
+                        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                          <div className="flex items-center gap-2.5 flex-1 min-w-0">
+                            <span className="text-xs font-mono font-bold text-muted-foreground w-5 shrink-0 text-center">
+                              #{index + 1}
+                            </span>
 
-                          <div className="p-2 rounded-lg bg-muted/60 text-purple-600 shrink-0">
-                            {item.file.name.endsWith(".docx") ? (
-                              <FileText className="h-4 w-4" />
-                            ) : item.file.name.endsWith(".pdf") ? (
-                              <BookOpen className="h-4 w-4" />
-                            ) : (
-                              <FileCode className="h-4 w-4" />
-                            )}
-                          </div>
-
-                          {/* Editable Title and Meta */}
-                          <div className="space-y-1 flex-1 min-w-0">
-                            <Input
-                              value={item.title}
-                              onChange={(e) => updateStagedTitle(item.id, e.target.value)}
-                              placeholder="Document Title"
-                              className="h-7 text-xs font-semibold"
-                            />
-                            <div className="flex items-center gap-2 text-[10px] text-muted-foreground">
-                              <span className="truncate max-w-[140px]" title={item.file.name}>
-                                {item.file.name}
-                              </span>
-                              <span>•</span>
-                              <span>{(item.file.size / 1024).toFixed(1)} KB</span>
-                              <span>•</span>
-                              {item.status === "extracting" ? (
-                                <span className="text-amber-600 flex items-center gap-1">
-                                  <RefreshCw className="h-2.5 w-2.5 animate-spin" /> Extracting…
-                                </span>
-                              ) : item.wordCount > 0 ? (
-                                <span className="text-emerald-600 font-medium">
-                                  ✓ {item.wordCount} words extracted
-                                </span>
+                            <div className="p-2 rounded-lg bg-muted/60 text-purple-600 shrink-0">
+                              {item.file.name.endsWith(".docx") ? (
+                                <FileText className="h-4 w-4" />
+                              ) : item.file.name.endsWith(".pdf") ? (
+                                <BookOpen className="h-4 w-4" />
                               ) : (
-                                <span className="text-purple-600">PDF (Server extracted)</span>
+                                <FileCode className="h-4 w-4" />
                               )}
                             </div>
+
+                            {/* Editable Title and Meta */}
+                            <div className="space-y-1 flex-1 min-w-0">
+                              <Input
+                                value={item.title}
+                                onChange={(e) => updateStagedTitle(item.id, e.target.value)}
+                                placeholder="Document Title"
+                                className="h-7 text-xs font-semibold"
+                              />
+                              <div className="flex items-center gap-2 text-[10px] text-muted-foreground flex-wrap">
+                                <span className="truncate max-w-[140px]" title={item.file.name}>
+                                  {item.file.name}
+                                </span>
+                                <span>•</span>
+                                <span>{(item.file.size / 1024).toFixed(1)} KB</span>
+                                <span>•</span>
+                                {item.status === "extracting" ? (
+                                  <span className="text-amber-600 flex items-center gap-1 font-medium">
+                                    <RefreshCw className="h-2.5 w-2.5 animate-spin" /> Extracting…
+                                  </span>
+                                ) : item.wordCount > 0 ? (
+                                  <span className="text-emerald-600 font-medium">
+                                    ✓ {item.wordCount} words extracted
+                                  </span>
+                                ) : (
+                                  <span className="text-purple-600 font-medium">Text ready</span>
+                                )}
+                              </div>
+                            </div>
+                          </div>
+
+                          {/* Action Buttons: Preview Extracted Text, Category & Remove */}
+                          <div className="flex items-center gap-1.5 shrink-0 self-end sm:self-center">
+                            {/* 👁️ View / Inspect Extracted Text Button */}
+                            <Button
+                              type="button"
+                              variant="outline"
+                              size="sm"
+                              onClick={() => setInspectingFileId(item.id)}
+                              className="h-7 text-xs gap-1 px-2.5 text-purple-600 hover:text-purple-700 hover:bg-purple-50 dark:hover:bg-purple-950/40 border-purple-200 dark:border-purple-800"
+                              title="Inspect full extracted text content"
+                            >
+                              <Eye className="h-3.5 w-3.5" />
+                              <span className="hidden xs:inline">View Text</span>
+                            </Button>
+
+                            {/* Expand Inline Button */}
+                            <Button
+                              type="button"
+                              variant="ghost"
+                              size="sm"
+                              onClick={() => toggleExpandStagedFile(item.id)}
+                              className="h-7 px-1.5 text-xs text-muted-foreground hover:text-foreground"
+                              title={item.isExpanded ? "Collapse inline preview" : "Expand inline preview"}
+                            >
+                              {item.isExpanded ? <ChevronUp className="h-3.5 w-3.5" /> : <ChevronDown className="h-3.5 w-3.5" />}
+                            </Button>
+
+                            <select
+                              value={item.category}
+                              onChange={(e) => updateStagedCategory(item.id, e.target.value)}
+                              className="h-7 rounded-md border border-input bg-background px-2 py-0.5 text-xs shadow-2xs focus:outline-none focus:ring-1 focus:ring-ring"
+                            >
+                              {DOC_CATEGORIES.map((c) => (
+                                <option key={c} value={c}>
+                                  {c}
+                                </option>
+                              ))}
+                            </select>
+
+                            {/* 🗑️ Remove Button (Remove wrongly uploaded files) */}
+                            <Button
+                              type="button"
+                              variant="ghost"
+                              size="icon"
+                              onClick={() => removeStagedFile(item.id)}
+                              className="h-7 w-7 text-muted-foreground hover:text-destructive hover:bg-destructive/10 rounded-lg transition-colors"
+                              title="Remove this file"
+                            >
+                              <X className="h-4 w-4" />
+                            </Button>
                           </div>
                         </div>
 
-                        {/* Category & Remove Action */}
-                        <div className="flex items-center gap-2 shrink-0 self-end sm:self-center">
-                          <select
-                            value={item.category}
-                            onChange={(e) => updateStagedCategory(item.id, e.target.value)}
-                            className="h-7 rounded-md border border-input bg-background px-2 py-0.5 text-xs shadow-2xs focus:outline-none focus:ring-1 focus:ring-ring"
-                          >
-                            {DOC_CATEGORIES.map((c) => (
-                              <option key={c} value={c}>
-                                {c}
-                              </option>
-                            ))}
-                          </select>
-
-                          {/* 🗑️ Remove Button (Allow user to remove wrongly uploaded files) */}
-                          <Button
-                            type="button"
-                            variant="ghost"
-                            size="icon"
-                            onClick={() => removeStagedFile(item.id)}
-                            className="h-7 w-7 text-muted-foreground hover:text-destructive hover:bg-destructive/10 rounded-lg transition-colors"
-                            title="Remove this file"
-                          >
-                            <X className="h-4 w-4" />
-                          </Button>
-                        </div>
+                        {/* Expandable Inline Extracted Text Box */}
+                        {item.isExpanded && (
+                          <div className="pt-2 border-t space-y-1.5 animate-in fade-in">
+                            <div className="flex items-center justify-between text-[11px] text-muted-foreground">
+                              <span className="font-semibold text-foreground">Extracted Document Text:</span>
+                              <span className="font-mono">{item.wordCount} words ({item.content.length} characters)</span>
+                            </div>
+                            <textarea
+                              rows={4}
+                              value={item.content}
+                              onChange={(e) => updateStagedContent(item.id, e.target.value)}
+                              placeholder="Extracted text preview..."
+                              className="w-full rounded-md border border-input bg-muted/20 p-2.5 text-xs leading-relaxed font-mono shadow-2xs focus:outline-none focus:ring-1 focus:ring-ring resize-y"
+                            />
+                          </div>
+                        )}
                       </div>
                     ))}
                   </div>
@@ -1227,6 +1317,69 @@ export function SOPManager({ initialDocuments, role, userName }: SOPManagerProps
           )}
         </DialogContent>
       </Dialog>
+
+      {/* ══════════════════════════════════════════════════════════════════════
+          INSPECT EXTRACTED TEXT MODAL (Preview & Edit Staged Text)
+          ══════════════════════════════════════════════════════════════════════ */}
+      {inspectingFile && (
+        <Dialog open={Boolean(inspectingFileId)} onOpenChange={(open) => !open && setInspectingFileId(null)}>
+          <DialogContent className="max-w-2xl max-h-[85vh] overflow-y-auto w-[90vw]">
+            <DialogHeader>
+              <div className="flex items-center justify-between gap-2 pr-6">
+                <DialogTitle className="flex items-center gap-2 text-base font-bold">
+                  <Eye className="h-4.5 w-4.5 text-purple-600" />
+                  Extracted Text Content
+                </DialogTitle>
+                <Badge variant="outline" className="text-xs bg-muted/40">
+                  {inspectingFile.category}
+                </Badge>
+              </div>
+              <DialogDescription className="text-xs text-muted-foreground">
+                Review and adjust the extracted text for <span className="font-semibold text-foreground">{inspectingFile.file.name}</span> before confirming upload.
+              </DialogDescription>
+            </DialogHeader>
+
+            <div className="space-y-3 py-2">
+              <div className="space-y-1.5">
+                <Label htmlFor="inspect-title" className="text-xs font-semibold">Document Title</Label>
+                <Input
+                  id="inspect-title"
+                  value={inspectingFile.title}
+                  onChange={(e) => updateStagedTitle(inspectingFile.id, e.target.value)}
+                  className="text-xs font-semibold h-8"
+                />
+              </div>
+
+              <div className="space-y-1.5">
+                <div className="flex items-center justify-between text-xs">
+                  <Label htmlFor="inspect-content" className="font-semibold">Extracted Text Preview / Editor</Label>
+                  <span className="text-[11px] text-muted-foreground font-mono">
+                    {inspectingFile.wordCount} words ({inspectingFile.content.length} characters)
+                  </span>
+                </div>
+                <textarea
+                  id="inspect-content"
+                  rows={12}
+                  value={inspectingFile.content}
+                  onChange={(e) => updateStagedContent(inspectingFile.id, e.target.value)}
+                  placeholder="Extracted document text..."
+                  className="w-full rounded-md border border-input bg-background p-3 text-xs leading-relaxed font-mono shadow-xs focus:outline-none focus:ring-1 focus:ring-ring"
+                />
+              </div>
+            </div>
+
+            <DialogFooter className="border-t pt-3">
+              <Button
+                type="button"
+                className="bg-purple-600 hover:bg-purple-700 text-white"
+                onClick={() => setInspectingFileId(null)}
+              >
+                Done Reviewing
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+      )}
 
       {/* ══════════════════════════════════════════════════════════════════════
           SOP PREVIEW & CITATION MODAL
