@@ -108,7 +108,6 @@ export interface SectionDeploymentItem extends User {
   response_status?: DeploymentResponseStatus;
   response_token?: string;
   responded_at?: string | null;
-  response_note?: string | null;
 }
 
 export interface SectionDeploymentMap {

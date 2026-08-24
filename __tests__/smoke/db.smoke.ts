@@ -184,7 +184,7 @@ describe("Smoke — lib/db.ts (Vercel Postgres mock)", () => {
       expect(depTokenDetails?.user.id).toBe(crewMember.id);
       expect(depTokenDetails?.response_status).toBe("pending");
 
-      const rsvpRes = await updateDeploymentRSVP(depRes.token, "confirmed", "I am available early");
+      const rsvpRes = await updateDeploymentRSVP(depRes.token, "confirmed");
       expect(rsvpRes.success).toBe(true);
 
       await updateSectionRehearsalConfig(event.id, "photo", true, [eq.id], [crewMember.id]);
@@ -193,7 +193,6 @@ describe("Smoke — lib/db.ts (Vercel Postgres mock)", () => {
       expect(fetchedEvent?.section_equipment.photo).toHaveLength(1);
       expect(fetchedEvent?.section_deployments.photo).toHaveLength(1);
       expect(fetchedEvent?.section_deployments.photo[0].response_status).toBe("confirmed");
-      expect(fetchedEvent?.section_deployments.photo[0].response_note).toBe("I am available early");
       expect(fetchedEvent?.section_rehearsals.photo.participating).toBe(true);
 
       const delRes = await deleteEvent(event.id);

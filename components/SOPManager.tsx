@@ -451,7 +451,7 @@ export function SOPManager({ initialDocuments, role, userName }: SOPManagerProps
           )}
 
           {/* Chat Container */}
-          <div className="border rounded-xl bg-card flex flex-col h-[650px] shadow-sm overflow-hidden">
+          <div className="border rounded-xl bg-card flex flex-col h-[calc(100dvh-260px)] min-h-[480px] md:h-[650px] shadow-sm overflow-hidden">
             {/* Chat Header Bar */}
             <div className="px-4 py-2.5 border-b bg-muted/30 flex items-center justify-between text-xs">
               <div className="flex items-center gap-2">

@@ -103,7 +103,6 @@ export const SCHEMA_SQL = `
     response_status     TEXT    NOT NULL DEFAULT 'pending' CHECK(response_status IN ('pending', 'confirmed', 'declined')),
     response_token      TEXT,
     responded_at        TEXT,
-    response_note       TEXT,
     PRIMARY KEY (event_id, user_id, section)
   );
 

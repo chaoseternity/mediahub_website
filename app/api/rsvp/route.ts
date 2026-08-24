@@ -5,7 +5,6 @@ import { z } from "zod";
 const RSVPPostSchema = z.object({
   token: z.string().min(1, "Token required"),
   status: z.enum(["confirmed", "declined"]),
-  note: z.string().max(500).optional(),
 });
 
 export async function GET(req: NextRequest) {
@@ -37,7 +36,6 @@ export async function GET(req: NextRequest) {
       section: details.section,
       responseStatus: details.response_status,
       respondedAt: details.responded_at,
-      responseNote: details.response_note,
     });
   } catch (err: unknown) {
     console.error("RSVP GET Error:", err);
@@ -56,8 +54,8 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: parsed.error.flatten() }, { status: 400 });
     }
 
-    const { token, status, note } = parsed.data;
-    const result = await updateDeploymentRSVP(token, status, note);
+    const { token, status } = parsed.data;
+    const result = await updateDeploymentRSVP(token, status);
 
     if (!result.success) {
       return NextResponse.json({ error: result.error || "Failed to update RSVP" }, { status: 400 });

@@ -183,7 +183,6 @@ export async function ensureSchema(): Promise<void> {
           response_status TEXT NOT NULL DEFAULT 'pending' CHECK(response_status IN ('pending', 'confirmed', 'declined')),
           response_token TEXT,
           responded_at TIMESTAMP WITH TIME ZONE,
-          response_note TEXT,
           PRIMARY KEY (event_id, user_id, section)
         );
       `,
@@ -201,10 +200,6 @@ export async function ensureSchema(): Promise<void> {
     await runSafe(
       () => sql`ALTER TABLE event_deployments ADD COLUMN IF NOT EXISTS responded_at TIMESTAMP WITH TIME ZONE;`,
       "ALTER event_deployments responded_at"
-    );
-    await runSafe(
-      () => sql`ALTER TABLE event_deployments ADD COLUMN IF NOT EXISTS response_note TEXT;`,
-      "ALTER event_deployments response_note"
     );
 
     await runSafe(

@@ -584,12 +584,11 @@ export async function getEventById(id: number): Promise<AppEvent | undefined> {
       response_status?: DeploymentResponseStatus;
       response_token?: string;
       responded_at?: string | null;
-      response_note?: string | null;
     }
   >`
     SELECT 
       u.id, u.name, u.email, u.username, u.google_id, u.image, u.role, u.provider, u.created_at, 
-      ed.section, ed.attending_rehearsal, ed.response_status, ed.response_token, ed.responded_at, ed.response_note
+      ed.section, ed.attending_rehearsal, ed.response_status, ed.response_token, ed.responded_at
     FROM users u
     JOIN event_deployments ed ON ed.user_id = u.id
     WHERE ed.event_id = ${id}
@@ -602,7 +601,6 @@ export async function getEventById(id: number): Promise<AppEvent | undefined> {
       response_status: dep.response_status || "pending",
       response_token: dep.response_token || undefined,
       responded_at: dep.responded_at || null,
-      response_note: dep.response_note || null,
     };
     if (section_deployments[dep.section]) {
       section_deployments[dep.section].push(item);
@@ -802,7 +800,6 @@ export interface DeploymentTokenDetails {
   response_status: DeploymentResponseStatus;
   response_token: string;
   responded_at: string | null;
-  response_note: string | null;
 }
 
 export async function getDeploymentByToken(token: string): Promise<DeploymentTokenDetails | null> {
@@ -815,9 +812,8 @@ export async function getDeploymentByToken(token: string): Promise<DeploymentTok
     response_status: DeploymentResponseStatus;
     response_token: string;
     responded_at: string | null;
-    response_note: string | null;
   }>`
-    SELECT event_id, user_id, section, attending_rehearsal, response_status, response_token, responded_at, response_note
+    SELECT event_id, user_id, section, attending_rehearsal, response_status, response_token, responded_at
     FROM event_deployments
     WHERE response_token = ${token}
     LIMIT 1
@@ -836,22 +832,19 @@ export async function getDeploymentByToken(token: string): Promise<DeploymentTok
     response_status: dep.response_status || "pending",
     response_token: dep.response_token,
     responded_at: dep.responded_at,
-    response_note: dep.response_note,
   };
 }
 
 export async function updateDeploymentRSVP(
   token: string,
-  status: "confirmed" | "declined",
-  note?: string
+  status: "confirmed" | "declined"
 ): Promise<{ success: boolean; error?: string }> {
   await ensureSchema();
   const { rowCount } = await sql`
     UPDATE event_deployments
     SET 
       response_status = ${status},
-      responded_at = CURRENT_TIMESTAMP,
-      response_note = ${note || null}
+      responded_at = CURRENT_TIMESTAMP
     WHERE response_token = ${token}
   `;
   if (!rowCount || rowCount === 0) {

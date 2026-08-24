@@ -1,6 +1,5 @@
 "use client";
 
-import { useState } from "react";
 import { signIn } from "next-auth/react";
 import { Button } from "@/components/ui/button";
 import {
@@ -10,7 +9,6 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
-import { ChevronDown } from "lucide-react";
 
 function MicrosoftIcon() {
   return (
@@ -35,52 +33,34 @@ function GoogleIcon() {
 }
 
 export default function LoginPage() {
-  const [showMore, setShowMore] = useState(false);
-
   return (
-    <main className="min-h-screen flex items-center justify-center bg-muted/40">
-      <Card className="w-full max-w-sm">
-        <CardHeader className="text-center">
+    <main className="min-h-screen flex items-center justify-center bg-muted/40 p-4">
+      <Card className="w-full max-w-sm shadow-md">
+        <CardHeader className="text-center pb-4">
           <CardTitle className="text-2xl font-bold">MediaHub</CardTitle>
-          <CardDescription>Sign in to manage your equipment & events</CardDescription>
+          <CardDescription className="text-xs">Sign in to manage your equipment & events</CardDescription>
         </CardHeader>
         <CardContent className="flex flex-col gap-3">
-          {/* Primary: Google */}
+          {/* Option 1: Google */}
           <Button
-            className="w-full"
+            className="w-full font-medium h-10"
             onClick={() => signIn("google", { callbackUrl: "/dashboard" })}
           >
             <GoogleIcon />
             Sign in with Google
           </Button>
 
-          {/* More Options toggle */}
+          {/* Option 2: Microsoft (Directly below Google) */}
           <Button
-            variant="ghost"
-            size="sm"
-            className="w-full text-muted-foreground"
-            onClick={() => setShowMore((v) => !v)}
+            variant="outline"
+            className="w-full font-medium h-10"
+            onClick={() => signIn("microsoft-entra-id", { callbackUrl: "/dashboard" })}
           >
-            More options
-            <ChevronDown
-              className={`ml-1 h-3.5 w-3.5 transition-transform duration-200 ${showMore ? "rotate-180" : ""}`}
-            />
+            <MicrosoftIcon />
+            Sign in with Microsoft
           </Button>
-
-          {/* Secondary: Microsoft */}
-          {showMore && (
-            <Button
-              variant="outline"
-              className="w-full"
-              onClick={() => signIn("microsoft-entra-id", { callbackUrl: "/dashboard" })}
-            >
-              <MicrosoftIcon />
-              Sign in with Microsoft
-            </Button>
-          )}
         </CardContent>
       </Card>
     </main>
   );
 }
-

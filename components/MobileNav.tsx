@@ -83,7 +83,7 @@ export function MobileNav({ userName, role }: MobileNavProps) {
   return (
     <>
       {/* Top bar — mobile only */}
-      <header className="md:hidden flex items-center gap-3 px-4 py-3 border-b bg-background sticky top-0 z-30">
+      <header className="md:hidden flex items-center gap-3 px-4 py-3 border-b bg-background/95 backdrop-blur-sm sticky top-0 z-40 shrink-0 shadow-2xs">
         <Button
           variant="ghost"
           size="icon"
