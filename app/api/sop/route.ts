@@ -1,5 +1,5 @@
 import { auth } from "@/lib/auth";
-import { getAllSOPDocuments, createSOPDocument, getUserByEmail } from "@/lib/db";
+import { getAllSOPDocuments, createSOPDocument, updateSOPDocument, getUserByEmail } from "@/lib/db";
 import { extractTextFromDocument } from "@/lib/doc-parser";
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
@@ -13,6 +13,7 @@ const CreateSOPManualSchema = z.object({
   file_name: z.string().nullable().optional(),
   file_type: z.string().nullable().optional(),
   file_size: z.number().nullable().optional(),
+  overwrite_id: z.number().nullable().optional(),
 });
 
 export async function GET() {
@@ -58,13 +59,50 @@ export async function POST(req: NextRequest) {
         );
       }
 
+      const { title, category, content, file_name, file_type, file_size, overwrite_id } = parsed.data;
+      const cleanTitle = title.trim();
+
+      if (overwrite_id) {
+        const updated = await updateSOPDocument(overwrite_id, {
+          title: cleanTitle,
+          category: category || "General",
+          content: content.trim(),
+          file_name: file_name ?? null,
+          file_type: file_type ?? null,
+          file_size: file_size ?? null,
+        });
+        if (!updated) {
+          return NextResponse.json({ error: "Document to overwrite was not found" }, { status: 404 });
+        }
+        return NextResponse.json(updated, { status: 200 });
+      }
+
+      // Check for duplicate title or filename in DB
+      const existingDocs = await getAllSOPDocuments();
+      const duplicate = existingDocs.find(
+        (d) =>
+          d.title.trim().toLowerCase() === cleanTitle.toLowerCase() ||
+          (file_name && d.file_name && d.file_name.toLowerCase() === file_name.toLowerCase())
+      );
+
+      if (duplicate) {
+        return NextResponse.json(
+          {
+            error: `A document named "${duplicate.title}" already exists in the SOP database.`,
+            existing_id: duplicate.id,
+            existing_title: duplicate.title,
+          },
+          { status: 409 }
+        );
+      }
+
       const doc = await createSOPDocument({
-        title: parsed.data.title.trim(),
-        category: parsed.data.category || "General",
-        content: parsed.data.content.trim(),
-        file_name: parsed.data.file_name ?? null,
-        file_type: parsed.data.file_type ?? null,
-        file_size: parsed.data.file_size ?? null,
+        title: cleanTitle,
+        category: category || "General",
+        content: content.trim(),
+        file_name: file_name ?? null,
+        file_type: file_type ?? null,
+        file_size: file_size ?? null,
         uploaded_by: uploadedBy,
       });
 
@@ -78,6 +116,8 @@ export async function POST(req: NextRequest) {
       const customTitle = formData.get("title") as string | null;
       const category = (formData.get("category") as string | null) || "General";
       const clientExtractedContent = formData.get("content") as string | null;
+      const overwriteIdStr = formData.get("overwrite_id") as string | null;
+      const overwriteId = overwriteIdStr ? Number(overwriteIdStr) : null;
 
       if (!file && !clientExtractedContent) {
         return NextResponse.json({ error: "No file or text content provided in upload." }, { status: 400 });
@@ -100,6 +140,40 @@ export async function POST(req: NextRequest) {
         return NextResponse.json(
           { error: "The uploaded file contains no readable text content." },
           { status: 400 }
+        );
+      }
+
+      if (overwriteId) {
+        const updated = await updateSOPDocument(overwriteId, {
+          title,
+          category,
+          content,
+          file_name: fileName,
+          file_type: fileType,
+          file_size: fileSize,
+        });
+        if (!updated) {
+          return NextResponse.json({ error: "Document to overwrite was not found" }, { status: 404 });
+        }
+        return NextResponse.json(updated, { status: 200 });
+      }
+
+      // Check for duplicate in DB
+      const existingDocs = await getAllSOPDocuments();
+      const duplicate = existingDocs.find(
+        (d) =>
+          d.title.trim().toLowerCase() === title.toLowerCase() ||
+          (d.file_name && d.file_name.toLowerCase() === fileName.toLowerCase())
+      );
+
+      if (duplicate) {
+        return NextResponse.json(
+          {
+            error: `A document named "${duplicate.title}" already exists in the SOP database.`,
+            existing_id: duplicate.id,
+            existing_title: duplicate.title,
+          },
+          { status: 409 }
         );
       }
 

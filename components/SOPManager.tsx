@@ -25,6 +25,9 @@ import {
   Eye,
   ChevronDown,
   ChevronUp,
+  AlertTriangle,
+  Edit3,
+  Repeat,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -61,6 +64,8 @@ interface StagedFile {
   error?: string;
   wordCount: number;
   isExpanded?: boolean;
+  overwriteDocId?: number; // ID of database document to overwrite if chosen
+  overwriteDocTitle?: string;
 }
 
 const PRESET_QUESTIONS = [
@@ -119,10 +124,17 @@ export function SOPManager({ initialDocuments, role, userName }: SOPManagerProps
   const [uploadProgress, setUploadProgress] = useState<{ current: number; total: number; currentName: string } | null>(null);
   const [uploadingBatch, setUploadingBatch] = useState(false);
   const [isDragOver, setIsDragOver] = useState(false);
+  const [queueNotice, setQueueNotice] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   // Inspected Staged File Modal (for full-screen extracted text inspection & editing)
   const [inspectingFileId, setInspectingFileId] = useState<string | null>(null);
+
+  // One-by-One Duplicate Conflict Resolution State
+  const [conflictList, setConflictList] = useState<{ stagedId: string; existingDoc: SOPDocument }[]>([]);
+  const [currentConflictIdx, setCurrentConflictIdx] = useState<number>(0);
+  const [renameInput, setRenameInput] = useState<string>("");
+  const [conflictModalOpen, setConflictModalOpen] = useState(false);
 
   // Manual Entry Form State
   const [manualTitle, setManualTitle] = useState("");
@@ -176,6 +188,20 @@ export function SOPManager({ initialDocuments, role, userName }: SOPManagerProps
       console.error("Failed to refresh SOP documents", e);
     }
   }
+
+  // Find if a document name/title or filename conflicts with an existing database record
+  const findDbConflict = useCallback(
+    (title: string, fileName: string): SOPDocument | undefined => {
+      const cleanTitle = title.trim().toLowerCase();
+      const cleanFileName = fileName.trim().toLowerCase();
+      return documents.find(
+        (doc) =>
+          doc.title.trim().toLowerCase() === cleanTitle ||
+          (doc.file_name && doc.file_name.trim().toLowerCase() === cleanFileName)
+      );
+    },
+    [documents]
+  );
 
   // Extract text from a file (client-side for .docx, .txt, .md or server for .pdf)
   const extractFileText = useCallback(async (file: File): Promise<{ content: string; wordCount: number }> => {
@@ -257,16 +283,43 @@ export function SOPManager({ initialDocuments, role, userName }: SOPManagerProps
     };
   }, []);
 
-  // Handle addition of multiple files
+  // Handle addition of multiple files with STRICT duplicate rejection in the staging window
   const handleFilesAdded = useCallback(
     async (fileList: FileList | File[]) => {
       const incoming = Array.from(fileList);
       if (incoming.length === 0) return;
 
       setFormError(null);
+      setQueueNotice(null);
+
+      const duplicatesInQueue: string[] = [];
+      const seenNames = new Set<string>();
+      const incomingFiltered: File[] = [];
+
+      for (const file of incoming) {
+        const nameLower = file.name.toLowerCase();
+        // Check if already in staged queue or already in current batch
+        if (
+          stagedFiles.some((f) => f.file.name.toLowerCase() === nameLower) ||
+          seenNames.has(nameLower)
+        ) {
+          duplicatesInQueue.push(file.name);
+        } else {
+          seenNames.add(nameLower);
+          incomingFiltered.push(file);
+        }
+      }
+
+      if (duplicatesInQueue.length > 0) {
+        setQueueNotice(
+          `Duplicate file(s) skipped (already in upload queue): ${duplicatesInQueue.join(", ")}`
+        );
+      }
+
+      if (incomingFiltered.length === 0) return;
 
       // Create provisional staged file records
-      const newItems: StagedFile[] = incoming.map((file) => {
+      const newItems: StagedFile[] = incomingFiltered.map((file) => {
         const baseTitle = file.name.replace(/\.[^/.]+$/, "").replace(/[-_]/g, " ");
         return {
           id: `${file.name}-${file.size}-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
@@ -307,7 +360,7 @@ export function SOPManager({ initialDocuments, role, userName }: SOPManagerProps
         }
       }
     },
-    [extractFileText]
+    [extractFileText, stagedFiles]
   );
 
   // Remove a wrongly uploaded file from the staging queue
@@ -318,7 +371,9 @@ export function SOPManager({ initialDocuments, role, userName }: SOPManagerProps
 
   // Update title of a staged file
   function updateStagedTitle(id: string, title: string) {
-    setStagedFiles((prev) => prev.map((f) => (f.id === id ? { ...f, title } : f)));
+    setStagedFiles((prev) =>
+      prev.map((f) => (f.id === id ? { ...f, title, overwriteDocId: undefined, overwriteDocTitle: undefined } : f))
+    );
   }
 
   // Update category of a staged file
@@ -339,17 +394,10 @@ export function SOPManager({ initialDocuments, role, userName }: SOPManagerProps
     );
   }
 
-  // Handle Batch Upload of All Staged Files
-  async function handleBatchUpload() {
-    if (stagedFiles.length === 0) {
-      setFormError("Please select at least one document to upload.");
-      return;
-    }
-
-    // Validate that all items have titles
-    const missingTitle = stagedFiles.find((f) => !f.title.trim());
-    if (missingTitle) {
-      setFormError(`Please provide a title for "${missingTitle.file.name}".`);
+  // Execute Batch Upload of files (called after conflict resolution)
+  async function executeBatchUpload(filesToUpload: StagedFile[]) {
+    if (filesToUpload.length === 0) {
+      setFormError("No documents ready for upload.");
       return;
     }
 
@@ -358,18 +406,18 @@ export function SOPManager({ initialDocuments, role, userName }: SOPManagerProps
     let successCount = 0;
     const errors: string[] = [];
 
-    for (let i = 0; i < stagedFiles.length; i++) {
-      const item = stagedFiles[i];
+    for (let i = 0; i < filesToUpload.length; i++) {
+      const item = filesToUpload[i];
       setUploadProgress({
         current: i + 1,
-        total: stagedFiles.length,
+        total: filesToUpload.length,
         currentName: item.file.name,
       });
 
       try {
         let res: Response;
         if (item.content && !item.content.startsWith("[File selected:")) {
-          // Send fast JSON payload with pre-extracted clean text
+          // Send JSON payload
           res = await fetch("/api/sop", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
@@ -380,14 +428,18 @@ export function SOPManager({ initialDocuments, role, userName }: SOPManagerProps
               file_name: item.file.name,
               file_type: item.file.type || null,
               file_size: item.file.size,
+              overwrite_id: item.overwriteDocId || null,
             }),
           });
         } else {
-          // Send FormData for server-side PDF parsing
+          // Send FormData
           const formData = new FormData();
           formData.append("file", item.file);
           formData.append("title", item.title.trim());
           formData.append("category", item.category);
+          if (item.overwriteDocId) {
+            formData.append("overwrite_id", String(item.overwriteDocId));
+          }
 
           res = await fetch("/api/sop", {
             method: "POST",
@@ -410,7 +462,7 @@ export function SOPManager({ initialDocuments, role, userName }: SOPManagerProps
     setUploadProgress(null);
 
     if (errors.length > 0) {
-      setFormError(`Uploaded ${successCount} of ${stagedFiles.length} files. Errors:\n${errors.join("\n")}`);
+      setFormError(`Uploaded ${successCount} of ${filesToUpload.length} files. Errors:\n${errors.join("\n")}`);
       // Keep only failed files in the list
       setStagedFiles((prev) => prev.filter((f) => errors.some((e) => e.startsWith(f.file.name))));
       refreshDocuments();
@@ -422,16 +474,159 @@ export function SOPManager({ initialDocuments, role, userName }: SOPManagerProps
     }
   }
 
+  // Initiate upload with sequential One-by-One Duplicate Conflict Resolution
+  function handleStartUpload() {
+    if (stagedFiles.length === 0) {
+      setFormError("Please select at least one document to upload.");
+      return;
+    }
+
+    // 1. Validate that all items have titles
+    const missingTitle = stagedFiles.find((f) => !f.title.trim());
+    if (missingTitle) {
+      setFormError(`Please provide a title for "${missingTitle.file.name}".`);
+      return;
+    }
+
+    // 2. Prevent duplicate names within the current staged queue itself
+    const titleCounts = new Map<string, number>();
+    for (const file of stagedFiles) {
+      const t = file.title.trim().toLowerCase();
+      titleCounts.set(t, (titleCounts.get(t) || 0) + 1);
+    }
+    for (const [title, count] of titleCounts.entries()) {
+      if (count > 1) {
+        setFormError(`Multiple staged documents share the same title "${title}". Please rename or remove duplicates.`);
+        return;
+      }
+    }
+
+    // 3. Find database conflicts that haven't been resolved yet
+    const conflicts: { stagedId: string; existingDoc: SOPDocument }[] = [];
+    for (const item of stagedFiles) {
+      if (!item.overwriteDocId) {
+        const existing = findDbConflict(item.title, item.file.name);
+        if (existing) {
+          conflicts.push({ stagedId: item.id, existingDoc: existing });
+        }
+      }
+    }
+
+    if (conflicts.length > 0) {
+      // Open one-by-one duplicate resolution dialog
+      setConflictList(conflicts);
+      setCurrentConflictIdx(0);
+      const firstStaged = stagedFiles.find((f) => f.id === conflicts[0].stagedId);
+      setRenameInput(firstStaged ? `${firstStaged.title} (v2)` : "");
+      setConflictModalOpen(true);
+      return;
+    }
+
+    // No conflicts, execute upload immediately
+    executeBatchUpload(stagedFiles);
+  }
+
+  // Conflict Action 1: Replace / Overwrite Existing Document
+  function handleResolveOverwrite() {
+    const currentConflict = conflictList[currentConflictIdx];
+    if (!currentConflict) return;
+
+    const updatedStaged = stagedFiles.map((f) =>
+      f.id === currentConflict.stagedId
+        ? {
+            ...f,
+            overwriteDocId: currentConflict.existingDoc.id,
+            overwriteDocTitle: currentConflict.existingDoc.title,
+          }
+        : f
+    );
+    setStagedFiles(updatedStaged);
+    advanceConflictResolution(updatedStaged);
+  }
+
+  // Conflict Action 2: Change Name / Rename New Document
+  function handleResolveRename() {
+    const currentConflict = conflictList[currentConflictIdx];
+    if (!currentConflict) return;
+
+    const newTitle = renameInput.trim();
+    if (!newTitle) {
+      alert("Please enter a valid new document name.");
+      return;
+    }
+
+    // Check if new name also conflicts with DB
+    const stillConflicted = findDbConflict(newTitle, "");
+    if (stillConflicted && stillConflicted.id !== currentConflict.existingDoc.id) {
+      alert(`The name "${newTitle}" is also taken by another SOP document. Please pick a different name.`);
+      return;
+    }
+
+    const updatedStaged = stagedFiles.map((f) =>
+      f.id === currentConflict.stagedId
+        ? {
+            ...f,
+            title: newTitle,
+            overwriteDocId: undefined,
+            overwriteDocTitle: undefined,
+          }
+        : f
+    );
+    setStagedFiles(updatedStaged);
+    advanceConflictResolution(updatedStaged);
+  }
+
+  // Conflict Action 3: Skip This File
+  function handleResolveSkip() {
+    const currentConflict = conflictList[currentConflictIdx];
+    if (!currentConflict) return;
+
+    const updatedStaged = stagedFiles.filter((f) => f.id !== currentConflict.stagedId);
+    setStagedFiles(updatedStaged);
+    advanceConflictResolution(updatedStaged);
+  }
+
+  // Move to next conflict or start batch upload if all conflicts are resolved
+  function advanceConflictResolution(updatedStaged: StagedFile[]) {
+    const nextIdx = currentConflictIdx + 1;
+    if (nextIdx < conflictList.length) {
+      setCurrentConflictIdx(nextIdx);
+      const nextStaged = updatedStaged.find((f) => f.id === conflictList[nextIdx].stagedId);
+      setRenameInput(nextStaged ? `${nextStaged.title} (v2)` : "");
+    } else {
+      // All resolved!
+      setConflictModalOpen(false);
+      setConflictList([]);
+      setCurrentConflictIdx(0);
+      if (updatedStaged.length > 0) {
+        executeBatchUpload(updatedStaged);
+      }
+    }
+  }
+
   // Handle Save Manual Document
   async function handleSaveManualDocument(e: React.FormEvent) {
     e.preventDefault();
-    if (!manualTitle.trim()) {
+    const cleanTitle = manualTitle.trim();
+    if (!cleanTitle) {
       setFormError("Please provide a document title.");
       return;
     }
     if (!manualContent.trim()) {
       setFormError("Please enter document content.");
       return;
+    }
+
+    // Check duplicate in DB
+    const existing = findDbConflict(cleanTitle, "");
+    if (existing) {
+      if (
+        !confirm(
+          `A document named "${existing.title}" already exists in the SOP database.\n\nDo you want to overwrite it with this new content? Click Cancel to rename it instead.`
+        )
+      ) {
+        return;
+      }
     }
 
     setSavingManual(true);
@@ -442,12 +637,13 @@ export function SOPManager({ initialDocuments, role, userName }: SOPManagerProps
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          title: manualTitle.trim(),
+          title: cleanTitle,
           category: manualCategory,
           content: manualContent.trim(),
           file_name: null,
           file_type: null,
           file_size: null,
+          overwrite_id: existing ? existing.id : null,
         }),
       });
 
@@ -559,6 +755,10 @@ export function SOPManager({ initialDocuments, role, userName }: SOPManagerProps
   });
 
   const inspectingFile = stagedFiles.find((f) => f.id === inspectingFileId) || null;
+  const currentConflictItem = conflictList[currentConflictIdx]
+    ? stagedFiles.find((f) => f.id === conflictList[currentConflictIdx].stagedId)
+    : null;
+  const currentConflictExisting = conflictList[currentConflictIdx]?.existingDoc;
 
   return (
     <div className="px-4 py-4 md:px-6 md:py-6 w-full space-y-6 max-w-6xl mx-auto">
@@ -578,6 +778,7 @@ export function SOPManager({ initialDocuments, role, userName }: SOPManagerProps
           <Button
             onClick={() => {
               setFormError(null);
+              setQueueNotice(null);
               setStagedFiles([]);
               setManualTitle("");
               setManualContent("");
@@ -851,6 +1052,7 @@ export function SOPManager({ initialDocuments, role, userName }: SOPManagerProps
                 <Button
                   onClick={() => {
                     setFormError(null);
+                    setQueueNotice(null);
                     setStagedFiles([]);
                     setUploadModalOpen(true);
                   }}
@@ -976,6 +1178,22 @@ export function SOPManager({ initialDocuments, role, userName }: SOPManagerProps
             </p>
           )}
 
+          {queueNotice && (
+            <div className="p-2.5 bg-amber-500/10 border border-amber-500/30 rounded-lg text-xs text-amber-800 dark:text-amber-300 flex items-center justify-between gap-2">
+              <div className="flex items-center gap-1.5">
+                <AlertTriangle className="h-4 w-4 shrink-0 text-amber-600" />
+                <span>{queueNotice}</span>
+              </div>
+              <button
+                type="button"
+                onClick={() => setQueueNotice(null)}
+                className="text-muted-foreground hover:text-foreground"
+              >
+                <X className="h-3.5 w-3.5" />
+              </button>
+            </div>
+          )}
+
           {/* ══════════════════════════════════════════════════════════════════
               TAB 1: MULTI-FILE DRAG & DROP UPLOAD
               ══════════════════════════════════════════════════════════════════ */}
@@ -1063,130 +1281,152 @@ export function SOPManager({ initialDocuments, role, userName }: SOPManagerProps
                     </div>
                   </div>
 
-                  {/* List of Files with inspection, editing, and delete controls */}
+                  {/* List of Files with inspection, editing, conflict indicators, and delete controls */}
                   <div className="space-y-2.5 max-h-[360px] overflow-y-auto pr-1">
-                    {stagedFiles.map((item, index) => (
-                      <div
-                        key={item.id}
-                        className="p-3 border rounded-xl bg-card space-y-2.5 shadow-2xs group hover:border-border transition-colors"
-                      >
-                        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-                          <div className="flex items-center gap-2.5 flex-1 min-w-0">
-                            <span className="text-xs font-mono font-bold text-muted-foreground w-5 shrink-0 text-center">
-                              #{index + 1}
-                            </span>
+                    {stagedFiles.map((item, index) => {
+                      const dbConflict = !item.overwriteDocId ? findDbConflict(item.title, item.file.name) : undefined;
 
-                            <div className="p-2 rounded-lg bg-muted/60 text-purple-600 shrink-0">
-                              {item.file.name.endsWith(".docx") ? (
-                                <FileText className="h-4 w-4" />
-                              ) : item.file.name.endsWith(".pdf") ? (
-                                <BookOpen className="h-4 w-4" />
-                              ) : (
-                                <FileCode className="h-4 w-4" />
-                              )}
-                            </div>
+                      return (
+                        <div
+                          key={item.id}
+                          className={`p-3 border rounded-xl bg-card space-y-2.5 shadow-2xs group transition-colors ${
+                            dbConflict
+                              ? "border-amber-400 bg-amber-50/20 dark:bg-amber-950/10"
+                              : item.overwriteDocId
+                              ? "border-purple-400 bg-purple-50/20 dark:bg-purple-950/10"
+                              : "hover:border-border"
+                          }`}
+                        >
+                          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                            <div className="flex items-center gap-2.5 flex-1 min-w-0">
+                              <span className="text-xs font-mono font-bold text-muted-foreground w-5 shrink-0 text-center">
+                                #{index + 1}
+                              </span>
 
-                            {/* Editable Title and Meta */}
-                            <div className="space-y-1 flex-1 min-w-0">
-                              <Input
-                                value={item.title}
-                                onChange={(e) => updateStagedTitle(item.id, e.target.value)}
-                                placeholder="Document Title"
-                                className="h-7 text-xs font-semibold"
-                              />
-                              <div className="flex items-center gap-2 text-[10px] text-muted-foreground flex-wrap">
-                                <span className="truncate max-w-[140px]" title={item.file.name}>
-                                  {item.file.name}
-                                </span>
-                                <span>•</span>
-                                <span>{(item.file.size / 1024).toFixed(1)} KB</span>
-                                <span>•</span>
-                                {item.status === "extracting" ? (
-                                  <span className="text-amber-600 flex items-center gap-1 font-medium">
-                                    <RefreshCw className="h-2.5 w-2.5 animate-spin" /> Extracting…
-                                  </span>
-                                ) : item.wordCount > 0 ? (
-                                  <span className="text-emerald-600 font-medium">
-                                    ✓ {item.wordCount} words extracted
-                                  </span>
+                              <div className="p-2 rounded-lg bg-muted/60 text-purple-600 shrink-0">
+                                {item.file.name.endsWith(".docx") ? (
+                                  <FileText className="h-4 w-4" />
+                                ) : item.file.name.endsWith(".pdf") ? (
+                                  <BookOpen className="h-4 w-4" />
                                 ) : (
-                                  <span className="text-purple-600 font-medium">Text ready</span>
+                                  <FileCode className="h-4 w-4" />
                                 )}
                               </div>
+
+                              {/* Editable Title and Meta */}
+                              <div className="space-y-1 flex-1 min-w-0">
+                                <Input
+                                  value={item.title}
+                                  onChange={(e) => updateStagedTitle(item.id, e.target.value)}
+                                  placeholder="Document Title"
+                                  className="h-7 text-xs font-semibold"
+                                />
+                                <div className="flex items-center gap-2 text-[10px] text-muted-foreground flex-wrap">
+                                  <span className="truncate max-w-[140px]" title={item.file.name}>
+                                    {item.file.name}
+                                  </span>
+                                  <span>•</span>
+                                  <span>{(item.file.size / 1024).toFixed(1)} KB</span>
+                                  <span>•</span>
+                                  {item.status === "extracting" ? (
+                                    <span className="text-amber-600 flex items-center gap-1 font-medium">
+                                      <RefreshCw className="h-2.5 w-2.5 animate-spin" /> Extracting…
+                                    </span>
+                                  ) : item.wordCount > 0 ? (
+                                    <span className="text-emerald-600 font-medium">
+                                      ✓ {item.wordCount} words extracted
+                                    </span>
+                                  ) : (
+                                    <span className="text-purple-600 font-medium">Text ready</span>
+                                  )}
+
+                                  {/* Conflict or Overwrite Badge */}
+                                  {dbConflict && (
+                                    <Badge variant="outline" className="text-[10px] py-0 h-4 border-amber-400 text-amber-700 dark:text-amber-300 bg-amber-100/50 dark:bg-amber-950/40">
+                                      ⚠️ Same name exists in DB
+                                    </Badge>
+                                  )}
+                                  {item.overwriteDocId && (
+                                    <Badge variant="outline" className="text-[10px] py-0 h-4 border-purple-400 text-purple-700 dark:text-purple-300 bg-purple-100/50 dark:bg-purple-950/40">
+                                      🔄 Overwrites &quot;{item.overwriteDocTitle}&quot;
+                                    </Badge>
+                                  )}
+                                </div>
+                              </div>
+                            </div>
+
+                            {/* Action Buttons: Preview Extracted Text, Category & Remove */}
+                            <div className="flex items-center gap-1.5 shrink-0 self-end sm:self-center">
+                              {/* 👁️ View / Inspect Extracted Text Button */}
+                              <Button
+                                type="button"
+                                variant="outline"
+                                size="sm"
+                                onClick={() => setInspectingFileId(item.id)}
+                                className="h-7 text-xs gap-1 px-2.5 text-purple-600 hover:text-purple-700 hover:bg-purple-50 dark:hover:bg-purple-950/40 border-purple-200 dark:border-purple-800"
+                                title="Inspect full extracted text content"
+                              >
+                                <Eye className="h-3.5 w-3.5" />
+                                <span className="hidden xs:inline">View Text</span>
+                              </Button>
+
+                              {/* Expand Inline Button */}
+                              <Button
+                                type="button"
+                                variant="ghost"
+                                size="sm"
+                                onClick={() => toggleExpandStagedFile(item.id)}
+                                className="h-7 px-1.5 text-xs text-muted-foreground hover:text-foreground"
+                                title={item.isExpanded ? "Collapse inline preview" : "Expand inline preview"}
+                              >
+                                {item.isExpanded ? <ChevronUp className="h-3.5 w-3.5" /> : <ChevronDown className="h-3.5 w-3.5" />}
+                              </Button>
+
+                              <select
+                                value={item.category}
+                                onChange={(e) => updateStagedCategory(item.id, e.target.value)}
+                                className="h-7 rounded-md border border-input bg-background px-2 py-0.5 text-xs shadow-2xs focus:outline-none focus:ring-1 focus:ring-ring"
+                              >
+                                {DOC_CATEGORIES.map((c) => (
+                                  <option key={c} value={c}>
+                                    {c}
+                                  </option>
+                                ))}
+                              </select>
+
+                              {/* 🗑️ Remove Button (Remove wrongly uploaded files) */}
+                              <Button
+                                type="button"
+                                variant="ghost"
+                                size="icon"
+                                onClick={() => removeStagedFile(item.id)}
+                                className="h-7 w-7 text-muted-foreground hover:text-destructive hover:bg-destructive/10 rounded-lg transition-colors"
+                                title="Remove this file"
+                              >
+                                <X className="h-4 w-4" />
+                              </Button>
                             </div>
                           </div>
 
-                          {/* Action Buttons: Preview Extracted Text, Category & Remove */}
-                          <div className="flex items-center gap-1.5 shrink-0 self-end sm:self-center">
-                            {/* 👁️ View / Inspect Extracted Text Button */}
-                            <Button
-                              type="button"
-                              variant="outline"
-                              size="sm"
-                              onClick={() => setInspectingFileId(item.id)}
-                              className="h-7 text-xs gap-1 px-2.5 text-purple-600 hover:text-purple-700 hover:bg-purple-50 dark:hover:bg-purple-950/40 border-purple-200 dark:border-purple-800"
-                              title="Inspect full extracted text content"
-                            >
-                              <Eye className="h-3.5 w-3.5" />
-                              <span className="hidden xs:inline">View Text</span>
-                            </Button>
-
-                            {/* Expand Inline Button */}
-                            <Button
-                              type="button"
-                              variant="ghost"
-                              size="sm"
-                              onClick={() => toggleExpandStagedFile(item.id)}
-                              className="h-7 px-1.5 text-xs text-muted-foreground hover:text-foreground"
-                              title={item.isExpanded ? "Collapse inline preview" : "Expand inline preview"}
-                            >
-                              {item.isExpanded ? <ChevronUp className="h-3.5 w-3.5" /> : <ChevronDown className="h-3.5 w-3.5" />}
-                            </Button>
-
-                            <select
-                              value={item.category}
-                              onChange={(e) => updateStagedCategory(item.id, e.target.value)}
-                              className="h-7 rounded-md border border-input bg-background px-2 py-0.5 text-xs shadow-2xs focus:outline-none focus:ring-1 focus:ring-ring"
-                            >
-                              {DOC_CATEGORIES.map((c) => (
-                                <option key={c} value={c}>
-                                  {c}
-                                </option>
-                              ))}
-                            </select>
-
-                            {/* 🗑️ Remove Button (Remove wrongly uploaded files) */}
-                            <Button
-                              type="button"
-                              variant="ghost"
-                              size="icon"
-                              onClick={() => removeStagedFile(item.id)}
-                              className="h-7 w-7 text-muted-foreground hover:text-destructive hover:bg-destructive/10 rounded-lg transition-colors"
-                              title="Remove this file"
-                            >
-                              <X className="h-4 w-4" />
-                            </Button>
-                          </div>
+                          {/* Expandable Inline Extracted Text Box */}
+                          {item.isExpanded && (
+                            <div className="pt-2 border-t space-y-1.5 animate-in fade-in">
+                              <div className="flex items-center justify-between text-[11px] text-muted-foreground">
+                                <span className="font-semibold text-foreground">Extracted Document Text:</span>
+                                <span className="font-mono">{item.wordCount} words ({item.content.length} characters)</span>
+                              </div>
+                              <textarea
+                                rows={4}
+                                value={item.content}
+                                onChange={(e) => updateStagedContent(item.id, e.target.value)}
+                                placeholder="Extracted text preview..."
+                                className="w-full rounded-md border border-input bg-muted/20 p-2.5 text-xs leading-relaxed font-mono shadow-2xs focus:outline-none focus:ring-1 focus:ring-ring resize-y"
+                              />
+                            </div>
+                          )}
                         </div>
-
-                        {/* Expandable Inline Extracted Text Box */}
-                        {item.isExpanded && (
-                          <div className="pt-2 border-t space-y-1.5 animate-in fade-in">
-                            <div className="flex items-center justify-between text-[11px] text-muted-foreground">
-                              <span className="font-semibold text-foreground">Extracted Document Text:</span>
-                              <span className="font-mono">{item.wordCount} words ({item.content.length} characters)</span>
-                            </div>
-                            <textarea
-                              rows={4}
-                              value={item.content}
-                              onChange={(e) => updateStagedContent(item.id, e.target.value)}
-                              placeholder="Extracted text preview..."
-                              className="w-full rounded-md border border-input bg-muted/20 p-2.5 text-xs leading-relaxed font-mono shadow-2xs focus:outline-none focus:ring-1 focus:ring-ring resize-y"
-                            />
-                          </div>
-                        )}
-                      </div>
-                    ))}
+                      );
+                    })}
                   </div>
                 </div>
               )}
@@ -1225,7 +1465,7 @@ export function SOPManager({ initialDocuments, role, userName }: SOPManagerProps
                   </Button>
                   <Button
                     type="button"
-                    onClick={handleBatchUpload}
+                    onClick={handleStartUpload}
                     disabled={uploadingBatch || stagedFiles.length === 0}
                     className="bg-purple-600 hover:bg-purple-700 text-white gap-1.5"
                   >
@@ -1317,6 +1557,115 @@ export function SOPManager({ initialDocuments, role, userName }: SOPManagerProps
           )}
         </DialogContent>
       </Dialog>
+
+      {/* ══════════════════════════════════════════════════════════════════════
+          ONE-BY-ONE DUPLICATE CONFLICT RESOLUTION DIALOG
+          ══════════════════════════════════════════════════════════════════════ */}
+      {conflictModalOpen && currentConflictItem && currentConflictExisting && (
+        <Dialog open={conflictModalOpen} onOpenChange={setConflictModalOpen}>
+          <DialogContent className="max-w-lg w-[95vw]">
+            <DialogHeader>
+              <div className="flex items-center justify-between">
+                <DialogTitle className="flex items-center gap-2 text-base font-bold text-amber-600 dark:text-amber-400">
+                  <AlertTriangle className="h-5 w-5" />
+                  Duplicate Document Detected
+                </DialogTitle>
+                <Badge variant="outline" className="text-xs bg-muted/40 font-mono">
+                  {currentConflictIdx + 1} of {conflictList.length}
+                </Badge>
+              </div>
+              <DialogDescription className="text-xs text-muted-foreground">
+                A document with the same name already exists in the SOP database. How would you like to handle this file?
+              </DialogDescription>
+            </DialogHeader>
+
+            <div className="space-y-3 py-2">
+              {/* Existing Document Info Box */}
+              <div className="p-3 border border-amber-200 dark:border-amber-900/60 bg-amber-50/50 dark:bg-amber-950/30 rounded-xl space-y-1.5 text-xs">
+                <span className="text-[10px] font-bold uppercase tracking-wider text-amber-700 dark:text-amber-300">
+                  Existing Database Record:
+                </span>
+                <div className="flex items-center justify-between font-semibold text-foreground">
+                  <span className="truncate max-w-[260px]">{currentConflictExisting.title}</span>
+                  <Badge variant="outline" className="text-[10px] bg-background">
+                    {currentConflictExisting.category}
+                  </Badge>
+                </div>
+                <div className="flex items-center gap-2 text-[10px] text-muted-foreground">
+                  <span>File: {currentConflictExisting.file_name || "Manual Entry"}</span>
+                  <span>•</span>
+                  <span>Updated: {new Date(currentConflictExisting.updated_at).toLocaleDateString()}</span>
+                </div>
+              </div>
+
+              {/* New Incoming Document Info Box */}
+              <div className="p-3 border rounded-xl bg-card space-y-1.5 text-xs">
+                <span className="text-[10px] font-bold uppercase tracking-wider text-purple-600">
+                  New Incoming File:
+                </span>
+                <div className="flex items-center justify-between font-semibold text-foreground">
+                  <span className="truncate max-w-[260px]">{currentConflictItem.title}</span>
+                  <span className="text-[11px] text-muted-foreground font-mono">
+                    {(currentConflictItem.file.size / 1024).toFixed(1)} KB
+                  </span>
+                </div>
+                <p className="text-[10px] text-muted-foreground truncate">
+                  Filename: {currentConflictItem.file.name}
+                </p>
+              </div>
+
+              {/* Option: Rename Field */}
+              <div className="space-y-1.5 pt-1">
+                <Label htmlFor="conflict-rename-input" className="text-xs font-semibold flex items-center gap-1">
+                  <Edit3 className="h-3.5 w-3.5 text-primary" />
+                  Rename New Document:
+                </Label>
+                <div className="flex gap-2">
+                  <Input
+                    id="conflict-rename-input"
+                    value={renameInput}
+                    onChange={(e) => setRenameInput(e.target.value)}
+                    placeholder="Enter new unique title"
+                    className="h-8 text-xs font-semibold"
+                  />
+                  <Button
+                    type="button"
+                    variant="outline"
+                    onClick={handleResolveRename}
+                    disabled={!renameInput.trim() || renameInput.trim().toLowerCase() === currentConflictExisting.title.toLowerCase()}
+                    className="h-8 text-xs shrink-0"
+                  >
+                    Save & Rename
+                  </Button>
+                </div>
+              </div>
+            </div>
+
+            <DialogFooter className="border-t pt-3 flex flex-col sm:flex-row gap-2 sm:justify-between items-center">
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                onClick={handleResolveSkip}
+                className="text-xs text-muted-foreground hover:text-destructive w-full sm:w-auto"
+              >
+                Skip This File
+              </Button>
+
+              <div className="flex gap-2 w-full sm:w-auto justify-end">
+                <Button
+                  type="button"
+                  onClick={handleResolveOverwrite}
+                  className="bg-amber-600 hover:bg-amber-700 text-white text-xs gap-1.5 w-full sm:w-auto"
+                >
+                  <Repeat className="h-3.5 w-3.5" />
+                  Replace / Overwrite Existing
+                </Button>
+              </div>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+      )}
 
       {/* ══════════════════════════════════════════════════════════════════════
           INSPECT EXTRACTED TEXT MODAL (Preview & Edit Staged Text)

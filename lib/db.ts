@@ -1085,6 +1085,9 @@ export async function updateSOPDocument(
     title?: string;
     category?: string;
     content?: string;
+    file_name?: string | null;
+    file_type?: string | null;
+    file_size?: number | null;
   }
 ): Promise<SOPDocument | undefined> {
   await ensureSOPTable();
@@ -1094,6 +1097,9 @@ export async function updateSOPDocument(
   const title = params.title ?? existing.title;
   const category = params.category ?? existing.category;
   const content = params.content ?? existing.content;
+  const file_name = params.file_name !== undefined ? params.file_name : existing.file_name;
+  const file_type = params.file_type !== undefined ? params.file_type : existing.file_type;
+  const file_size = params.file_size !== undefined ? params.file_size : existing.file_size;
 
   const { rows } = await sql<SOPDocument>`
     UPDATE sop_documents
@@ -1101,6 +1107,9 @@ export async function updateSOPDocument(
       title = ${title},
       category = ${category},
       content = ${content},
+      file_name = ${file_name},
+      file_type = ${file_type},
+      file_size = ${file_size},
       updated_at = CURRENT_TIMESTAMP
     WHERE id = ${id}
     RETURNING *

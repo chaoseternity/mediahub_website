@@ -7,6 +7,9 @@ const UpdateSOPSchema = z.object({
   title: z.string().min(1).optional(),
   category: z.string().optional(),
   content: z.string().min(1).optional(),
+  file_name: z.string().nullable().optional(),
+  file_type: z.string().nullable().optional(),
+  file_size: z.number().nullable().optional(),
 });
 
 export async function GET(
