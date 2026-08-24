@@ -32,7 +32,9 @@ jest.mock("@vercel/postgres", () => {
 
       let sqliteQuery = query
         .replace(/COUNT\(\*\)::text/gi, "COUNT(*)")
-        .replace(/CURRENT_TIMESTAMP/gi, "datetime('now')")
+        .replace(/SERIAL PRIMARY KEY/gi, "INTEGER PRIMARY KEY AUTOINCREMENT")
+        .replace(/TIMESTAMP WITH TIME ZONE/gi, "TEXT")
+        .replace(/ILIKE/gi, "LIKE")
         .replace(/COALESCE\(\s*ARRAY_AGG\(DISTINCT t\.name\)\s*FILTER\s*\(WHERE\s*t\.name\s*IS\s*NOT\s*NULL\),\s*'{}'\s*\)/gi, "GROUP_CONCAT(DISTINCT t.name)")
         .replace(/COALESCE\(\s*ARRAY_AGG\(t\.name\)\s*FILTER\s*\(WHERE\s*t\.name\s*IS\s*NOT\s*NULL\),\s*'{}'\s*\)/gi, "GROUP_CONCAT(t.name)")
         .replace(/INSERT INTO (\w+) \((.*?)\) VALUES \((.*?)\) ON CONFLICT DO NOTHING/gi, "INSERT OR IGNORE INTO $1 ($2) VALUES ($3)")
@@ -45,6 +47,10 @@ jest.mock("@vercel/postgres", () => {
       }
 
       const trimmed = sqliteQuery.trim();
+      if (/^ALTER TABLE.*ADD COLUMN/i.test(trimmed)) {
+        // Columns already exist in in-memory test database schema
+        return { rows: [], rowCount: 0 };
+      }
 
       const sanitizedValues = values.map((v) => (typeof v === "boolean" ? (v ? 1 : 0) : v));
 
@@ -71,6 +77,8 @@ jest.mock("@vercel/postgres", () => {
             else if (/INSERT INTO checkouts/i.test(sqliteQuery)) table = "checkouts";
             else if (/UPDATE checkouts/i.test(sqliteQuery)) table = "checkouts";
             else if (/INSERT INTO events/i.test(sqliteQuery)) table = "events";
+            else if (/INSERT INTO sop_documents/i.test(sqliteQuery)) table = "sop_documents";
+            else if (/UPDATE sop_documents/i.test(sqliteQuery)) table = "sop_documents";
 
             const fetchStmt = testDb.prepare(`SELECT * FROM ${table} WHERE id = ?`);
             const row = fetchStmt.get(info.lastInsertRowid) as Record<string, unknown>;
@@ -99,6 +107,12 @@ import {
   updateDeploymentRSVP,
   getEventById,
   deleteEvent,
+  createSOPDocument,
+  getSOPDocumentById,
+  getAllSOPDocuments,
+  updateSOPDocument,
+  deleteSOPDocument,
+  searchSOPDocuments,
 } from "@/lib/db";
 
 // ── Smoke tests ───────────────────────────────────────────────────────────────
@@ -197,6 +211,60 @@ describe("Smoke — lib/db.ts (Vercel Postgres mock)", () => {
 
       const delRes = await deleteEvent(event.id);
       expect(delRes.success).toBe(true);
+    });
+  });
+
+  // ── SOP Documents Management ───────────────────────────────────────────────
+
+  describe("SOP Documents management", () => {
+    test("creates, reads, searches, updates (overwrites), and deletes SOP documents", async () => {
+      const admin = await upsertUser({ name: "Admin", email: "admin2@test.com", google_id: "g5", image: null, provider: "google" });
+
+      // 1. Create SOP
+      const sop1 = await createSOPDocument({
+        title: "Sony FX3 Camera Operation",
+        category: "Video",
+        content: "Always check battery charge and format CFexpress card before shooting.",
+        file_name: "Sony_FX3_Operation.docx",
+        file_type: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        file_size: 45000,
+        uploaded_by: admin.id,
+      });
+
+      expect(sop1.id).toBeGreaterThan(0);
+      expect(sop1.title).toBe("Sony FX3 Camera Operation");
+      expect(sop1.category).toBe("Video");
+
+      // 2. Fetch by ID and All
+      const fetched = await getSOPDocumentById(sop1.id);
+      expect(fetched?.title).toBe("Sony FX3 Camera Operation");
+
+      const all = await getAllSOPDocuments();
+      expect(all.length).toBeGreaterThanOrEqual(1);
+
+      // 3. Search
+      const searchRes = await searchSOPDocuments("battery");
+      expect(searchRes.length).toBeGreaterThanOrEqual(1);
+      expect(searchRes[0].title).toBe("Sony FX3 Camera Operation");
+
+      // 4. Update (Overwrite)
+      const updated = await updateSOPDocument(sop1.id, {
+        title: "Sony FX3 Camera Operation v2",
+        category: "Video",
+        content: "Updated battery checklist and ISO profile settings.",
+        file_name: "Sony_FX3_Operation_v2.docx",
+        file_size: 52000,
+      });
+
+      expect(updated?.title).toBe("Sony FX3 Camera Operation v2");
+      expect(updated?.content).toContain("Updated battery checklist");
+
+      // 5. Delete
+      const del = await deleteSOPDocument(sop1.id);
+      expect(del.success).toBe(true);
+
+      const afterDelete = await getSOPDocumentById(sop1.id);
+      expect(afterDelete).toBeUndefined();
     });
   });
 });
