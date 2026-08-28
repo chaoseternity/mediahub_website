@@ -4,17 +4,29 @@ import { askSOPAssistant } from "@/lib/gemini";
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 
-const ChatRequestSchema = z.object({
-  question: z.string().min(1, "Question cannot be empty"),
-  history: z
-    .array(
-      z.object({
-        role: z.enum(["user", "assistant"]),
-        content: z.string(),
-      })
-    )
-    .optional(),
-});
+const ChatRequestSchema = z
+  .object({
+    question: z.string().optional(),
+    message: z.string().optional(),
+    history: z
+      .array(
+        z.object({
+          role: z.enum(["user", "assistant"]),
+          content: z.string(),
+        })
+      )
+      .optional(),
+  })
+  .refine(
+    (data) =>
+      Boolean(
+        (data.question && data.question.trim().length > 0) ||
+        (data.message && data.message.trim().length > 0)
+      ),
+    {
+      message: "Please provide a question or message.",
+    }
+  );
 
 export async function POST(req: NextRequest) {
   const session = await auth();
@@ -26,10 +38,12 @@ export async function POST(req: NextRequest) {
     const body = await req.json();
     const parsed = ChatRequestSchema.safeParse(body);
     if (!parsed.success) {
-      return NextResponse.json({ error: parsed.error.flatten() }, { status: 400 });
+      const issue = parsed.error.issues[0]?.message || "Invalid request. Please provide a question.";
+      return NextResponse.json({ error: issue }, { status: 400 });
     }
 
-    const { question, history } = parsed.data;
+    const question = (parsed.data.question || parsed.data.message || "").trim();
+    const history = parsed.data.history || [];
 
     // Fetch SOP documents, live equipment inventory, and events in parallel
     const [sopDocuments, equipmentList, events] = await Promise.all([
@@ -46,7 +60,12 @@ export async function POST(req: NextRequest) {
       events,
     });
 
-    return NextResponse.json(result);
+    return NextResponse.json({
+      reply: result.answer,
+      answer: result.answer,
+      citations: result.citations || [],
+      modelUsed: result.modelUsed,
+    });
   } catch (err: unknown) {
     console.error("SOP Chat API Error:", err);
     return NextResponse.json(
@@ -55,3 +74,4 @@ export async function POST(req: NextRequest) {
     );
   }
 }
+

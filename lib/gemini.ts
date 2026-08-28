@@ -179,6 +179,8 @@ Please answer the user's question clearly and accurately using the appropriate k
     "gemini-2.5-flash-lite",
     "gemini-2.5-flash",
     "gemini-2.0-flash",
+    "gemini-1.5-flash",
+    "gemini-1.5-pro",
   ];
 
   const uniqueModels = Array.from(new Set(modelsToTry));

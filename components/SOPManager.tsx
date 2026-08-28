@@ -690,6 +690,7 @@ export function SOPManager({ initialDocuments, role, userName }: SOPManagerProps
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
+          question: q,
           message: q,
           history: historyPayload,
         }),
@@ -697,14 +698,26 @@ export function SOPManager({ initialDocuments, role, userName }: SOPManagerProps
 
       if (!res.ok) {
         const errorData = await res.json().catch(() => ({}));
-        throw new Error(errorData.error || "Failed to generate AI response");
+        let errorMessage = "Failed to generate AI response";
+        if (typeof errorData.error === "string") {
+          errorMessage = errorData.error;
+        } else if (errorData.error && typeof errorData.error === "object") {
+          errorMessage =
+            errorData.error.message ||
+            errorData.error.issues?.[0]?.message ||
+            JSON.stringify(errorData.error);
+        } else if (typeof errorData.message === "string") {
+          errorMessage = errorData.message;
+        }
+        throw new Error(errorMessage);
       }
 
       const data = await res.json();
+      const botContent = data.reply || data.answer || "No response received from AI assistant.";
       const botMsg: AIChatMessage = {
         id: `assistant-${Date.now()}`,
         role: "assistant",
-        content: data.reply,
+        content: botContent,
         citations: data.citations || [],
         created_at: new Date().toISOString(),
       };
