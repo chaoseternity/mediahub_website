@@ -1,10 +1,11 @@
 import { auth } from "@/lib/auth";
-import { nfcCheckout, getAllEquipment, getEquipmentById, getUserByNfcId } from "@/lib/db";
+import { nfcCheckout, getAllEquipment, getEquipmentById, getNfcCardByValue } from "@/lib/db";
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 
 const NfcCheckoutSchema = z.object({
-  nfc_id: z.string().min(1),
+  nfc_value: z.string().min(1).optional(),
+  nfc_id: z.string().min(1).optional(),
   equipment_id: z.number().int().positive().optional(),
   equipment_ids: z.array(z.number().int().positive()).optional(),
   barcode: z.string().trim().optional(),
@@ -46,12 +47,17 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: parsed.error.flatten() }, { status: 400 });
   }
 
-  const { nfc_id, barcode, notes, checkout_location, equipment_ids } = parsed.data;
-
-  const member = await getUserByNfcId(nfc_id);
-  if (!member) {
-    return NextResponse.json({ error: "Member not found for this NFC card" }, { status: 404 });
+  const cardValue = (parsed.data.nfc_value || parsed.data.nfc_id || "").trim();
+  if (!cardValue) {
+    return NextResponse.json({ error: "nfc_value is required" }, { status: 400 });
   }
+
+  const card = await getNfcCardByValue(cardValue);
+  if (!card) {
+    return NextResponse.json({ error: `NFC card "${cardValue}" not found in database` }, { status: 404 });
+  }
+
+  const { barcode, notes, checkout_location, equipment_ids } = parsed.data;
 
   // Handle batch checkout
   if (equipment_ids && equipment_ids.length > 0) {
@@ -69,7 +75,7 @@ export async function POST(req: NextRequest) {
       }
       const c = await nfcCheckout({
         equipmentId: eqId,
-        nfcId: nfc_id,
+        nfcValue: cardValue,
         notes: notes || "Checked out via NFC Station",
         checkout_location,
       });
@@ -98,14 +104,17 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "Equipment not found" }, { status: 404 });
   }
 
-  // Check if this equipment is already checked out by THIS member
+  // Check if this equipment is already checked out under THIS NFC card
   const activeCheckout = equipment.active_checkout;
   if (activeCheckout) {
-    const isSameMember = activeCheckout.checked_out_by === member.id;
-    if (isSameMember) {
+    const isSameCard =
+      (activeCheckout.nfc_value && activeCheckout.nfc_value.toLowerCase() === cardValue.toLowerCase()) ||
+      (activeCheckout.nfc_id && activeCheckout.nfc_id.toLowerCase() === cardValue.toLowerCase());
+
+    if (isSameCard) {
       return NextResponse.json(
         {
-          error: "Equipment is already checked out to this member.",
+          error: "Equipment is already checked out to this NFC card.",
           alreadyCheckedOutByMember: true,
           equipment_id: equipment.id,
           equipment_name: equipment.name,
@@ -132,7 +141,7 @@ export async function POST(req: NextRequest) {
   try {
     const checkout = await nfcCheckout({
       equipmentId: equipment.id,
-      nfcId: nfc_id,
+      nfcValue: cardValue,
       notes: notes || "Checked out via NFC Station",
       checkout_location,
     });

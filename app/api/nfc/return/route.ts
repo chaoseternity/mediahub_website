@@ -1,5 +1,5 @@
 import { auth } from "@/lib/auth";
-import { nfcReturn, getAllEquipment, getEquipmentById, getUserByNfcId } from "@/lib/db";
+import { nfcReturn, getAllEquipment, getEquipmentById, getNfcCardByValue } from "@/lib/db";
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 
@@ -7,6 +7,7 @@ const NfcReturnSchema = z.object({
   equipment_id: z.number().int().positive().optional(),
   equipment_ids: z.array(z.number().int().positive()).optional(),
   barcode: z.string().trim().optional(),
+  nfc_value: z.string().trim().optional(),
   nfc_id: z.string().trim().optional(),
 });
 
@@ -44,7 +45,8 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: parsed.error.flatten() }, { status: 400 });
   }
 
-  const { barcode, nfc_id, equipment_ids } = parsed.data;
+  const { barcode, equipment_ids } = parsed.data;
+  const cardValue = (parsed.data.nfc_value || parsed.data.nfc_id || "").trim();
 
   // Handle batch return
   if (equipment_ids && equipment_ids.length > 0) {
@@ -80,15 +82,19 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "This equipment is not currently checked out." }, { status: 409 });
   }
 
-  // If nfc_id was provided, verify ownership or log warning
-  if (nfc_id) {
-    const member = await getUserByNfcId(nfc_id);
-    if (member && equipment.active_checkout.checked_out_by !== member.id && equipment.active_checkout.nfc_id !== nfc_id) {
-      // It was checked out by someone else, but club staff may still return it,
-      // return error if desired or allow with warning. In this workflow, check ownership:
-      return NextResponse.json({
-        error: `This equipment is checked out to ${equipment.active_checkout.checked_out_by_name}, not this member.`,
-      }, { status: 409 });
+  // If nfc_value was provided, verify ownership or log warning
+  if (cardValue) {
+    const card = await getNfcCardByValue(cardValue);
+    if (card) {
+      const isSameCard =
+        (equipment.active_checkout.nfc_value && equipment.active_checkout.nfc_value.toLowerCase() === cardValue.toLowerCase()) ||
+        (equipment.active_checkout.nfc_id && equipment.active_checkout.nfc_id.toLowerCase() === cardValue.toLowerCase());
+
+      if (!isSameCard && equipment.active_checkout.checked_out_by_name !== card.member_name) {
+        return NextResponse.json({
+          error: `This equipment is checked out to ${equipment.active_checkout.checked_out_by_name}, not this NFC card.`,
+        }, { status: 409 });
+      }
     }
   }
 

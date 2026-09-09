@@ -1,5 +1,5 @@
 import { auth } from "@/lib/auth";
-import { getAllEquipment, getAllUsers } from "@/lib/db";
+import { getAllEquipment, getAllNfcCards } from "@/lib/db";
 import { NFCStationClient } from "@/components/NFCStationClient";
 
 export const metadata = {
@@ -8,17 +8,17 @@ export const metadata = {
 };
 
 export default async function NFCPage() {
-  const [session, equipment, users] = await Promise.all([
+  const [session, equipment, nfcCards] = await Promise.all([
     auth(),
     getAllEquipment(),
-    getAllUsers(),
+    getAllNfcCards(),
   ]);
 
   return (
     <div className="px-4 py-4 md:px-6 md:py-8 w-full">
       <NFCStationClient
         allEquipment={equipment}
-        allUsers={users}
+        initialCards={nfcCards}
         currentRole={session?.user?.role ?? "viewer"}
         currentUserName={session?.user?.name ?? ""}
       />

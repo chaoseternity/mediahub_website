@@ -1,9 +1,9 @@
 import { auth } from "@/lib/auth";
-import { createNfcCard } from "@/lib/db";
+import { createNfcCard, updateNfcCard, deleteNfcCard } from "@/lib/db";
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 
-const AssignSchema = z.object({
+const CreateCardSchema = z.object({
   nfc_value: z.string().trim().min(1),
   member_name: z.string().trim().min(1),
   notes: z.string().trim().optional(),
@@ -17,7 +17,7 @@ export async function POST(req: NextRequest) {
   }
 
   const body = await req.json();
-  const parsed = AssignSchema.safeParse(body);
+  const parsed = CreateCardSchema.safeParse(body);
   if (!parsed.success) {
     return NextResponse.json({ error: parsed.error.flatten() }, { status: 400 });
   }
@@ -28,9 +28,9 @@ export async function POST(req: NextRequest) {
       member_name: parsed.data.member_name,
       notes: parsed.data.notes,
     });
-    return NextResponse.json({ success: true, card });
+    return NextResponse.json({ success: true, card }, { status: 201 });
   } catch (err: unknown) {
-    const msg = err instanceof Error ? err.message : "Failed to register NFC Card";
+    const msg = err instanceof Error ? err.message : "Failed to create NFC card.";
     return NextResponse.json({ error: msg }, { status: 409 });
   }
 }

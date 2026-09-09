@@ -21,6 +21,7 @@ import type {
   SectionRehearsalMap,
   SOPDocument,
   DeploymentResponseStatus,
+  NFCCard,
   NFCMemberData,
   NFCCheckoutItem,
 } from "./types";
@@ -52,7 +53,7 @@ export async function getUserById(id: number): Promise<User | undefined> {
 export async function getAllUsers(): Promise<User[]> {
   await ensureSchema();
   const { rows } = await sql<User>`
-    SELECT id, name, email, username, google_id, image, role, provider, nfc_id, created_at
+    SELECT id, name, email, username, google_id, image, role, provider, created_at
     FROM users
     ORDER BY name ASC
   `;
@@ -117,28 +118,60 @@ export async function updateUsername(id: number, username: string): Promise<void
   await sql`UPDATE users SET username = ${username} WHERE id = ${id}`;
 }
 
-export async function getUserByNfcId(nfcId: string): Promise<User | undefined> {
+// ---------------------------------------------------------------------------
+// NFC Card helpers (Dedicated card entity, separate from User accounts)
+// ---------------------------------------------------------------------------
+
+export async function getNfcCardByValue(nfcValue: string): Promise<NFCCard | undefined> {
   await ensureSchema();
-  const trimmed = nfcId.trim();
+  const trimmed = nfcValue.trim();
   if (!trimmed) return undefined;
-  const { rows } = await sql<User>`
-    SELECT * FROM users WHERE LOWER(nfc_id) = LOWER(${trimmed})
+  const { rows } = await sql<NFCCard>`
+    SELECT * FROM nfc_cards WHERE LOWER(nfc_value) = LOWER(${trimmed})
   `;
   return rows[0];
 }
 
-export async function updateUserNfcId(userId: number, nfcId: string | null): Promise<void> {
+export async function getAllNfcCards(): Promise<NFCCard[]> {
   await ensureSchema();
-  const val = nfcId?.trim() ? nfcId.trim() : null;
-  if (val) {
-    const existing = await sql<User>`
-      SELECT id FROM users WHERE LOWER(nfc_id) = LOWER(${val}) AND id != ${userId}
-    `;
-    if (existing.rows.length > 0) {
-      throw new Error("This NFC Card is already assigned to another member.");
-    }
+  const { rows } = await sql<NFCCard>`
+    SELECT * FROM nfc_cards ORDER BY member_name ASC
+  `;
+  return rows;
+}
+
+export async function createNfcCard(params: {
+  nfc_value: string;
+  member_name: string;
+  notes?: string;
+}): Promise<NFCCard> {
+  await ensureSchema();
+  const val = params.nfc_value.trim();
+  const name = params.member_name.trim();
+  const existing = await getNfcCardByValue(val);
+  if (existing) {
+    throw new Error(`NFC card "${val}" already exists in the database.`);
   }
-  await sql`UPDATE users SET nfc_id = ${val} WHERE id = ${userId}`;
+  const { rows } = await sql<NFCCard>`
+    INSERT INTO nfc_cards (nfc_value, member_name, notes)
+    VALUES (${val}, ${name}, ${params.notes ?? null})
+    RETURNING *
+  `;
+  return rows[0];
+}
+
+export async function updateNfcCard(id: number, memberName: string, notes?: string): Promise<void> {
+  await ensureSchema();
+  await sql`
+    UPDATE nfc_cards
+    SET member_name = ${memberName.trim()}, notes = ${notes ?? null}, updated_at = CURRENT_TIMESTAMP
+    WHERE id = ${id}
+  `;
+}
+
+export async function deleteNfcCard(id: number): Promise<void> {
+  await ensureSchema();
+  await sql`DELETE FROM nfc_cards WHERE id = ${id}`;
 }
 
 // ---------------------------------------------------------------------------
@@ -443,6 +476,7 @@ export async function createCheckout(params: {
   expected_return_at?: string;
   notes?: string;
   checkout_location?: string;
+  nfc_value?: string;
   nfc_id?: string;
 }): Promise<Checkout> {
   await ensureSchema();
@@ -451,9 +485,10 @@ export async function createCheckout(params: {
     throw new Error("Equipment is already checked out.");
   }
 
+  const val = params.nfc_value ?? params.nfc_id ?? null;
   const { rows } = await sql<Checkout>`
-    INSERT INTO checkouts (equipment_id, checked_out_by, checked_out_by_name, expected_return_at, notes, checkout_location, nfc_id)
-    VALUES (${params.equipment_id}, ${params.checked_out_by ?? null}, ${params.checked_out_by_name}, ${params.expected_return_at ?? null}, ${params.notes ?? null}, ${params.checkout_location ?? null}, ${params.nfc_id ?? null})
+    INSERT INTO checkouts (equipment_id, checked_out_by, checked_out_by_name, expected_return_at, notes, checkout_location, nfc_value, nfc_id)
+    VALUES (${params.equipment_id}, ${params.checked_out_by ?? null}, ${params.checked_out_by_name}, ${params.expected_return_at ?? null}, ${params.notes ?? null}, ${params.checkout_location ?? null}, ${val}, ${val})
     RETURNING *
   `;
 
@@ -477,15 +512,13 @@ export async function returnCheckout(equipment_id: number): Promise<Checkout> {
   return rows[0];
 }
 
-export async function getNfcMemberData(nfcId: string): Promise<NFCMemberData | null> {
+export async function getNfcMemberData(nfcValue: string): Promise<NFCMemberData | null> {
   await ensureSchema();
-  const trimmed = nfcId.trim();
+  const trimmed = nfcValue.trim();
   if (!trimmed) return null;
 
-  const member = await getUserByNfcId(trimmed);
-  if (!member) return null;
-
-  const memberId = member.id;
+  const card = await getNfcCardByValue(trimmed);
+  if (!card) return null;
 
   const { rows: activeCheckouts } = await sql<NFCCheckoutItem>`
     SELECT 
@@ -498,13 +531,14 @@ export async function getNfcMemberData(nfcId: string): Promise<NFCMemberData | n
       c.returned_at,
       c.notes,
       c.checkout_location,
+      c.nfc_value,
       c.nfc_id,
       e.name AS equipment_name,
       e.serial_number AS equipment_serial_number,
       e.location AS equipment_location
     FROM checkouts c
     JOIN equipment e ON e.id = c.equipment_id
-    WHERE (c.checked_out_by = ${memberId} OR LOWER(c.nfc_id) = LOWER(${trimmed}))
+    WHERE (LOWER(c.nfc_value) = LOWER(${trimmed}) OR LOWER(c.nfc_id) = LOWER(${trimmed}))
       AND c.returned_at IS NULL
     ORDER BY c.checked_out_at DESC
   `;
@@ -520,18 +554,19 @@ export async function getNfcMemberData(nfcId: string): Promise<NFCMemberData | n
       c.returned_at,
       c.notes,
       c.checkout_location,
+      c.nfc_value,
       c.nfc_id,
       e.name AS equipment_name,
       e.serial_number AS equipment_serial_number,
       e.location AS equipment_location
     FROM checkouts c
     JOIN equipment e ON e.id = c.equipment_id
-    WHERE (c.checked_out_by = ${memberId} OR LOWER(c.nfc_id) = LOWER(${trimmed}))
+    WHERE (LOWER(c.nfc_value) = LOWER(${trimmed}) OR LOWER(c.nfc_id) = LOWER(${trimmed}))
     ORDER BY c.checked_out_at DESC
   `;
 
   return {
-    member,
+    card,
     activeCheckouts,
     history,
   };
@@ -539,23 +574,26 @@ export async function getNfcMemberData(nfcId: string): Promise<NFCMemberData | n
 
 export async function nfcCheckout(params: {
   equipmentId: number;
-  nfcId: string;
+  nfcValue?: string;
+  nfcId?: string;
   notes?: string;
   checkout_location?: string;
 }): Promise<Checkout> {
   await ensureSchema();
-  const trimmed = params.nfcId.trim();
-  const member = await getUserByNfcId(trimmed);
-  if (!member) {
-    throw new Error("No member found matching this NFC card.");
+  const raw = params.nfcValue ?? params.nfcId ?? "";
+  const trimmed = raw.trim();
+  const card = await getNfcCardByValue(trimmed);
+  if (!card) {
+    throw new Error("NFC card not found in database.");
   }
 
   return await createCheckout({
     equipment_id: params.equipmentId,
-    checked_out_by: member.id,
-    checked_out_by_name: member.username || member.name,
+    checked_out_by: null,
+    checked_out_by_name: card.member_name,
     notes: params.notes || "Checked out via NFC Station",
     checkout_location: params.checkout_location,
+    nfc_value: trimmed,
     nfc_id: trimmed,
   });
 }

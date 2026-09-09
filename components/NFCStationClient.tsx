@@ -10,7 +10,6 @@ import {
   XCircle,
   Clock,
   Package,
-  UserCheck,
   Search,
   Radio,
   Sparkles,
@@ -20,6 +19,8 @@ import {
   Trash2,
   X,
   ScanLine,
+  PlusCircle,
+  IdCard,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -39,10 +40,10 @@ import {
   DialogDescription,
   DialogFooter,
 } from "@/components/ui/dialog";
-import type { User, Equipment, NFCMemberData, NFCCheckoutItem, Role } from "@/lib/types";
+import type { Equipment, NFCCard, NFCMemberData, NFCCheckoutItem, Role } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
-// Audio synthesized sound effects via Web Audio API
+// Web Audio API Synthesizer
 function playSound(type: "success" | "warning" | "error" | "scan" | "return") {
   try {
     const AudioContextClass =
@@ -56,8 +57,8 @@ function playSound(type: "success" | "warning" | "error" | "scan" | "return") {
       const osc2 = ctx.createOscillator();
       const gain = ctx.createGain();
 
-      osc1.frequency.setValueAtTime(587.33, ctx.currentTime); // D5
-      osc2.frequency.setValueAtTime(880, ctx.currentTime + 0.1); // A5
+      osc1.frequency.setValueAtTime(587.33, ctx.currentTime);
+      osc2.frequency.setValueAtTime(880, ctx.currentTime + 0.1);
       gain.gain.setValueAtTime(0.18, ctx.currentTime);
       gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.35);
 
@@ -73,8 +74,8 @@ function playSound(type: "success" | "warning" | "error" | "scan" | "return") {
       const osc = ctx.createOscillator();
       const gain = ctx.createGain();
       osc.type = "sine";
-      osc.frequency.setValueAtTime(659.25, ctx.currentTime); // E5
-      osc.frequency.exponentialRampToValueAtTime(523.25, ctx.currentTime + 0.25); // C5
+      osc.frequency.setValueAtTime(659.25, ctx.currentTime);
+      osc.frequency.exponentialRampToValueAtTime(523.25, ctx.currentTime + 0.25);
       gain.gain.setValueAtTime(0.2, ctx.currentTime);
       gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.3);
 
@@ -112,7 +113,7 @@ function playSound(type: "success" | "warning" | "error" | "scan" | "return") {
       const osc = ctx.createOscillator();
       const gain = ctx.createGain();
       osc.type = "sine";
-      osc.frequency.setValueAtTime(784, ctx.currentTime); // G5
+      osc.frequency.setValueAtTime(784, ctx.currentTime);
       gain.gain.setValueAtTime(0.15, ctx.currentTime);
       gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.08);
 
@@ -128,24 +129,24 @@ function playSound(type: "success" | "warning" | "error" | "scan" | "return") {
 
 interface NFCStationClientProps {
   allEquipment: Equipment[];
-  allUsers: User[];
+  initialCards: NFCCard[];
   currentRole: Role;
   currentUserName: string;
 }
 
-type StationMode = "awaiting_nfc" | "member_active";
+type StationMode = "awaiting_nfc" | "card_active";
 type ScanPopupMode = "checkout" | "return" | null;
 
 export function NFCStationClient({
   allEquipment: initialEquipment,
-  allUsers: initialUsers,
+  initialCards,
 }: NFCStationClientProps) {
   const [equipmentList, setEquipmentList] = useState<Equipment[]>(initialEquipment);
-  const [usersList, setUsersList] = useState<User[]>(initialUsers);
+  const [cardsList, setCardsList] = useState<NFCCard[]>(initialCards);
 
   // Workflow states
   const [stationMode, setStationMode] = useState<StationMode>("awaiting_nfc");
-  const [memberData, setMemberData] = useState<NFCMemberData | null>(null);
+  const [cardData, setCardData] = useState<NFCMemberData | null>(null);
   const [activeTab, setActiveTab] = useState<"current" | "history">("current");
 
   // Popup Scanning Page Mode ("checkout" or "return" or null)
@@ -158,21 +159,24 @@ export function NFCStationClient({
   const [popupBarcode, setPopupBarcode] = useState("");
   const [isProcessing, setIsProcessing] = useState(false);
 
-  // Main status banner
+  // Status banners
   const [statusMessage, setStatusMessage] = useState<{
     text: string;
     type: "info" | "success" | "warning" | "error";
   } | null>(null);
 
-  // Popup internal status banner
   const [popupMessage, setPopupMessage] = useState<{
     text: string;
     type: "info" | "success" | "warning" | "error";
   } | null>(null);
 
-  // Unregistered card pairing dialog
+  // Unregistered card registration dialog
   const [unregisteredCard, setUnregisteredCard] = useState<string | null>(null);
-  const [selectedUserIdToPair, setSelectedUserIdToPair] = useState<number | null>(null);
+  const [newMemberName, setNewMemberName] = useState("");
+  const [newCardNotes, setNewCardNotes] = useState("");
+
+  // Manage cards dialog
+  const [isManageCardsOpen, setIsManageCardsOpen] = useState(false);
 
   // Collision Confirmation Dialog
   const [collisionPrompt, setCollisionPrompt] = useState<{
@@ -193,8 +197,8 @@ export function NFCStationClient({
   }, [popupMode, stationMode, collisionPrompt, unregisteredCard]);
 
   // Keep references for event listener
-  const memberDataRef = useRef(memberData);
-  memberDataRef.current = memberData;
+  const cardDataRef = useRef(cardData);
+  cardDataRef.current = cardData;
   const equipmentListRef = useRef(equipmentList);
   equipmentListRef.current = equipmentList;
   const popupModeRef = useRef(popupMode);
@@ -224,26 +228,26 @@ export function NFCStationClient({
     );
   }, []);
 
-  // Fetch updated member data by NFC ID
-  const refreshMemberData = useCallback(async (nfcId: string) => {
+  // Fetch updated card data by NFC value
+  const refreshCardData = useCallback(async (nfcValue: string) => {
     try {
-      const res = await fetch(`/api/nfc?nfc_id=${encodeURIComponent(nfcId)}`);
+      const res = await fetch(`/api/nfc?nfc_value=${encodeURIComponent(nfcValue)}`);
       if (res.ok) {
         const data = await res.json();
         if (data.found) {
-          setMemberData({
-            member: data.member,
+          setCardData({
+            card: data.card,
             activeCheckouts: data.activeCheckouts || [],
             history: data.history || [],
           });
         }
       }
     } catch (err) {
-      console.error("Failed to refresh member data:", err);
+      console.error("Failed to refresh NFC card data:", err);
     }
   }, []);
 
-  // Refresh equipment list from server
+  // Refresh equipment list
   const refreshEquipmentList = useCallback(async () => {
     try {
       const res = await fetch("/api/equipment");
@@ -256,38 +260,53 @@ export function NFCStationClient({
     }
   }, []);
 
+  // Refresh registered NFC cards list
+  const refreshCardsList = useCallback(async () => {
+    try {
+      const res = await fetch("/api/nfc/cards");
+      if (res.ok) {
+        const data = await res.json();
+        setCardsList(data);
+      }
+    } catch (err) {
+      console.error("Failed to refresh cards list:", err);
+    }
+  }, []);
+
   // 1. NFC CARD RECOGNITION HANDLER
   const handleNfcScanned = useCallback(
-    async (rawCardId: string) => {
-      const nfcId = rawCardId.trim();
-      if (!nfcId) return;
+    async (rawCardValue: string) => {
+      const val = rawCardValue.trim();
+      if (!val) return;
 
       setIsProcessing(true);
-      setStatusMessage({ text: `Looking up NFC card: ${nfcId}...`, type: "info" });
+      setStatusMessage({ text: `Recognizing NFC card: ${val}...`, type: "info" });
       playSound("scan");
 
       try {
-        const res = await fetch(`/api/nfc?nfc_id=${encodeURIComponent(nfcId)}`);
+        const res = await fetch(`/api/nfc?nfc_value=${encodeURIComponent(val)}`);
         const json = await res.json();
 
         if (json.found) {
-          setMemberData({
-            member: json.member,
+          setCardData({
+            card: json.card,
             activeCheckouts: json.activeCheckouts || [],
             history: json.history || [],
           });
-          setStationMode("member_active");
+          setStationMode("card_active");
           setNfcInput("");
           setStatusMessage({
-            text: `Welcome, ${json.member.name || json.member.username}!`,
+            text: `Recognized NFC Card: ${json.card.member_name} (${json.card.nfc_value})`,
             type: "success",
           });
           playSound("success");
         } else {
           playSound("error");
-          setUnregisteredCard(nfcId);
+          setUnregisteredCard(val);
+          setNewMemberName("");
+          setNewCardNotes("");
           setStatusMessage({
-            text: `NFC Card "${nfcId}" is not registered in the system.`,
+            text: `NFC Card "${val}" is not in database. Register it to proceed.`,
             type: "warning",
           });
         }
@@ -320,11 +339,11 @@ export function NFCStationClient({
     setPopupMessage(null);
   }
 
-  // 3. BARCODE SCANNED INSIDE POPUP
+  // 3. BARCODE SCANNED INSIDE POPUP (Appears One-by-One)
   const handleBarcodeInPopup = useCallback(
     (rawBarcode: string) => {
       const code = rawBarcode.trim();
-      if (!code || !memberDataRef.current) return;
+      if (!code || !cardDataRef.current) return;
       setPopupBarcode("");
 
       const foundEquipment = findEquipment(code);
@@ -342,24 +361,24 @@ export function NFCStationClient({
       if (isAlreadyStaged) {
         playSound("warning");
         setPopupMessage({
-          text: `"${foundEquipment.name}" is already in your scanned list.`,
+          text: `"${foundEquipment.name}" is already in your current scan list.`,
           type: "warning",
         });
         return;
       }
 
-      const isCheckedOutByMember = memberDataRef.current.activeCheckouts.some(
+      const isCheckedOutUnderThisCard = cardDataRef.current.activeCheckouts.some(
         (c) => c.equipment_id === foundEquipment.id
       );
 
       // CHECKOUT MODE
       if (popupModeRef.current === "checkout") {
-        if (isCheckedOutByMember) {
+        if (isCheckedOutUnderThisCard) {
           // PROMPT: "If the barcode is one of the equipments the person has already checked out,
           // prompt the user if he wants to return the equipment, not check it out.
           // If he says yes, return the equipment, if not just ignore that scan."
           playSound("warning");
-          const activeItem = memberDataRef.current.activeCheckouts.find(
+          const activeItem = cardDataRef.current.activeCheckouts.find(
             (c) => c.equipment_id === foundEquipment.id
           );
           setCollisionPrompt({
@@ -390,12 +409,10 @@ export function NFCStationClient({
 
       // RETURN MODE
       if (popupModeRef.current === "return") {
-        if (!isCheckedOutByMember) {
+        if (!isCheckedOutUnderThisCard) {
           playSound("warning");
           setPopupMessage({
-            text: `"${foundEquipment.name}" is not currently checked out by ${
-              memberDataRef.current.member.name || "this member"
-            }.`,
+            text: `"${foundEquipment.name}" is not checked out under this NFC Card.`,
             type: "warning",
           });
           return;
@@ -415,7 +432,7 @@ export function NFCStationClient({
 
   // 4. CONFIRM / FINISH STAGED ITEMS (BATCH SUBMIT)
   async function handleFinishBatch() {
-    if (!memberData || stagedItems.length === 0 || !popupMode) return;
+    if (!cardData || stagedItems.length === 0 || !popupMode) return;
     setIsProcessing(true);
 
     try {
@@ -426,7 +443,7 @@ export function NFCStationClient({
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
-            nfc_id: memberData.member.nfc_id,
+            nfc_value: cardData.card.nfc_value,
             equipment_ids: equipmentIds,
           }),
         });
@@ -435,15 +452,11 @@ export function NFCStationClient({
         if (res.ok) {
           playSound("success");
           setStatusMessage({
-            text: `Successfully checked out ${stagedItems.length} item(s) to ${
-              memberData.member.name || "member"
-            }!`,
+            text: `Successfully checked out ${stagedItems.length} item(s) to ${cardData.card.member_name}!`,
             type: "success",
           });
           closePopup();
-          if (memberData.member.nfc_id) {
-            await refreshMemberData(memberData.member.nfc_id);
-          }
+          await refreshCardData(cardData.card.nfc_value);
           await refreshEquipmentList();
         } else {
           playSound("error");
@@ -454,7 +467,7 @@ export function NFCStationClient({
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
-            nfc_id: memberData.member.nfc_id,
+            nfc_value: cardData.card.nfc_value,
             equipment_ids: equipmentIds,
           }),
         });
@@ -463,15 +476,11 @@ export function NFCStationClient({
         if (res.ok) {
           playSound("return");
           setStatusMessage({
-            text: `Successfully returned ${stagedItems.length} item(s) from ${
-              memberData.member.name || "member"
-            }!`,
+            text: `Successfully returned ${stagedItems.length} item(s) from ${cardData.card.member_name}!`,
             type: "success",
           });
           closePopup();
-          if (memberData.member.nfc_id) {
-            await refreshMemberData(memberData.member.nfc_id);
-          }
+          await refreshCardData(cardData.card.nfc_value);
           await refreshEquipmentList();
         } else {
           playSound("error");
@@ -492,7 +501,6 @@ export function NFCStationClient({
     let lastKeyTime = Date.now();
 
     function onKeyDown(e: KeyboardEvent) {
-      // Don't intercept if pairing modal or collision dialog is active
       if (unregisteredCardRef.current !== null || collisionPromptRef.current !== null) return;
 
       const now = Date.now();
@@ -522,46 +530,46 @@ export function NFCStationClient({
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [handleBarcodeInPopup, handleNfcScanned]);
 
-  // Pair card handler
-  async function handlePairCard() {
-    if (!unregisteredCard || !selectedUserIdToPair) return;
+  // Register New NFC Card (Independent from User Accounts)
+  async function handleRegisterCard() {
+    if (!unregisteredCard || !newMemberName.trim()) return;
     setIsProcessing(true);
 
     try {
-      const res = await fetch("/api/nfc/assign", {
+      const res = await fetch("/api/nfc/card", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          user_id: selectedUserIdToPair,
-          nfc_id: unregisteredCard,
+          nfc_value: unregisteredCard.trim(),
+          member_name: newMemberName.trim(),
+          notes: newCardNotes.trim() || undefined,
         }),
       });
 
       const json = await res.json();
       if (res.ok) {
         playSound("success");
-        setUsersList((prev) =>
-          prev.map((u) => (u.id === selectedUserIdToPair ? { ...u, nfc_id: unregisteredCard } : u))
-        );
-        const cardToLoad = unregisteredCard;
+        await refreshCardsList();
+        const registeredVal = unregisteredCard.trim();
         setUnregisteredCard(null);
-        setSelectedUserIdToPair(null);
-        await handleNfcScanned(cardToLoad);
+        setNewMemberName("");
+        setNewCardNotes("");
+        await handleNfcScanned(registeredVal);
       } else {
         playSound("error");
-        setStatusMessage({ text: json.error || "Failed to pair card.", type: "error" });
+        setStatusMessage({ text: json.error || "Failed to register card.", type: "error" });
       }
     } catch {
       playSound("error");
-      setStatusMessage({ text: "Error pairing NFC card.", type: "error" });
+      setStatusMessage({ text: "Error registering NFC card.", type: "error" });
     } finally {
       setIsProcessing(false);
     }
   }
 
-  function handleSwitchMember() {
+  function handleSwitchCard() {
     playSound("scan");
-    setMemberData(null);
+    setCardData(null);
     setStationMode("awaiting_nfc");
     setStatusMessage(null);
     setNfcInput("");
@@ -591,15 +599,25 @@ export function NFCStationClient({
         </div>
 
         <div className="flex items-center gap-2">
-          {stationMode === "member_active" && (
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => setIsManageCardsOpen(true)}
+            className="gap-1.5 text-xs font-semibold"
+          >
+            <IdCard className="h-3.5 w-3.5" />
+            Club NFC Cards ({cardsList.length})
+          </Button>
+
+          {stationMode === "card_active" && (
             <Button
               variant="outline"
               size="sm"
-              onClick={handleSwitchMember}
+              onClick={handleSwitchCard}
               className="gap-2 border-primary/30 hover:bg-primary/10"
             >
               <RotateCcw className="h-4 w-4" />
-              Finish / Switch Member
+              Finish / Switch Card
             </Button>
           )}
 
@@ -613,7 +631,7 @@ export function NFCStationClient({
             )}
           >
             <Radio className="h-3 w-3" />
-            {stationMode === "awaiting_nfc" ? "Waiting for NFC Tap" : "Member Station Active"}
+            {stationMode === "awaiting_nfc" ? "Waiting for NFC Tap" : "NFC Card Active"}
           </Badge>
         </div>
       </div>
@@ -664,10 +682,10 @@ export function NFCStationClient({
             </div>
 
             <h2 className="text-xl sm:text-2xl font-bold tracking-tight mb-2">
-              Ready for Member NFC Card
+              Scan Member NFC Card
             </h2>
             <p className="text-sm text-muted-foreground max-w-md mb-6">
-              Hold or tap the member&apos;s physical NFC card on the USB reader connected to this
+              Hold or tap the member&apos;s physical NFC card on the USB scanner connected to this
               laptop.
             </p>
 
@@ -684,9 +702,9 @@ export function NFCStationClient({
                 type="text"
                 value={nfcInput}
                 onChange={(e) => setNfcInput(e.target.value)}
-                placeholder="Or enter NFC Card ID manually..."
+                placeholder="Or type NFC Card Value manually..."
                 disabled={isProcessing}
-                className="h-11 rounded-xl text-sm"
+                className="h-11 rounded-xl text-sm font-mono"
               />
               <Button
                 type="submit"
@@ -708,95 +726,87 @@ export function NFCStationClient({
           <Card className="rounded-2xl flex flex-col">
             <CardHeader className="pb-3">
               <CardTitle className="text-sm font-semibold flex items-center justify-between">
-                <span>Club Members ({usersList.length})</span>
+                <span>Club NFC Cards ({cardsList.length})</span>
                 <Badge variant="outline" className="text-[10px]">
                   Simulator
                 </Badge>
               </CardTitle>
               <CardDescription className="text-xs">
-                Click a member to simulate their NFC card tap:
+                Click a card below to simulate scanner tap:
               </CardDescription>
             </CardHeader>
             <CardContent className="flex-1 overflow-y-auto max-h-80 space-y-2 pr-2">
-              {usersList.map((user) => {
-                const hasNfc = Boolean(user.nfc_id);
-                return (
+              {cardsList.length === 0 ? (
+                <div className="text-center py-6 text-xs text-muted-foreground">
+                  No NFC cards registered yet. Tap &quot;+ Register New Card&quot; to add one.
+                </div>
+              ) : (
+                cardsList.map((card) => (
                   <button
-                    key={user.id}
-                    onClick={() => {
-                      if (user.nfc_id) {
-                        void handleNfcScanned(user.nfc_id);
-                      } else {
-                        setUnregisteredCard(`NFC-${user.name.toUpperCase().replace(/\s+/g, "")}-01`);
-                        setSelectedUserIdToPair(user.id);
-                      }
-                    }}
+                    key={card.id}
+                    onClick={() => void handleNfcScanned(card.nfc_value)}
                     className="w-full text-left p-2.5 rounded-xl border bg-background/50 hover:bg-accent hover:border-primary/40 transition-all flex items-center justify-between gap-3 group"
                   >
                     <div className="min-w-0">
                       <p className="text-xs font-semibold truncate group-hover:text-primary">
-                        {user.name}
+                        {card.member_name}
                       </p>
-                      <p className="text-[10px] text-muted-foreground truncate">
-                        {user.username ? `@${user.username}` : user.email}
-                      </p>
+                      {card.notes && (
+                        <p className="text-[10px] text-muted-foreground truncate">{card.notes}</p>
+                      )}
                     </div>
 
-                    {hasNfc ? (
-                      <Badge
-                        variant="secondary"
-                        className="text-[10px] font-mono shrink-0 bg-primary/10 text-primary border-primary/20"
-                      >
-                        {user.nfc_id}
-                      </Badge>
-                    ) : (
-                      <Badge
-                        variant="outline"
-                        className="text-[10px] shrink-0 text-muted-foreground hover:border-primary"
-                      >
-                        + Assign Card
-                      </Badge>
-                    )}
+                    <Badge
+                      variant="secondary"
+                      className="text-[10px] font-mono shrink-0 bg-primary/10 text-primary border-primary/20"
+                    >
+                      {card.nfc_value}
+                    </Badge>
                   </button>
-                );
-              })}
+                ))
+              )}
+
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => {
+                  setUnregisteredCard(`NFC-CARD-${String(cardsList.length + 1).padStart(3, "0")}`);
+                  setNewMemberName("");
+                  setNewCardNotes("");
+                }}
+                className="w-full text-xs font-semibold gap-1.5 mt-2"
+              >
+                <PlusCircle className="h-3.5 w-3.5" />
+                Register New Card
+              </Button>
             </CardContent>
           </Card>
         </div>
       )}
 
-      {/* STATE 2: MEMBER ACTIVE DASHBOARD */}
-      {stationMode === "member_active" && memberData && (
+      {/* STATE 2: NFC CARD ACTIVE DASHBOARD */}
+      {stationMode === "card_active" && cardData && (
         <div className="space-y-6">
-          {/* Member Card Header with the TWO BIG ACTION BUTTONS */}
+          {/* Card Header with TWO BIG ACTION BUTTONS */}
           <Card className="rounded-2xl border-primary/30 bg-gradient-to-r from-primary/10 via-background to-primary/5 p-6 shadow-sm">
             <div className="flex flex-col md:flex-row md:items-center justify-between gap-6">
-              {/* Member Profile */}
+              {/* Card Profile */}
               <div className="flex items-center gap-4">
                 <div className="h-16 w-16 rounded-2xl bg-primary/20 border border-primary/40 flex items-center justify-center font-bold text-xl text-primary shadow-xs">
-                  {memberData.member.name?.slice(0, 2).toUpperCase() || "MB"}
+                  <Nfc className="h-8 w-8" />
                 </div>
                 <div>
                   <div className="flex items-center gap-2">
-                    <h2 className="text-xl font-bold">{memberData.member.name}</h2>
-                    {memberData.member.username && (
-                      <span className="text-xs text-muted-foreground">
-                        (@{memberData.member.username})
-                      </span>
-                    )}
-                    <Badge variant="secondary" className="text-[10px] capitalize">
-                      {memberData.member.role}
+                    <h2 className="text-xl font-bold">{cardData.card.member_name}</h2>
+                    <Badge variant="outline" className="font-mono text-xs text-primary border-primary/30">
+                      UID: {cardData.card.nfc_value}
                     </Badge>
                   </div>
-                  <p className="text-xs text-muted-foreground">{memberData.member.email}</p>
-                  <div className="flex items-center gap-2 mt-1">
-                    <Badge
-                      variant="outline"
-                      className="font-mono text-[10px] gap-1 bg-background/80 border-primary/30 text-primary"
-                    >
-                      <Nfc className="h-3 w-3" />
-                      Card UID: {memberData.member.nfc_id || "Registered"}
-                    </Badge>
+                  {cardData.card.notes && (
+                    <p className="text-xs text-muted-foreground mt-0.5">{cardData.card.notes}</p>
+                  )}
+                  <div className="text-[11px] text-muted-foreground mt-1">
+                    Card Registered: {new Date(cardData.card.created_at).toLocaleDateString()}
                   </div>
                 </div>
               </div>
@@ -844,7 +854,7 @@ export function NFCStationClient({
               <Package className="h-4 w-4" />
               Currently Checked Out
               <Badge variant="secondary" className="ml-1 text-xs px-2 py-0.5">
-                {memberData.activeCheckouts.length}
+                {cardData.activeCheckouts.length}
               </Badge>
             </button>
 
@@ -860,7 +870,7 @@ export function NFCStationClient({
               <Clock className="h-4 w-4" />
               Checkout History
               <Badge variant="outline" className="ml-1 text-xs px-2 py-0.5">
-                {memberData.history.length}
+                {cardData.history.length}
               </Badge>
             </button>
           </div>
@@ -868,12 +878,12 @@ export function NFCStationClient({
           {/* TAB 1: CURRENTLY CHECKED OUT */}
           {activeTab === "current" && (
             <div>
-              {memberData.activeCheckouts.length === 0 ? (
+              {cardData.activeCheckouts.length === 0 ? (
                 <Card className="border-dashed p-10 text-center rounded-2xl">
                   <Package className="h-10 w-10 text-muted-foreground/40 mx-auto mb-3" />
                   <h3 className="font-semibold text-base mb-1">No equipment currently checked out</h3>
                   <p className="text-xs text-muted-foreground max-w-sm mx-auto mb-4">
-                    This member has no active equipment checkouts. Tap &quot;Checkout Equipments&quot; above
+                    This NFC card has no active equipment checkouts. Tap &quot;Checkout Equipments&quot; above
                     to start scanning items to borrow.
                   </p>
                   <Button
@@ -888,7 +898,7 @@ export function NFCStationClient({
                 </Card>
               ) : (
                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-                  {memberData.activeCheckouts.map((item) => (
+                  {cardData.activeCheckouts.map((item) => (
                     <Card
                       key={item.id}
                       className="rounded-xl border hover:border-primary/50 transition-all p-4 flex flex-col justify-between group shadow-xs"
@@ -945,14 +955,14 @@ export function NFCStationClient({
                     </tr>
                   </thead>
                   <tbody className="divide-y">
-                    {memberData.history.length === 0 ? (
+                    {cardData.history.length === 0 ? (
                       <tr>
                         <td colSpan={5} className="p-6 text-center text-muted-foreground">
                           No past checkout records for this NFC card.
                         </td>
                       </tr>
                     ) : (
-                      memberData.history.map((record) => {
+                      cardData.history.map((record) => {
                         const isReturned = Boolean(record.returned_at);
                         return (
                           <tr key={record.id} className="hover:bg-accent/40 transition-colors">
@@ -1000,7 +1010,7 @@ export function NFCStationClient({
       )}
 
       {/* POPUP / BLACK PAGE SCANNING OVERLAY */}
-      {popupMode !== null && memberData && (
+      {popupMode !== null && cardData && (
         <div className="fixed inset-0 z-50 bg-black/90 backdrop-blur-xl flex flex-col justify-between p-4 sm:p-8 animate-in fade-in duration-200">
           {/* Top Bar inside popup */}
           <div className="flex items-center justify-between border-b border-border/40 pb-4">
@@ -1033,8 +1043,8 @@ export function NFCStationClient({
                   </Badge>
                 </div>
                 <p className="text-xs text-neutral-400">
-                  Member: <strong className="text-white">{memberData.member.name}</strong>{" "}
-                  {memberData.member.username ? `(@${memberData.member.username})` : ""}
+                  Card: <strong className="text-white">{cardData.card.member_name}</strong> (
+                  <span className="font-mono">{cardData.card.nfc_value}</span>)
                 </p>
               </div>
             </div>
@@ -1073,7 +1083,7 @@ export function NFCStationClient({
                     type="text"
                     value={popupBarcode}
                     onChange={(e) => setPopupBarcode(e.target.value)}
-                    placeholder="Scan equipment barcode now with scanner or type barcode..."
+                    placeholder="Scan equipment barcode with connected scanner..."
                     className="pl-12 h-14 text-base font-semibold bg-neutral-900/90 text-white rounded-2xl border-neutral-700 focus-visible:ring-2 focus-visible:ring-primary shadow-inner"
                   />
                 </div>
@@ -1239,8 +1249,8 @@ export function NFCStationClient({
               <span className="font-semibold text-foreground">
                 &ldquo;{collisionPrompt?.equipment.name}&rdquo;
               </span>{" "}
-              is already checked out to{" "}
-              <span className="font-semibold text-foreground">{memberData?.member.name}</span>.
+              is already checked out under this NFC Card (
+              <span className="font-semibold text-foreground">{cardData?.card.member_name}</span>).
               <br />
               <br />
               Would you like to <strong>return</strong> this equipment instead of checking it out?
@@ -1252,7 +1262,6 @@ export function NFCStationClient({
               type="button"
               variant="outline"
               onClick={() => {
-                // Ignore that scan
                 setCollisionPrompt(null);
                 setPopupMessage({
                   text: `Scan for "${collisionPrompt?.equipment.name}" ignored.`,
@@ -1268,8 +1277,7 @@ export function NFCStationClient({
             <Button
               type="button"
               onClick={async () => {
-                // Return the equipment
-                if (collisionPrompt && memberData) {
+                if (collisionPrompt && cardData) {
                   const eq = collisionPrompt.equipment;
                   setCollisionPrompt(null);
                   try {
@@ -1278,7 +1286,7 @@ export function NFCStationClient({
                       headers: { "Content-Type": "application/json" },
                       body: JSON.stringify({
                         equipment_id: eq.id,
-                        nfc_id: memberData.member.nfc_id,
+                        nfc_value: cardData.card.nfc_value,
                       }),
                     });
                     if (res.ok) {
@@ -1287,9 +1295,7 @@ export function NFCStationClient({
                         text: `Successfully returned "${eq.name}"!`,
                         type: "success",
                       });
-                      if (memberData.member.nfc_id) {
-                        await refreshMemberData(memberData.member.nfc_id);
-                      }
+                      await refreshCardData(cardData.card.nfc_value);
                       await refreshEquipmentList();
                     }
                   } catch {
@@ -1307,7 +1313,7 @@ export function NFCStationClient({
         </DialogContent>
       </Dialog>
 
-      {/* DIALOG 2: UNREGISTERED NFC CARD PAIRING */}
+      {/* DIALOG 2: REGISTER UNREGISTERED NFC CARD (SEPARATE FROM USERS) */}
       <Dialog
         open={unregisteredCard !== null}
         onOpenChange={(open) => {
@@ -1319,28 +1325,35 @@ export function NFCStationClient({
             <div className="w-12 h-12 rounded-full bg-primary/10 text-primary flex items-center justify-center mb-2 border border-primary/20">
               <Nfc className="h-6 w-6" />
             </div>
-            <DialogTitle className="text-lg font-bold">Unregistered NFC Card Scanned</DialogTitle>
+            <DialogTitle className="text-lg font-bold">Register New NFC Card</DialogTitle>
             <DialogDescription className="text-sm pt-1">
-              Card ID <code className="font-mono text-primary font-semibold">{unregisteredCard}</code>{" "}
-              is not linked to any member yet. You can pair it right now:
+              Card UID <code className="font-mono text-primary font-semibold">{unregisteredCard}</code>{" "}
+              is not in the database yet. Enter the member details to register this card:
             </DialogDescription>
           </DialogHeader>
 
           <div className="space-y-3 py-2">
-            <label className="text-xs font-semibold">Select Member to Assign this Card to:</label>
-            <select
-              value={selectedUserIdToPair ?? ""}
-              onChange={(e) => setSelectedUserIdToPair(Number(e.target.value) || null)}
-              className="w-full h-11 px-3 rounded-xl border bg-background text-sm font-medium focus:ring-2 focus:ring-primary"
-            >
-              <option value="">-- Choose Club Member --</option>
-              {usersList.map((u) => (
-                <option key={u.id} value={u.id}>
-                  {u.name} {u.username ? `(@${u.username})` : `(${u.email})`}
-                  {u.nfc_id ? ` [Current: ${u.nfc_id}]` : " [No card]"}
-                </option>
-              ))}
-            </select>
+            <div>
+              <label className="text-xs font-semibold block mb-1">Member Name / Label *</label>
+              <Input
+                type="text"
+                placeholder="e.g. John Doe or Crew Card #04"
+                value={newMemberName}
+                onChange={(e) => setNewMemberName(e.target.value)}
+                className="h-11 rounded-xl"
+              />
+            </div>
+
+            <div>
+              <label className="text-xs font-semibold block mb-1">Notes (Optional)</label>
+              <Input
+                type="text"
+                placeholder="e.g. Video Team, Student ID 12345"
+                value={newCardNotes}
+                onChange={(e) => setNewCardNotes(e.target.value)}
+                className="h-11 rounded-xl"
+              />
+            </div>
           </div>
 
           <DialogFooter className="flex flex-col-reverse sm:flex-row gap-2 sm:justify-end pt-2">
@@ -1354,12 +1367,68 @@ export function NFCStationClient({
             </Button>
             <Button
               type="button"
-              disabled={!selectedUserIdToPair || isProcessing}
-              onClick={handlePairCard}
+              disabled={!newMemberName.trim() || isProcessing}
+              onClick={handleRegisterCard}
               className="rounded-xl font-semibold gap-1.5"
             >
-              <UserCheck className="h-4 w-4" />
-              Pair Card & Continue
+              <PlusCircle className="h-4 w-4" />
+              Save Card & Continue
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* DIALOG 3: MANAGE ALL CLUB NFC CARDS */}
+      <Dialog open={isManageCardsOpen} onOpenChange={setIsManageCardsOpen}>
+        <DialogContent className="sm:max-w-xl rounded-2xl max-h-[85vh] flex flex-col">
+          <DialogHeader>
+            <DialogTitle className="text-lg font-bold flex items-center gap-2">
+              <IdCard className="h-5 w-5 text-primary" />
+              Registered Club NFC Cards
+            </DialogTitle>
+            <DialogDescription className="text-xs">
+              List of all physical NFC cards registered in the database for equipment checkouts.
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="flex-1 overflow-y-auto space-y-2 py-2 pr-1">
+            {cardsList.length === 0 ? (
+              <p className="text-center py-6 text-xs text-muted-foreground">No cards registered yet.</p>
+            ) : (
+              cardsList.map((c) => (
+                <div
+                  key={c.id}
+                  className="p-3 rounded-xl border bg-background/50 flex items-center justify-between gap-3 text-xs"
+                >
+                  <div>
+                    <div className="font-bold text-foreground">{c.member_name}</div>
+                    <div className="font-mono text-[11px] text-muted-foreground">{c.nfc_value}</div>
+                    {c.notes && <div className="text-[10px] text-muted-foreground">{c.notes}</div>}
+                  </div>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => {
+                      setIsManageCardsOpen(false);
+                      void handleNfcScanned(c.nfc_value);
+                    }}
+                    className="text-xs font-medium"
+                  >
+                    Select Card
+                  </Button>
+                </div>
+              ))
+            )}
+          </div>
+
+          <DialogFooter className="pt-2 border-t">
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => setIsManageCardsOpen(false)}
+              className="rounded-xl"
+            >
+              Close
             </Button>
           </DialogFooter>
         </DialogContent>

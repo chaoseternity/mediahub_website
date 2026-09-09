@@ -233,12 +233,25 @@ export async function ensureSchema(): Promise<void> {
     );
 
     await runSafe(
-      () => sql`ALTER TABLE users ADD COLUMN IF NOT EXISTS nfc_id TEXT;`,
-      "ALTER users nfc_id"
+      () => sql`
+        CREATE TABLE IF NOT EXISTS nfc_cards (
+          id SERIAL PRIMARY KEY,
+          nfc_value TEXT NOT NULL UNIQUE,
+          member_name TEXT NOT NULL,
+          notes TEXT,
+          created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+          updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+        );
+      `,
+      "CREATE TABLE nfc_cards"
     );
     await runSafe(
-      () => sql`CREATE UNIQUE INDEX IF NOT EXISTS idx_users_nfc_id ON users(LOWER(nfc_id)) WHERE nfc_id IS NOT NULL;`,
-      "CREATE INDEX idx_users_nfc_id"
+      () => sql`CREATE UNIQUE INDEX IF NOT EXISTS idx_nfc_cards_value ON nfc_cards(LOWER(nfc_value));`,
+      "CREATE INDEX idx_nfc_cards_value"
+    );
+    await runSafe(
+      () => sql`ALTER TABLE checkouts ADD COLUMN IF NOT EXISTS nfc_value TEXT;`,
+      "ALTER checkouts nfc_value"
     );
     await runSafe(
       () => sql`ALTER TABLE checkouts ADD COLUMN IF NOT EXISTS nfc_id TEXT;`,

@@ -13,8 +13,15 @@ export const SCHEMA_SQL = `
     image      TEXT,
     role       TEXT    NOT NULL DEFAULT 'viewer' CHECK(role IN ('admin','verified','viewer')),
     provider   TEXT,
-    nfc_id     TEXT,
     created_at TEXT    NOT NULL DEFAULT (datetime('now'))
+  );
+
+  CREATE TABLE IF NOT EXISTS nfc_cards (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    nfc_value   TEXT    NOT NULL UNIQUE,
+    member_name TEXT    NOT NULL,
+    notes       TEXT,
+    created_at  TEXT    NOT NULL DEFAULT (datetime('now'))
   );
 
   CREATE TABLE IF NOT EXISTS tags (
@@ -54,6 +61,7 @@ export const SCHEMA_SQL = `
     returned_at         TEXT,
     notes               TEXT,
     checkout_location   TEXT,
+    nfc_value           TEXT,
     nfc_id              TEXT
   );
 

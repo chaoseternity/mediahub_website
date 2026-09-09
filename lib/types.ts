@@ -24,7 +24,14 @@ export interface User {
   image: string | null;
   role: Role;
   provider: string | null;
-  nfc_id?: string | null;
+  created_at: string;
+}
+
+export interface NFCCard {
+  id: number;
+  nfc_value: string;
+  member_name: string;
+  notes?: string | null;
   created_at: string;
 }
 
@@ -65,6 +72,7 @@ export interface Checkout {
   returned_at: string | null;
   notes: string | null;
   checkout_location: string | null;
+  nfc_value?: string | null;
   nfc_id?: string | null;
 }
 
@@ -75,7 +83,7 @@ export interface NFCCheckoutItem extends Checkout {
 }
 
 export interface NFCMemberData {
-  member: User;
+  card: NFCCard;
   activeCheckouts: NFCCheckoutItem[];
   history: NFCCheckoutItem[];
 }

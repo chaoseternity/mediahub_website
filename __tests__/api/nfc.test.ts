@@ -1,10 +1,11 @@
 /**
  * Unit tests for NFC workflow:
+ * - NFC card is a dedicated entity (independent of user accounts)
  * - NFC card lookup
  * - Retrieval of currently checked out equipment and checkout history
  * - Return equipment by barcode
  * - Checkout equipment by barcode with collision detection and prompt decision
- * - Pairing NFC card to member
+ * - Registering NFC card into database
  */
 
 import Database from "better-sqlite3";
@@ -14,18 +15,18 @@ function makeMemoryDb() {
   return makeTestDb();
 }
 
-function seedUser(
+function seedNfcCard(
   db: Database.Database,
-  name = "John Doe",
-  email = "john@example.com",
-  nfcId: string | null = "NFC-CARD-123"
+  nfcValue = "NFC-CARD-123",
+  memberName = "John Doe",
+  notes = "Camera Crew"
 ) {
   const result = db
     .prepare(
-      `INSERT INTO users (name, email, role, nfc_id)
-       VALUES (?, ?, 'verified', ?)`
+      `INSERT INTO nfc_cards (nfc_value, member_name, notes)
+       VALUES (?, ?, ?)`
     )
-    .run(name, email, nfcId);
+    .run(nfcValue, memberName, notes);
   return result.lastInsertRowid as number;
 }
 
@@ -47,13 +48,14 @@ function seedEquipment(
 function nfcCheckout(
   db: Database.Database,
   equipmentId: number,
-  userId: number,
-  nfcId: string,
+  nfcValue: string,
   notes = "Checked out via NFC Station"
 ) {
-  const user = db.prepare("SELECT * FROM users WHERE id = ?").get(userId) as {
-    name: string;
+  const card = db.prepare("SELECT * FROM nfc_cards WHERE nfc_value = ?").get(nfcValue) as {
+    member_name: string;
   };
+  if (!card) throw new Error("Card not found");
+
   const active = db
     .prepare("SELECT id FROM checkouts WHERE equipment_id = ? AND returned_at IS NULL")
     .get(equipmentId);
@@ -61,10 +63,10 @@ function nfcCheckout(
 
   const result = db
     .prepare(
-      `INSERT INTO checkouts (equipment_id, checked_out_by, checked_out_by_name, notes, nfc_id)
-       VALUES (?, ?, ?, ?, ?)`
+      `INSERT INTO checkouts (equipment_id, checked_out_by, checked_out_by_name, notes, nfc_value)
+       VALUES (?, NULL, ?, ?, ?)`
     )
-    .run(equipmentId, userId, user.name, notes, nfcId);
+    .run(equipmentId, card.member_name, notes, nfcValue);
 
   db.prepare("UPDATE equipment SET status = 'Checked Out' WHERE id = ?").run(equipmentId);
   return result.lastInsertRowid as number;
@@ -81,7 +83,7 @@ function nfcReturn(db: Database.Database, equipmentId: number) {
   db.prepare("UPDATE equipment SET status = 'Available' WHERE id = ?").run(equipmentId);
 }
 
-describe("NFC Member Checkout & Return Workflow", () => {
+describe("NFC Member Equipment Workflow (Decoupled from User Accounts)", () => {
   let db: Database.Database;
 
   beforeEach(() => {
@@ -89,65 +91,66 @@ describe("NFC Member Checkout & Return Workflow", () => {
   });
 
   describe("NFC Card Lookup & History", () => {
-    test("retrieves member by NFC ID if registered", () => {
-      const userId = seedUser(db, "Bob Tan", "bob@example.com", "CARD-8888");
-      const member = db
-        .prepare("SELECT * FROM users WHERE LOWER(nfc_id) = LOWER(?)")
-        .get("CARD-8888") as { id: number; name: string } | undefined;
+    test("retrieves NFC card from database if registered", () => {
+      const cardId = seedNfcCard(db, "CARD-8888", "Bob Tan");
+      const card = db
+        .prepare("SELECT * FROM nfc_cards WHERE LOWER(nfc_value) = LOWER(?)")
+        .get("CARD-8888") as { id: number; member_name: string; nfc_value: string } | undefined;
 
-      expect(member).toBeDefined();
-      expect(member?.id).toBe(userId);
-      expect(member?.name).toBe("Bob Tan");
+      expect(card).toBeDefined();
+      expect(card?.id).toBe(cardId);
+      expect(card?.member_name).toBe("Bob Tan");
+      expect(card?.nfc_value).toBe("CARD-8888");
     });
 
-    test("returns null if NFC card is unassigned", () => {
-      const member = db
-        .prepare("SELECT * FROM users WHERE LOWER(nfc_id) = LOWER(?)")
-        .get("UNASSIGNED-CARD-999");
-      expect(member).toBeUndefined();
+    test("returns null if NFC card is not in database", () => {
+      const card = db
+        .prepare("SELECT * FROM nfc_cards WHERE LOWER(nfc_value) = LOWER(?)")
+        .get("UNKNOWN-999");
+      expect(card).toBeUndefined();
     });
 
-    test("retrieves currently checked out equipment under member's NFC", () => {
-      const userId = seedUser(db, "Alice Lee", "alice@example.com", "NFC-ALICE-1");
+    test("retrieves currently checked out equipment under that NFC value", () => {
+      seedNfcCard(db, "NFC-ALICE-1", "Alice Lee");
       const camId = seedEquipment(db, "Canon R6", "CAM-R6-01");
       const micId = seedEquipment(db, "Rode Wireless Pro", "MIC-01");
 
-      nfcCheckout(db, camId, userId, "NFC-ALICE-1");
-      nfcCheckout(db, micId, userId, "NFC-ALICE-1");
+      nfcCheckout(db, camId, "NFC-ALICE-1");
+      nfcCheckout(db, micId, "NFC-ALICE-1");
 
       const active = db
         .prepare(
           `SELECT c.*, e.name as equipment_name, e.serial_number as equipment_serial_number
            FROM checkouts c
            JOIN equipment e ON e.id = c.equipment_id
-           WHERE c.checked_out_by = ? AND c.returned_at IS NULL`
+           WHERE c.nfc_value = ? AND c.returned_at IS NULL`
         )
-        .all(userId) as Array<{ equipment_name: string; equipment_serial_number: string }>;
+        .all("NFC-ALICE-1") as Array<{ equipment_name: string; equipment_serial_number: string }>;
 
       expect(active.length).toBe(2);
       expect(active.map((a) => a.equipment_name)).toContain("Canon R6");
       expect(active.map((a) => a.equipment_name)).toContain("Rode Wireless Pro");
     });
 
-    test("retrieves full checkout history including returned items", () => {
-      const userId = seedUser(db, "Alice Lee", "alice@example.com", "NFC-ALICE-1");
+    test("retrieves full checkout history for NFC value including past returns", () => {
+      seedNfcCard(db, "NFC-ALICE-1", "Alice Lee");
       const camId = seedEquipment(db, "Canon R6", "CAM-R6-01");
 
-      nfcCheckout(db, camId, userId, "NFC-ALICE-1");
+      nfcCheckout(db, camId, "NFC-ALICE-1");
       nfcReturn(db, camId); // Alice returns it
 
       // Alice checks it out again later
-      nfcCheckout(db, camId, userId, "NFC-ALICE-1");
+      nfcCheckout(db, camId, "NFC-ALICE-1");
 
       const history = db
         .prepare(
           `SELECT c.*, e.name as equipment_name
            FROM checkouts c
            JOIN equipment e ON e.id = c.equipment_id
-           WHERE c.checked_out_by = ?
+           WHERE c.nfc_value = ?
            ORDER BY c.id DESC`
         )
-        .all(userId) as Array<{ returned_at: string | null }>;
+        .all("NFC-ALICE-1") as Array<{ returned_at: string | null }>;
 
       expect(history.length).toBe(2);
       expect(history[0].returned_at).toBeNull(); // current active
@@ -156,11 +159,11 @@ describe("NFC Member Checkout & Return Workflow", () => {
   });
 
   describe("Return Equipment by Barcode", () => {
-    test("successfully returns checked-out equipment and restores Available status", () => {
-      const userId = seedUser(db, "Charlie", "charlie@example.com", "NFC-CHARLIE");
+    test("successfully returns equipment under NFC card and restores Available status", () => {
+      seedNfcCard(db, "NFC-CHARLIE", "Charlie");
       const eqId = seedEquipment(db, "Tripod Manfrotto", "TRI-01");
 
-      nfcCheckout(db, eqId, userId, "NFC-CHARLIE");
+      nfcCheckout(db, eqId, "NFC-CHARLIE");
       const beforeReturn = db.prepare("SELECT status FROM equipment WHERE id = ?").get(eqId) as {
         status: string;
       };
@@ -182,20 +185,20 @@ describe("NFC Member Checkout & Return Workflow", () => {
   });
 
   describe("Checkout More Equipment & Collision Prompt Decision", () => {
-    test("detects when equipment is already checked out to member and handles return on prompt 'Yes'", () => {
-      const userId = seedUser(db, "David", "david@example.com", "NFC-DAVID");
+    test("detects when equipment is already checked out to NFC card and handles return on prompt 'Yes'", () => {
+      seedNfcCard(db, "NFC-DAVID", "David");
       const eqId = seedEquipment(db, "Audio Recorder Zoom H6", "ZOOM-01");
 
-      // 1. Initial checkout
-      nfcCheckout(db, eqId, userId, "NFC-DAVID");
+      // 1. Initial checkout under NFC card
+      nfcCheckout(db, eqId, "NFC-DAVID");
 
       // 2. User tries to scan same equipment barcode in checkout mode
       const activeCheckout = db
         .prepare("SELECT * FROM checkouts WHERE equipment_id = ? AND returned_at IS NULL")
-        .get(eqId) as { checked_out_by: number };
+        .get(eqId) as { nfc_value: string };
 
-      const isAlreadyCheckedOutByThisMember = activeCheckout?.checked_out_by === userId;
-      expect(isAlreadyCheckedOutByThisMember).toBe(true);
+      const isAlreadyCheckedOutUnderThisNfc = activeCheckout?.nfc_value === "NFC-DAVID";
+      expect(isAlreadyCheckedOutUnderThisNfc).toBe(true);
 
       // 3. User responds "YES" to return prompt -> equipment is returned
       nfcReturn(db, eqId);
@@ -207,18 +210,18 @@ describe("NFC Member Checkout & Return Workflow", () => {
     });
 
     test("ignores scan when user responds 'No' to return prompt, leaving item checked out", () => {
-      const userId = seedUser(db, "David", "david@example.com", "NFC-DAVID");
+      seedNfcCard(db, "NFC-DAVID", "David");
       const eqId = seedEquipment(db, "Audio Recorder Zoom H6", "ZOOM-01");
 
-      nfcCheckout(db, eqId, userId, "NFC-DAVID");
+      nfcCheckout(db, eqId, "NFC-DAVID");
 
       // User scans same equipment in checkout mode -> prompt appears -> user selects "No"
       // Scan is ignored, no database modification occurs
       const activeCheckout = db
         .prepare("SELECT * FROM checkouts WHERE equipment_id = ? AND returned_at IS NULL")
-        .get(eqId) as { checked_out_by: number };
+        .get(eqId) as { nfc_value: string };
 
-      expect(activeCheckout.checked_out_by).toBe(userId);
+      expect(activeCheckout.nfc_value).toBe("NFC-DAVID");
 
       const eq = db.prepare("SELECT status FROM equipment WHERE id = ?").get(eqId) as {
         status: string;
@@ -227,15 +230,23 @@ describe("NFC Member Checkout & Return Workflow", () => {
     });
   });
 
-  describe("Pairing NFC Card to Member", () => {
-    test("assigns NFC card to member", () => {
-      const userId = seedUser(db, "Eve", "eve@example.com", null);
-      db.prepare("UPDATE users SET nfc_id = ? WHERE id = ?").run("NEW-NFC-EVE", userId);
+  describe("Registering Independent NFC Cards", () => {
+    test("registers an NFC card with member name directly without user account", () => {
+      const cardId = seedNfcCard(db, "NFC-INDEPENDENT-1", "External Member Sam", "Guest Crew");
 
-      const updated = db.prepare("SELECT nfc_id FROM users WHERE id = ?").get(userId) as {
-        nfc_id: string;
+      const card = db.prepare("SELECT * FROM nfc_cards WHERE id = ?").get(cardId) as {
+        nfc_value: string;
+        member_name: string;
+        notes: string;
       };
-      expect(updated.nfc_id).toBe("NEW-NFC-EVE");
+
+      expect(card.nfc_value).toBe("NFC-INDEPENDENT-1");
+      expect(card.member_name).toBe("External Member Sam");
+      expect(card.notes).toBe("Guest Crew");
+
+      // Verify users table is completely untouched
+      const usersCount = db.prepare("SELECT COUNT(*) as c FROM users").get() as { c: number };
+      expect(usersCount.c).toBe(0);
     });
   });
 });

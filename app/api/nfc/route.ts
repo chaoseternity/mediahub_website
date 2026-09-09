@@ -7,15 +7,15 @@ export async function GET(req: NextRequest) {
   if (!session) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
   const { searchParams } = new URL(req.url);
-  const nfcId = searchParams.get("nfc_id");
+  const nfcValue = searchParams.get("nfc_value") || searchParams.get("nfc_id");
 
-  if (!nfcId || !nfcId.trim()) {
-    return NextResponse.json({ error: "Missing nfc_id parameter" }, { status: 400 });
+  if (!nfcValue || !nfcValue.trim()) {
+    return NextResponse.json({ error: "Missing nfc_value parameter" }, { status: 400 });
   }
 
-  const data = await getNfcMemberData(nfcId.trim());
+  const data = await getNfcMemberData(nfcValue.trim());
   if (!data) {
-    return NextResponse.json({ found: false, nfc_id: nfcId.trim() }, { status: 200 });
+    return NextResponse.json({ found: false, nfc_value: nfcValue.trim() }, { status: 200 });
   }
 
   return NextResponse.json({ found: true, ...data }, { status: 200 });
