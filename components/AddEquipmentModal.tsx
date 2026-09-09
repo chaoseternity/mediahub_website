@@ -28,9 +28,8 @@ const AddSchema = z.object({
   tags: z.array(z.string().min(1)).min(1, "Please select at least one tag"),
   description: z.string().optional(),
   serial_number: z.string().optional(),
-  purchase_date: z.string().optional(),
   condition: z.enum(["New", "Good", "Fair", "Poor"]),
-  location: z.string().min(1),
+  location: z.enum(["Media Room", "Showroom", "Control Room"]),
   status: z.enum(["Available", "Checked Out", "Under Maintenance", "Retired"]),
 });
 
@@ -39,7 +38,7 @@ type AddFormValues = z.infer<typeof AddSchema>;
 interface AddEquipmentModalProps {
   open: boolean;
   onClose: () => void;
-  onCreated: () => void;
+  onCreated: () => void | Promise<void>;
 }
 
 export function AddEquipmentModal({ open, onClose, onCreated }: AddEquipmentModalProps) {
@@ -60,7 +59,7 @@ export function AddEquipmentModal({ open, onClose, onCreated }: AddEquipmentModa
     formState: { errors, isSubmitting },
   } = useForm<AddFormValues, unknown, AddFormValues>({
     resolver: zodResolver(AddSchema) as import("react-hook-form").Resolver<AddFormValues>,
-    defaultValues: { condition: "Good", status: "Available", tags: [] },
+    defaultValues: { condition: "Good", status: "Available", location: "Media Room", tags: [] },
   });
 
   const watchedTags = useWatch({ control, name: "tags" }) ?? [];
@@ -72,8 +71,8 @@ export function AddEquipmentModal({ open, onClose, onCreated }: AddEquipmentModa
       body: JSON.stringify(data),
     });
     if (res.ok) {
-      reset();
-      onCreated();
+      reset({ condition: "Good", status: "Available", location: "Media Room", tags: [] });
+      await onCreated();
       onClose();
     } else {
       const json = await res.json();
@@ -113,10 +112,6 @@ export function AddEquipmentModal({ open, onClose, onCreated }: AddEquipmentModa
               <Input id="new-serial" placeholder="e.g. EQ-001" {...register("serial_number")} />
             </div>
             <div className="space-y-1">
-              <Label htmlFor="new-date">Purchase Date</Label>
-              <Input id="new-date" type="date" {...register("purchase_date")} />
-            </div>
-            <div className="space-y-1">
               <Label>Condition *</Label>
               <Select defaultValue="Good" onValueChange={(v) => setValue("condition", v as AddFormValues["condition"])}>
                 <SelectTrigger><SelectValue /></SelectTrigger>
@@ -126,11 +121,18 @@ export function AddEquipmentModal({ open, onClose, onCreated }: AddEquipmentModa
               </Select>
             </div>
             <div className="space-y-1">
-              <Label htmlFor="new-location">Location *</Label>
-              <Input id="new-location" {...register("location")} />
+              <Label>Location *</Label>
+              <Select defaultValue="Media Room" onValueChange={(v) => setValue("location", v as AddFormValues["location"])}>
+                <SelectTrigger id="new-location"><SelectValue placeholder="Select location" /></SelectTrigger>
+                <SelectContent>
+                  {["Media Room", "Showroom", "Control Room"].map((loc) => (
+                    <SelectItem key={loc} value={loc}>{loc}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
               {errors.location && <p className="text-xs text-destructive">{errors.location.message}</p>}
             </div>
-            <div className="space-y-1 col-span-2">
+            <div className="space-y-1">
               <Label>Status *</Label>
               <Select defaultValue="Available" onValueChange={(v) => setValue("status", v as AddFormValues["status"])}>
                 <SelectTrigger><SelectValue /></SelectTrigger>

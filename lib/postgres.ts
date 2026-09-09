@@ -48,7 +48,6 @@ export async function ensureSchema(): Promise<void> {
           name TEXT NOT NULL,
           description TEXT,
           serial_number TEXT,
-          purchase_date TEXT,
           condition TEXT NOT NULL DEFAULT 'Good' CHECK(condition IN ('New','Good','Fair','Poor')),
           quantity INT NOT NULL DEFAULT 1,
           location TEXT NOT NULL,
@@ -256,6 +255,10 @@ export async function ensureSchema(): Promise<void> {
     await runSafe(
       () => sql`ALTER TABLE checkouts ADD COLUMN IF NOT EXISTS nfc_id TEXT;`,
       "ALTER checkouts nfc_id"
+    );
+    await runSafe(
+      () => sql`ALTER TABLE equipment DROP COLUMN IF EXISTS purchase_date;`,
+      "ALTER equipment drop purchase_date"
     );
 
     initialized = true;

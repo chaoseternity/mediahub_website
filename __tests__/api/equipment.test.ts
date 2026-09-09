@@ -30,7 +30,6 @@ function insertEquipment(
     tags: ["Laptop"],
     description: null,
     serial_number: null,
-    purchase_date: null,
     condition: "Good" as Condition,
     location: "AV Storage Room",
     status: "Available" as EquipmentStatus,
@@ -38,8 +37,8 @@ function insertEquipment(
   };
   const result = db
     .prepare(
-      `INSERT INTO equipment (name, description, serial_number, purchase_date, condition, location, status)
-       VALUES (@name, @description, @serial_number, @purchase_date, @condition, @location, @status)`
+      `INSERT INTO equipment (name, description, serial_number, condition, location, status)
+       VALUES (@name, @description, @serial_number, @condition, @location, @status)`
     )
     .run(rest);
   const id = result.lastInsertRowid as number;

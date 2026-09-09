@@ -15,7 +15,6 @@ const baseEquipment: Equipment = {
   tags: ["IT"],
   description: "A laptop",
   serial_number: "SN-001",
-  purchase_date: "2023-01-01",
   condition: "Good",
   location: "Office A",
   status: "Available",

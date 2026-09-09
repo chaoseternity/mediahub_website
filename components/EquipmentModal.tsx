@@ -44,7 +44,6 @@ const EditSchema = z.object({
   tags: z.array(z.string().min(1)).min(1, "Please select at least one tag"),
   description: z.string().optional(),
   serial_number: z.string().optional(),
-  purchase_date: z.string().optional(),
   condition: z.enum(["New", "Good", "Fair", "Poor"]),
   location: z.string().min(1),
   status: z.enum(["Available", "Checked Out", "In Event", "In Event (Rehearsal)", "Under Maintenance", "Retired"]),
@@ -143,7 +142,6 @@ export function EquipmentModal({
           tags: data.tags,
           description: data.description ?? "",
           serial_number: data.serial_number ?? "",
-          purchase_date: data.purchase_date ?? "",
           condition: data.condition,
           location: data.location,
           status: data.status,
@@ -386,7 +384,6 @@ export function EquipmentModal({
                     </div>
                     {renderField("description", "Description", "text", "2")}
                     {renderField("serial_number", "Equipment ID")}
-                    {renderField("purchase_date", "Purchase Date", "date")}
                     {renderSelectField("condition", "Condition", [
                       "New",
                       "Good",

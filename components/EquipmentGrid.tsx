@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { Input } from "@/components/ui/input";
 import {
   Select,
@@ -19,12 +19,17 @@ interface EquipmentGridProps {
   role: Role;
   onAddNew?: () => void;
   userName?: string;
+  onRefresh?: () => void;
 }
 
 const ALL = "all";
 
-export function EquipmentGrid({ initialData, role, onAddNew: _onAddNew, userName }: EquipmentGridProps) {
+export function EquipmentGrid({ initialData, role, onAddNew: _onAddNew, userName, onRefresh }: EquipmentGridProps) {
   const [items, setItems] = useState<Equipment[]>(initialData);
+
+  useEffect(() => {
+    setItems(initialData);
+  }, [initialData]);
   const [search, setSearch] = useState("");
   const [tagFilter, setTagFilter] = useState(ALL);
   const [statusFilter, setStatusFilter] = useState(ALL);
@@ -43,7 +48,8 @@ export function EquipmentGrid({ initialData, role, onAddNew: _onAddNew, userName
     const res = await fetch("/api/equipment");
     const data: Equipment[] = await res.json();
     setItems(data);
-  }, []);
+    onRefresh?.();
+  }, [onRefresh]);
 
   // Derive filter options
   const tags = Array.from(new Set(items.flatMap((i) => i.tags))).sort();

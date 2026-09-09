@@ -22,7 +22,6 @@ const mockAvailable: EquipmentDetail = {
   tags: ["A/V"],
   description: null,
   serial_number: "SN-001",
-  purchase_date: "2024-01-01",
   condition: "Good",
   location: "Room 1",
   status: "Available",

@@ -41,7 +41,6 @@ export interface Equipment {
   tags: string[];
   description: string | null;
   serial_number: string | null;
-  purchase_date: string | null;
   condition: Condition;
   location: string;
   status: EquipmentStatus;

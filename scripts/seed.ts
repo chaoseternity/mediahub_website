@@ -92,7 +92,7 @@ sql("-- Equipment");
 const allEquipment = [...laptops, ...videoSdCards, ...photoSdCards];
 allEquipment.forEach((item, i) => {
   sql(
-    `INSERT INTO equipment (id, name, description, serial_number, purchase_date, condition, quantity, location, status) VALUES (${i + 1}, ${esc(item.name)}, ${esc(item.description)}, ${esc(item.serial)}, ${esc(item.date)}, ${esc(item.cond)}, 1, ${esc("AV Storage Room")}, ${esc(item.status)});`
+    `INSERT INTO equipment (id, name, description, serial_number, condition, quantity, location, status) VALUES (${i + 1}, ${esc(item.name)}, ${esc(item.description)}, ${esc(item.serial)}, ${esc(item.cond)}, 1, ${esc("Media Room")}, ${esc(item.status)});`
   );
 });
 sql("");

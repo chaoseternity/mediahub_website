@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import dynamic from "next/dynamic";
+import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { Plus, Package } from "lucide-react";
 import { AddEquipmentModal } from "@/components/AddEquipmentModal";
@@ -21,11 +22,19 @@ interface DashboardClientProps {
 export function DashboardClient({ initialData, role, userName }: DashboardClientProps) {
   const [addOpen, setAddOpen] = useState(false);
   const [items, setItems] = useState<Equipment[]>(initialData);
+  const router = useRouter();
 
   async function refresh() {
-    const res = await fetch("/api/equipment");
-    const data: Equipment[] = await res.json();
-    setItems(data);
+    try {
+      const res = await fetch("/api/equipment");
+      if (res.ok) {
+        const data: Equipment[] = await res.json();
+        setItems(data);
+      }
+    } catch (err) {
+      console.error("Failed to refresh equipment list:", err);
+    }
+    router.refresh();
   }
 
   return (
@@ -51,6 +60,7 @@ export function DashboardClient({ initialData, role, userName }: DashboardClient
         initialData={items}
         role={role}
         userName={userName}
+        onRefresh={refresh}
       />
 
       {role === "admin" && (
