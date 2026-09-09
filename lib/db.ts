@@ -21,6 +21,8 @@ import type {
   SectionRehearsalMap,
   SOPDocument,
   DeploymentResponseStatus,
+  NFCMemberData,
+  NFCCheckoutItem,
 } from "./types";
 import { sendDeploymentInvitationEmail } from "./email";
 
@@ -50,7 +52,7 @@ export async function getUserById(id: number): Promise<User | undefined> {
 export async function getAllUsers(): Promise<User[]> {
   await ensureSchema();
   const { rows } = await sql<User>`
-    SELECT id, name, email, username, google_id, image, role, provider, created_at
+    SELECT id, name, email, username, google_id, image, role, provider, nfc_id, created_at
     FROM users
     ORDER BY name ASC
   `;
@@ -113,6 +115,30 @@ export async function deleteUser(id: number): Promise<void> {
 export async function updateUsername(id: number, username: string): Promise<void> {
   await ensureSchema();
   await sql`UPDATE users SET username = ${username} WHERE id = ${id}`;
+}
+
+export async function getUserByNfcId(nfcId: string): Promise<User | undefined> {
+  await ensureSchema();
+  const trimmed = nfcId.trim();
+  if (!trimmed) return undefined;
+  const { rows } = await sql<User>`
+    SELECT * FROM users WHERE LOWER(nfc_id) = LOWER(${trimmed})
+  `;
+  return rows[0];
+}
+
+export async function updateUserNfcId(userId: number, nfcId: string | null): Promise<void> {
+  await ensureSchema();
+  const val = nfcId?.trim() ? nfcId.trim() : null;
+  if (val) {
+    const existing = await sql<User>`
+      SELECT id FROM users WHERE LOWER(nfc_id) = LOWER(${val}) AND id != ${userId}
+    `;
+    if (existing.rows.length > 0) {
+      throw new Error("This NFC Card is already assigned to another member.");
+    }
+  }
+  await sql`UPDATE users SET nfc_id = ${val} WHERE id = ${userId}`;
 }
 
 // ---------------------------------------------------------------------------
@@ -417,6 +443,7 @@ export async function createCheckout(params: {
   expected_return_at?: string;
   notes?: string;
   checkout_location?: string;
+  nfc_id?: string;
 }): Promise<Checkout> {
   await ensureSchema();
   const active = await sql`SELECT id FROM checkouts WHERE equipment_id = ${params.equipment_id} AND returned_at IS NULL`;
@@ -425,8 +452,8 @@ export async function createCheckout(params: {
   }
 
   const { rows } = await sql<Checkout>`
-    INSERT INTO checkouts (equipment_id, checked_out_by, checked_out_by_name, expected_return_at, notes, checkout_location)
-    VALUES (${params.equipment_id}, ${params.checked_out_by ?? null}, ${params.checked_out_by_name}, ${params.expected_return_at ?? null}, ${params.notes ?? null}, ${params.checkout_location ?? null})
+    INSERT INTO checkouts (equipment_id, checked_out_by, checked_out_by_name, expected_return_at, notes, checkout_location, nfc_id)
+    VALUES (${params.equipment_id}, ${params.checked_out_by ?? null}, ${params.checked_out_by_name}, ${params.expected_return_at ?? null}, ${params.notes ?? null}, ${params.checkout_location ?? null}, ${params.nfc_id ?? null})
     RETURNING *
   `;
 
@@ -448,6 +475,93 @@ export async function returnCheckout(equipment_id: number): Promise<Checkout> {
 
   await sql`UPDATE equipment SET status = 'Available', updated_at = CURRENT_TIMESTAMP WHERE id = ${equipment_id}`;
   return rows[0];
+}
+
+export async function getNfcMemberData(nfcId: string): Promise<NFCMemberData | null> {
+  await ensureSchema();
+  const trimmed = nfcId.trim();
+  if (!trimmed) return null;
+
+  const member = await getUserByNfcId(trimmed);
+  if (!member) return null;
+
+  const memberId = member.id;
+
+  const { rows: activeCheckouts } = await sql<NFCCheckoutItem>`
+    SELECT 
+      c.id,
+      c.equipment_id,
+      c.checked_out_by,
+      c.checked_out_by_name,
+      c.checked_out_at,
+      c.expected_return_at,
+      c.returned_at,
+      c.notes,
+      c.checkout_location,
+      c.nfc_id,
+      e.name AS equipment_name,
+      e.serial_number AS equipment_serial_number,
+      e.location AS equipment_location
+    FROM checkouts c
+    JOIN equipment e ON e.id = c.equipment_id
+    WHERE (c.checked_out_by = ${memberId} OR LOWER(c.nfc_id) = LOWER(${trimmed}))
+      AND c.returned_at IS NULL
+    ORDER BY c.checked_out_at DESC
+  `;
+
+  const { rows: history } = await sql<NFCCheckoutItem>`
+    SELECT 
+      c.id,
+      c.equipment_id,
+      c.checked_out_by,
+      c.checked_out_by_name,
+      c.checked_out_at,
+      c.expected_return_at,
+      c.returned_at,
+      c.notes,
+      c.checkout_location,
+      c.nfc_id,
+      e.name AS equipment_name,
+      e.serial_number AS equipment_serial_number,
+      e.location AS equipment_location
+    FROM checkouts c
+    JOIN equipment e ON e.id = c.equipment_id
+    WHERE (c.checked_out_by = ${memberId} OR LOWER(c.nfc_id) = LOWER(${trimmed}))
+    ORDER BY c.checked_out_at DESC
+  `;
+
+  return {
+    member,
+    activeCheckouts,
+    history,
+  };
+}
+
+export async function nfcCheckout(params: {
+  equipmentId: number;
+  nfcId: string;
+  notes?: string;
+  checkout_location?: string;
+}): Promise<Checkout> {
+  await ensureSchema();
+  const trimmed = params.nfcId.trim();
+  const member = await getUserByNfcId(trimmed);
+  if (!member) {
+    throw new Error("No member found matching this NFC card.");
+  }
+
+  return await createCheckout({
+    equipment_id: params.equipmentId,
+    checked_out_by: member.id,
+    checked_out_by_name: member.username || member.name,
+    notes: params.notes || "Checked out via NFC Station",
+    checkout_location: params.checkout_location,
+    nfc_id: trimmed,
+  });
+}
+
+export async function nfcReturn(equipmentId: number): Promise<Checkout> {
+  return await returnCheckout(equipmentId);
 }
 
 // ---------------------------------------------------------------------------

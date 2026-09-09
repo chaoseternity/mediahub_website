@@ -13,6 +13,7 @@ export const SCHEMA_SQL = `
     image      TEXT,
     role       TEXT    NOT NULL DEFAULT 'viewer' CHECK(role IN ('admin','verified','viewer')),
     provider   TEXT,
+    nfc_id     TEXT,
     created_at TEXT    NOT NULL DEFAULT (datetime('now'))
   );
 
@@ -52,7 +53,8 @@ export const SCHEMA_SQL = `
     expected_return_at  TEXT,
     returned_at         TEXT,
     notes               TEXT,
-    checkout_location   TEXT
+    checkout_location   TEXT,
+    nfc_id              TEXT
   );
 
   CREATE TABLE IF NOT EXISTS events (

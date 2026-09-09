@@ -3,7 +3,7 @@
 import { useState, useRef, useEffect } from "react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Trash2, Pencil, Check, X } from "lucide-react";
+import { Trash2, Pencil, Check, X, Nfc } from "lucide-react";
 import type { User, Role } from "@/lib/types";
 import { roleBadgeClass } from "@/lib/utils";
 
@@ -20,11 +20,14 @@ export function UsersManager({ users: initialUsers, currentUserId }: UsersManage
   const [pendingRole, setPendingRole] = useState<Role | null>(null);
   const [editingUsername, setEditingUsername] = useState<number | null>(null);
   const [pendingUsername, setPendingUsername] = useState("");
+  const [editingNfc, setEditingNfc] = useState<number | null>(null);
+  const [pendingNfc, setPendingNfc] = useState("");
   const [saving, setSaving] = useState<number | null>(null);
   const [deleting, setDeleting] = useState<number | null>(null);
   const [error, setError] = useState<string | null>(null);
   const selectRef = useRef<HTMLSelectElement>(null);
   const usernameInputRef = useRef<HTMLInputElement>(null);
+  const nfcInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     if (editing !== null) selectRef.current?.focus();
@@ -33,6 +36,10 @@ export function UsersManager({ users: initialUsers, currentUserId }: UsersManage
   useEffect(() => {
     if (editingUsername !== null) usernameInputRef.current?.focus();
   }, [editingUsername]);
+
+  useEffect(() => {
+    if (editingNfc !== null) nfcInputRef.current?.focus();
+  }, [editingNfc]);
 
   function startEdit(user: User) {
     setEditing(user.id);
@@ -52,6 +59,41 @@ export function UsersManager({ users: initialUsers, currentUserId }: UsersManage
   function cancelUsernameEdit() {
     setEditingUsername(null);
     setPendingUsername("");
+  }
+
+  function startNfcEdit(user: User) {
+    setEditingNfc(user.id);
+    setPendingNfc(user.nfc_id ?? "");
+  }
+
+  function cancelNfcEdit() {
+    setEditingNfc(null);
+    setPendingNfc("");
+  }
+
+  async function commitNfcEdit(userId: number) {
+    const trimmed = pendingNfc.trim();
+    setSaving(userId);
+    setError(null);
+    try {
+      const res = await fetch(`/api/users/${userId}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ nfc_id: trimmed || null }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Failed to update NFC ID");
+      setUsers((prev) =>
+        prev.map((u) => (u.id === userId ? { ...u, nfc_id: trimmed || null } : u))
+      );
+      setEditingNfc(null);
+      setPendingNfc("");
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : "Failed to update NFC ID.";
+      setError(msg);
+    } finally {
+      setSaving(null);
+    }
   }
 
   async function commitUsernameEdit(userId: number) {
@@ -129,6 +171,7 @@ export function UsersManager({ users: initialUsers, currentUserId }: UsersManage
               <th className="text-left px-4 py-3 font-medium text-muted-foreground min-w-[140px]">OAuth Name</th>
               <th className="text-left px-4 py-3 font-medium text-muted-foreground min-w-[160px]">Username</th>
               <th className="text-left px-4 py-3 font-medium text-muted-foreground min-w-[200px]">Email</th>
+              <th className="text-left px-4 py-3 font-medium text-muted-foreground min-w-[140px]">NFC Card</th>
               <th className="text-left px-4 py-3 font-medium text-muted-foreground min-w-[100px]">Provider</th>
               <th className="text-left px-4 py-3 font-medium text-muted-foreground min-w-[140px]">Role</th>
               <th className="px-4 py-3 min-w-[48px]" />
@@ -196,6 +239,64 @@ export function UsersManager({ users: initialUsers, currentUserId }: UsersManage
                     )}
                   </td>
                   <td className="px-4 align-middle text-muted-foreground whitespace-nowrap">{user.email}</td>
+                  <td className="px-4 align-middle">
+                    {editingNfc === user.id ? (
+                      <div className="flex items-center gap-1.5">
+                        <input
+                          ref={nfcInputRef}
+                          value={pendingNfc}
+                          maxLength={50}
+                          placeholder="e.g. NFC-001"
+                          disabled={saving === user.id}
+                          onChange={(e) => setPendingNfc(e.target.value)}
+                          onKeyDown={(e) => {
+                            if (e.key === "Enter") commitNfcEdit(user.id);
+                            if (e.key === "Escape") cancelNfcEdit();
+                          }}
+                          className="text-xs font-mono rounded-md border bg-background px-2 py-1 w-28 focus:outline-none focus:ring-2 focus:ring-ring disabled:opacity-50"
+                        />
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          aria-label="Confirm"
+                          disabled={saving === user.id}
+                          onClick={() => commitNfcEdit(user.id)}
+                          className="h-6 w-6 text-emerald-600 hover:text-emerald-700"
+                        >
+                          <Check className="h-3.5 w-3.5" />
+                        </Button>
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          aria-label="Cancel"
+                          onClick={cancelNfcEdit}
+                          className="h-6 w-6 text-muted-foreground hover:text-foreground"
+                        >
+                          <X className="h-3.5 w-3.5" />
+                        </Button>
+                      </div>
+                    ) : (
+                      <div className="flex items-center gap-1.5">
+                        {user.nfc_id ? (
+                          <Badge variant="outline" className="font-mono text-xs gap-1 bg-primary/5 border-primary/30 text-primary">
+                            <Nfc className="h-3 w-3" />
+                            {user.nfc_id}
+                          </Badge>
+                        ) : (
+                          <span className="text-muted-foreground text-xs italic">none</span>
+                        )}
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          aria-label={`Edit NFC card for ${user.name}`}
+                          onClick={() => startNfcEdit(user)}
+                          className="h-6 w-6 text-muted-foreground hover:text-foreground"
+                        >
+                          <Pencil className="h-3 w-3" />
+                        </Button>
+                      </div>
+                    )}
+                  </td>
                   <td className="px-4 align-middle">
                     <Badge variant="outline" className="capitalize text-xs whitespace-nowrap">
                       {user.provider === "microsoft-entra-id" ? "Microsoft" : (user.provider ?? "—")}

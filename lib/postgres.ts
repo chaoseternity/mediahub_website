@@ -232,6 +232,19 @@ export async function ensureSchema(): Promise<void> {
       "CREATE TABLE sop_documents"
     );
 
+    await runSafe(
+      () => sql`ALTER TABLE users ADD COLUMN IF NOT EXISTS nfc_id TEXT;`,
+      "ALTER users nfc_id"
+    );
+    await runSafe(
+      () => sql`CREATE UNIQUE INDEX IF NOT EXISTS idx_users_nfc_id ON users(LOWER(nfc_id)) WHERE nfc_id IS NOT NULL;`,
+      "CREATE INDEX idx_users_nfc_id"
+    );
+    await runSafe(
+      () => sql`ALTER TABLE checkouts ADD COLUMN IF NOT EXISTS nfc_id TEXT;`,
+      "ALTER checkouts nfc_id"
+    );
+
     initialized = true;
   } catch (err) {
     console.error("Error ensuring Postgres schema:", err);

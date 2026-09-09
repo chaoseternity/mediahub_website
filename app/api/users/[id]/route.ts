@@ -1,11 +1,12 @@
 import { auth } from "@/lib/auth";
-import { updateUserRole, updateUsername, deleteUser } from "@/lib/db";
+import { updateUserRole, updateUsername, updateUserNfcId, deleteUser } from "@/lib/db";
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 
 const UpdateUserSchema = z.union([
   z.object({ role: z.enum(["admin", "verified", "viewer"]) }),
   z.object({ username: z.string().trim().min(1).max(50) }),
+  z.object({ nfc_id: z.string().trim().nullable() }),
 ]);
 
 export async function PUT(
@@ -25,12 +26,19 @@ export async function PUT(
     return NextResponse.json({ error: parsed.error.flatten() }, { status: 400 });
   }
 
-  if ("role" in parsed.data) {
-    await updateUserRole(Number(id), parsed.data.role);
-  } else {
-    await updateUsername(Number(id), parsed.data.username);
+  try {
+    if ("role" in parsed.data) {
+      await updateUserRole(Number(id), parsed.data.role);
+    } else if ("username" in parsed.data) {
+      await updateUsername(Number(id), parsed.data.username);
+    } else if ("nfc_id" in parsed.data) {
+      await updateUserNfcId(Number(id), parsed.data.nfc_id || null);
+    }
+    return NextResponse.json({ success: true });
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : "Failed to update user";
+    return NextResponse.json({ error: msg }, { status: 400 });
   }
-  return NextResponse.json({ success: true });
 }
 
 export async function DELETE(
