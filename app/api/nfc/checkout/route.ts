@@ -6,6 +6,7 @@ import { z } from "zod";
 const NfcCheckoutSchema = z.object({
   nfc_id: z.string().min(1),
   equipment_id: z.number().int().positive().optional(),
+  equipment_ids: z.array(z.number().int().positive()).optional(),
   barcode: z.string().trim().optional(),
   notes: z.string().optional(),
   checkout_location: z.string().optional(),
@@ -15,17 +16,14 @@ function findEquipmentByBarcode(equipmentList: Awaited<ReturnType<typeof getAllE
   const code = rawCode.trim().toLowerCase();
   if (!code) return undefined;
 
-  // 1. By serial number
   const bySerial = equipmentList.find(
     (e) => e.serial_number && e.serial_number.toLowerCase() === code
   );
   if (bySerial) return bySerial;
 
-  // 2. By name
   const byName = equipmentList.find((e) => e.name.toLowerCase() === code);
   if (byName) return byName;
 
-  // 3. By DB ID
   if (/^\d+$/.test(code)) {
     const numId = Number(code);
     const byId = equipmentList.find((e) => e.id === numId);
@@ -48,16 +46,42 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: parsed.error.flatten() }, { status: 400 });
   }
 
-  const { nfc_id, barcode, notes, checkout_location } = parsed.data;
-  let equipmentId = parsed.data.equipment_id;
-
-  if (!equipmentId && !barcode) {
-    return NextResponse.json({ error: "Either equipment_id or barcode is required" }, { status: 400 });
-  }
+  const { nfc_id, barcode, notes, checkout_location, equipment_ids } = parsed.data;
 
   const member = await getUserByNfcId(nfc_id);
   if (!member) {
     return NextResponse.json({ error: "Member not found for this NFC card" }, { status: 404 });
+  }
+
+  // Handle batch checkout
+  if (equipment_ids && equipment_ids.length > 0) {
+    const checkouts = [];
+    for (const eqId of equipment_ids) {
+      const equipment = await getEquipmentById(eqId);
+      if (!equipment) {
+        return NextResponse.json({ error: `Equipment ID ${eqId} not found` }, { status: 404 });
+      }
+      if (equipment.status !== "Available") {
+        return NextResponse.json(
+          { error: `"${equipment.name}" is not available (Status: ${equipment.status})` },
+          { status: 409 }
+        );
+      }
+      const c = await nfcCheckout({
+        equipmentId: eqId,
+        nfcId: nfc_id,
+        notes: notes || "Checked out via NFC Station",
+        checkout_location,
+      });
+      checkouts.push(c);
+    }
+    return NextResponse.json({ success: true, count: checkouts.length, checkouts }, { status: 201 });
+  }
+
+  let equipmentId = parsed.data.equipment_id;
+
+  if (!equipmentId && !barcode) {
+    return NextResponse.json({ error: "Either equipment_id, equipment_ids, or barcode is required" }, { status: 400 });
   }
 
   if (!equipmentId && barcode) {

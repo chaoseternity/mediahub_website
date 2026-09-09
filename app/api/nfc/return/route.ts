@@ -5,6 +5,7 @@ import { z } from "zod";
 
 const NfcReturnSchema = z.object({
   equipment_id: z.number().int().positive().optional(),
+  equipment_ids: z.array(z.number().int().positive()).optional(),
   barcode: z.string().trim().optional(),
   nfc_id: z.string().trim().optional(),
 });
@@ -43,11 +44,22 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: parsed.error.flatten() }, { status: 400 });
   }
 
-  const { barcode, nfc_id } = parsed.data;
+  const { barcode, nfc_id, equipment_ids } = parsed.data;
+
+  // Handle batch return
+  if (equipment_ids && equipment_ids.length > 0) {
+    const checkouts = [];
+    for (const eqId of equipment_ids) {
+      const c = await nfcReturn(eqId);
+      checkouts.push(c);
+    }
+    return NextResponse.json({ success: true, count: checkouts.length, checkouts });
+  }
+
   let equipmentId = parsed.data.equipment_id;
 
   if (!equipmentId && !barcode) {
-    return NextResponse.json({ error: "Either equipment_id or barcode is required" }, { status: 400 });
+    return NextResponse.json({ error: "Either equipment_id, equipment_ids, or barcode is required" }, { status: 400 });
   }
 
   if (!equipmentId && barcode) {

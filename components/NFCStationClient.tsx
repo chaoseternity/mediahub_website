@@ -5,7 +5,6 @@ import {
   Nfc,
   Barcode,
   RotateCcw,
-  ArrowRightLeft,
   CheckCircle2,
   AlertTriangle,
   XCircle,
@@ -17,9 +16,10 @@ import {
   Sparkles,
   ArrowDownLeft,
   ArrowUpRight,
-  PlusCircle,
-  HelpCircle,
   Laptop,
+  Trash2,
+  X,
+  ScanLine,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -52,7 +52,6 @@ function playSound(type: "success" | "warning" | "error" | "scan" | "return") {
     const ctx = new AudioContextClass();
 
     if (type === "success") {
-      // Ascending two-tone chime
       const osc1 = ctx.createOscillator();
       const osc2 = ctx.createOscillator();
       const gain = ctx.createGain();
@@ -71,7 +70,6 @@ function playSound(type: "success" | "warning" | "error" | "scan" | "return") {
       osc2.start(ctx.currentTime + 0.1);
       osc2.stop(ctx.currentTime + 0.35);
     } else if (type === "return") {
-      // Gentle return confirmation chime
       const osc = ctx.createOscillator();
       const gain = ctx.createGain();
       osc.type = "sine";
@@ -85,7 +83,6 @@ function playSound(type: "success" | "warning" | "error" | "scan" | "return") {
       osc.start();
       osc.stop(ctx.currentTime + 0.3);
     } else if (type === "warning") {
-      // Attention prompt chime
       const osc = ctx.createOscillator();
       const gain = ctx.createGain();
       osc.type = "triangle";
@@ -99,7 +96,6 @@ function playSound(type: "success" | "warning" | "error" | "scan" | "return") {
       osc.start();
       osc.stop(ctx.currentTime + 0.4);
     } else if (type === "error") {
-      // Low buzz
       const osc = ctx.createOscillator();
       const gain = ctx.createGain();
       osc.type = "sawtooth";
@@ -113,7 +109,6 @@ function playSound(type: "success" | "warning" | "error" | "scan" | "return") {
       osc.start();
       osc.stop(ctx.currentTime + 0.3);
     } else {
-      // Brief scan blip
       const osc = ctx.createOscillator();
       const gain = ctx.createGain();
       osc.type = "sine";
@@ -139,58 +134,79 @@ interface NFCStationClientProps {
 }
 
 type StationMode = "awaiting_nfc" | "member_active";
-type ScanAction = "return" | "checkout";
+type ScanPopupMode = "checkout" | "return" | null;
 
 export function NFCStationClient({
   allEquipment: initialEquipment,
   allUsers: initialUsers,
-  currentRole,
 }: NFCStationClientProps) {
   const [equipmentList, setEquipmentList] = useState<Equipment[]>(initialEquipment);
   const [usersList, setUsersList] = useState<User[]>(initialUsers);
 
   // Workflow states
   const [stationMode, setStationMode] = useState<StationMode>("awaiting_nfc");
-  const [scanAction, setScanAction] = useState<ScanAction>("checkout");
   const [memberData, setMemberData] = useState<NFCMemberData | null>(null);
   const [activeTab, setActiveTab] = useState<"current" | "history">("current");
 
-  // Input & Scanner
-  const [manualInput, setManualInput] = useState("");
+  // Popup Scanning Page Mode ("checkout" or "return" or null)
+  const [popupMode, setPopupMode] = useState<ScanPopupMode>(null);
+  // Staged equipment items in the popup list (appear one by one)
+  const [stagedItems, setStagedItems] = useState<Equipment[]>([]);
+
+  // Inputs & Scanning
+  const [nfcInput, setNfcInput] = useState("");
+  const [popupBarcode, setPopupBarcode] = useState("");
   const [isProcessing, setIsProcessing] = useState(false);
+
+  // Main status banner
   const [statusMessage, setStatusMessage] = useState<{
     text: string;
     type: "info" | "success" | "warning" | "error";
   } | null>(null);
 
-  // Unregistered card registration dialog
+  // Popup internal status banner
+  const [popupMessage, setPopupMessage] = useState<{
+    text: string;
+    type: "info" | "success" | "warning" | "error";
+  } | null>(null);
+
+  // Unregistered card pairing dialog
   const [unregisteredCard, setUnregisteredCard] = useState<string | null>(null);
   const [selectedUserIdToPair, setSelectedUserIdToPair] = useState<number | null>(null);
 
-  // Confirmation dialog for "Already Checked Out" prompt
+  // Collision Confirmation Dialog
   const [collisionPrompt, setCollisionPrompt] = useState<{
     equipment: Equipment;
     checkoutItem?: NFCCheckoutItem;
   } | null>(null);
 
-  const inputRef = useRef<HTMLInputElement | null>(null);
-  const isProcessingRef = useRef(false);
-  isProcessingRef.current = isProcessing;
+  const nfcInputRef = useRef<HTMLInputElement | null>(null);
+  const popupInputRef = useRef<HTMLInputElement | null>(null);
 
-  // Auto-focus input on mode changes
+  // Auto focus appropriate input
   useEffect(() => {
-    inputRef.current?.focus();
-  }, [stationMode, scanAction, collisionPrompt, unregisteredCard]);
+    if (popupMode !== null) {
+      popupInputRef.current?.focus();
+    } else if (stationMode === "awaiting_nfc") {
+      nfcInputRef.current?.focus();
+    }
+  }, [popupMode, stationMode, collisionPrompt, unregisteredCard]);
 
-  // Keep equipment and memberData references updated for event listeners
+  // Keep references for event listener
   const memberDataRef = useRef(memberData);
   memberDataRef.current = memberData;
   const equipmentListRef = useRef(equipmentList);
   equipmentListRef.current = equipmentList;
-  const scanActionRef = useRef(scanAction);
-  scanActionRef.current = scanAction;
+  const popupModeRef = useRef(popupMode);
+  popupModeRef.current = popupMode;
+  const stagedItemsRef = useRef(stagedItems);
+  stagedItemsRef.current = stagedItems;
   const stationModeRef = useRef(stationMode);
   stationModeRef.current = stationMode;
+  const collisionPromptRef = useRef(collisionPrompt);
+  collisionPromptRef.current = collisionPrompt;
+  const unregisteredCardRef = useRef(unregisteredCard);
+  unregisteredCardRef.current = unregisteredCard;
 
   // Helper to match equipment by barcode / serial_number / name / id
   const findEquipment = useCallback((rawCode: string): Equipment | undefined => {
@@ -261,9 +277,9 @@ export function NFCStationClient({
             history: json.history || [],
           });
           setStationMode("member_active");
-          setScanAction("checkout"); // default to checkout mode as per workflow
+          setNfcInput("");
           setStatusMessage({
-            text: `Welcome ${json.member.name || json.member.username}! Ready for checkout or returns.`,
+            text: `Welcome, ${json.member.name || json.member.username}!`,
             type: "success",
           });
           playSound("success");
@@ -275,7 +291,7 @@ export function NFCStationClient({
             type: "warning",
           });
         }
-      } catch (err) {
+      } catch {
         playSound("error");
         setStatusMessage({
           text: "Network error reading NFC card. Please try again.",
@@ -288,144 +304,57 @@ export function NFCStationClient({
     []
   );
 
-  // 2. RETURN EQUIPMENT HANDLER
-  const executeReturn = useCallback(
-    async (equipmentId: number, equipName?: string) => {
-      if (!memberDataRef.current) return;
-      setIsProcessing(true);
+  // 2. OPEN SCANNING POPUP PAGE
+  function openPopup(mode: "checkout" | "return") {
+    setPopupMode(mode);
+    setStagedItems([]);
+    setPopupBarcode("");
+    setPopupMessage(null);
+    playSound("scan");
+  }
 
-      try {
-        const res = await fetch("/api/nfc/return", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            equipment_id: equipmentId,
-            nfc_id: memberDataRef.current.member.nfc_id,
-          }),
-        });
+  function closePopup() {
+    setPopupMode(null);
+    setStagedItems([]);
+    setPopupBarcode("");
+    setPopupMessage(null);
+  }
 
-        const json = await res.json();
-        if (res.ok) {
-          playSound("return");
-          setStatusMessage({
-            text: `Successfully returned "${equipName || json.equipment?.name || "Equipment"}"!`,
-            type: "success",
-          });
-          if (memberDataRef.current.member.nfc_id) {
-            await refreshMemberData(memberDataRef.current.member.nfc_id);
-          }
-          await refreshEquipmentList();
-        } else {
-          playSound("error");
-          setStatusMessage({
-            text: json.error || "Failed to return equipment.",
-            type: "error",
-          });
-        }
-      } catch (err) {
-        playSound("error");
-        setStatusMessage({
-          text: "Error processing equipment return.",
-          type: "error",
-        });
-      } finally {
-        setIsProcessing(false);
-      }
-    },
-    [refreshMemberData, refreshEquipmentList]
-  );
-
-  // 3. CHECKOUT EQUIPMENT HANDLER
-  const executeCheckout = useCallback(
-    async (equipment: Equipment) => {
-      if (!memberDataRef.current) return;
-      setIsProcessing(true);
-
-      try {
-        const res = await fetch("/api/nfc/checkout", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            equipment_id: equipment.id,
-            nfc_id: memberDataRef.current.member.nfc_id,
-          }),
-        });
-
-        const json = await res.json();
-        if (res.ok) {
-          playSound("success");
-          setStatusMessage({
-            text: `Successfully checked out "${equipment.name}" to ${
-              memberDataRef.current.member.name || "member"
-            }!`,
-            type: "success",
-          });
-          if (memberDataRef.current.member.nfc_id) {
-            await refreshMemberData(memberDataRef.current.member.nfc_id);
-          }
-          await refreshEquipmentList();
-        } else {
-          playSound("error");
-          setStatusMessage({
-            text: json.error || "Failed to check out equipment.",
-            type: "error",
-          });
-        }
-      } catch (err) {
-        playSound("error");
-        setStatusMessage({
-          text: "Error processing equipment checkout.",
-          type: "error",
-        });
-      } finally {
-        setIsProcessing(false);
-      }
-    },
-    [refreshMemberData, refreshEquipmentList]
-  );
-
-  // 4. BARCODE SCANNED IN MEMBER ACTIVE MODE
-  const handleBarcodeScanned = useCallback(
-    async (rawBarcode: string) => {
+  // 3. BARCODE SCANNED INSIDE POPUP
+  const handleBarcodeInPopup = useCallback(
+    (rawBarcode: string) => {
       const code = rawBarcode.trim();
       if (!code || !memberDataRef.current) return;
+      setPopupBarcode("");
 
       const foundEquipment = findEquipment(code);
       if (!foundEquipment) {
         playSound("error");
-        setStatusMessage({
+        setPopupMessage({
           text: `Equipment not found for barcode: "${code}".`,
+          type: "error",
+        });
+        return;
+      }
+
+      // Check if already in staged list
+      const isAlreadyStaged = stagedItemsRef.current.some((e) => e.id === foundEquipment.id);
+      if (isAlreadyStaged) {
+        playSound("warning");
+        setPopupMessage({
+          text: `"${foundEquipment.name}" is already in your scanned list.`,
           type: "warning",
         });
         return;
       }
 
-      // Check if equipment is currently checked out by THIS member
-      const isAlreadyCheckedOutByMember = memberDataRef.current.activeCheckouts.some(
+      const isCheckedOutByMember = memberDataRef.current.activeCheckouts.some(
         (c) => c.equipment_id === foundEquipment.id
       );
 
-      // WORKFLOW REQUIREMENT 3: Return Mode
-      if (scanActionRef.current === "return") {
-        if (!isAlreadyCheckedOutByMember) {
-          playSound("warning");
-          setStatusMessage({
-            text: `"${foundEquipment.name}" is not currently checked out by ${
-              memberDataRef.current.member.name || "this member"
-            }.`,
-            type: "warning",
-          });
-          return;
-        }
-
-        // Return immediately
-        await executeReturn(foundEquipment.id, foundEquipment.name);
-        return;
-      }
-
-      // WORKFLOW REQUIREMENT 4: Checkout Mode
-      if (scanActionRef.current === "checkout") {
-        if (isAlreadyCheckedOutByMember) {
+      // CHECKOUT MODE
+      if (popupModeRef.current === "checkout") {
+        if (isCheckedOutByMember) {
           // PROMPT: "If the barcode is one of the equipments the person has already checked out,
           // prompt the user if he wants to return the equipment, not check it out.
           // If he says yes, return the equipment, if not just ignore that scan."
@@ -440,50 +369,133 @@ export function NFCStationClient({
           return;
         }
 
-        // Check if available or unavailable
         if (foundEquipment.status !== "Available") {
           playSound("error");
-          setStatusMessage({
+          setPopupMessage({
             text: `"${foundEquipment.name}" cannot be checked out (Status: ${foundEquipment.status}).`,
             type: "error",
           });
           return;
         }
 
-        // Check it out
-        await executeCheckout(foundEquipment);
+        // Add to staged list (appears one by one)
+        playSound("scan");
+        setStagedItems((prev) => [...prev, foundEquipment]);
+        setPopupMessage({
+          text: `Added "${foundEquipment.name}" to checkout list.`,
+          type: "success",
+        });
+        return;
+      }
+
+      // RETURN MODE
+      if (popupModeRef.current === "return") {
+        if (!isCheckedOutByMember) {
+          playSound("warning");
+          setPopupMessage({
+            text: `"${foundEquipment.name}" is not currently checked out by ${
+              memberDataRef.current.member.name || "this member"
+            }.`,
+            type: "warning",
+          });
+          return;
+        }
+
+        // Add to staged list for return
+        playSound("scan");
+        setStagedItems((prev) => [...prev, foundEquipment]);
+        setPopupMessage({
+          text: `Added "${foundEquipment.name}" to return list.`,
+          type: "success",
+        });
       }
     },
-    [findEquipment, executeReturn, executeCheckout]
+    [findEquipment]
   );
 
-  // 5. MASTER INPUT / SCAN DISPATCHER
-  const handleScanSubmit = useCallback(
-    (value: string) => {
-      const trimmed = value.trim();
-      if (!trimmed) return;
-      setManualInput("");
+  // 4. CONFIRM / FINISH STAGED ITEMS (BATCH SUBMIT)
+  async function handleFinishBatch() {
+    if (!memberData || stagedItems.length === 0 || !popupMode) return;
+    setIsProcessing(true);
 
-      if (stationModeRef.current === "awaiting_nfc") {
-        void handleNfcScanned(trimmed);
-      } else {
-        void handleBarcodeScanned(trimmed);
+    try {
+      const equipmentIds = stagedItems.map((e) => e.id);
+
+      if (popupMode === "checkout") {
+        const res = await fetch("/api/nfc/checkout", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            nfc_id: memberData.member.nfc_id,
+            equipment_ids: equipmentIds,
+          }),
+        });
+
+        const json = await res.json();
+        if (res.ok) {
+          playSound("success");
+          setStatusMessage({
+            text: `Successfully checked out ${stagedItems.length} item(s) to ${
+              memberData.member.name || "member"
+            }!`,
+            type: "success",
+          });
+          closePopup();
+          if (memberData.member.nfc_id) {
+            await refreshMemberData(memberData.member.nfc_id);
+          }
+          await refreshEquipmentList();
+        } else {
+          playSound("error");
+          setPopupMessage({ text: json.error || "Batch checkout failed.", type: "error" });
+        }
+      } else if (popupMode === "return") {
+        const res = await fetch("/api/nfc/return", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            nfc_id: memberData.member.nfc_id,
+            equipment_ids: equipmentIds,
+          }),
+        });
+
+        const json = await res.json();
+        if (res.ok) {
+          playSound("return");
+          setStatusMessage({
+            text: `Successfully returned ${stagedItems.length} item(s) from ${
+              memberData.member.name || "member"
+            }!`,
+            type: "success",
+          });
+          closePopup();
+          if (memberData.member.nfc_id) {
+            await refreshMemberData(memberData.member.nfc_id);
+          }
+          await refreshEquipmentList();
+        } else {
+          playSound("error");
+          setPopupMessage({ text: json.error || "Batch return failed.", type: "error" });
+        }
       }
-    },
-    [handleNfcScanned, handleBarcodeScanned]
-  );
+    } catch {
+      playSound("error");
+      setPopupMessage({ text: "Network error processing batch.", type: "error" });
+    } finally {
+      setIsProcessing(false);
+    }
+  }
 
-  // 6. GLOBAL HARDWARE SCANNER KEYSTROKE LISTENER (USB / Bluetooth HID)
+  // 5. GLOBAL KEYSTROKE SCANNER LISTENER (USB/Bluetooth HID)
   useEffect(() => {
     let buffer = "";
     let lastKeyTime = Date.now();
 
     function onKeyDown(e: KeyboardEvent) {
-      // Don't intercept if an explicit modal dialog (like pair dialog) is focused on an input
-      if (unregisteredCard !== null) return;
+      // Don't intercept if pairing modal or collision dialog is active
+      if (unregisteredCardRef.current !== null || collisionPromptRef.current !== null) return;
 
       const now = Date.now();
-      // Scanners send characters with < 80ms intervals
       if (now - lastKeyTime > 100) {
         buffer = "";
       }
@@ -494,7 +506,12 @@ export function NFCStationClient({
           e.preventDefault();
           const scanned = buffer.trim();
           buffer = "";
-          handleScanSubmit(scanned);
+
+          if (popupModeRef.current !== null) {
+            handleBarcodeInPopup(scanned);
+          } else if (stationModeRef.current === "awaiting_nfc") {
+            void handleNfcScanned(scanned);
+          }
         }
       } else if (e.key.length === 1) {
         buffer += e.key;
@@ -503,9 +520,9 @@ export function NFCStationClient({
 
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [unregisteredCard, handleScanSubmit]);
+  }, [handleBarcodeInPopup, handleNfcScanned]);
 
-  // Pair unregistered card to existing member
+  // Pair card handler
   async function handlePairCard() {
     if (!unregisteredCard || !selectedUserIdToPair) return;
     setIsProcessing(true);
@@ -523,14 +540,12 @@ export function NFCStationClient({
       const json = await res.json();
       if (res.ok) {
         playSound("success");
-        // Update local users list
         setUsersList((prev) =>
           prev.map((u) => (u.id === selectedUserIdToPair ? { ...u, nfc_id: unregisteredCard } : u))
         );
         const cardToLoad = unregisteredCard;
         setUnregisteredCard(null);
         setSelectedUserIdToPair(null);
-        // Automatically load this member's station
         await handleNfcScanned(cardToLoad);
       } else {
         playSound("error");
@@ -544,35 +559,37 @@ export function NFCStationClient({
     }
   }
 
-  // Reset station for next member
   function handleSwitchMember() {
     playSound("scan");
     setMemberData(null);
     setStationMode("awaiting_nfc");
     setStatusMessage(null);
-    setManualInput("");
-    setCollisionPrompt(null);
+    setNfcInput("");
+    setPopupMode(null);
+    setStagedItems([]);
+  }
+
+  function removeItemFromStaged(id: number) {
+    playSound("scan");
+    setStagedItems((prev) => prev.filter((e) => e.id !== id));
   }
 
   return (
     <div className="space-y-6 max-w-6xl mx-auto w-full pb-12">
       {/* Header bar */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b pb-4">
-        <div>
-          <div className="flex items-center gap-2">
-            <div className="p-2 rounded-xl bg-primary/10 text-primary border border-primary/20 shadow-xs">
-              <Nfc className="h-6 w-6" />
-            </div>
-            <div>
-              <h1 className="text-2xl font-bold tracking-tight">NFC Equipment Station</h1>
-              <p className="text-xs text-muted-foreground">
-                Tap member NFC card, then scan equipment barcodes to return or checkout
-              </p>
-            </div>
+        <div className="flex items-center gap-3">
+          <div className="p-2.5 rounded-2xl bg-primary/10 text-primary border border-primary/20 shadow-xs">
+            <Nfc className="h-6 w-6" />
+          </div>
+          <div>
+            <h1 className="text-2xl font-bold tracking-tight">NFC Equipment Station</h1>
+            <p className="text-xs text-muted-foreground">
+              Scan member NFC card, then start a checkout or return session with barcode scanner
+            </p>
           </div>
         </div>
 
-        {/* Station status & quick switch */}
         <div className="flex items-center gap-2">
           {stationMode === "member_active" && (
             <Button
@@ -601,88 +618,41 @@ export function NFCStationClient({
         </div>
       </div>
 
-      {/* Global Scanner Input / Barcode Bar */}
-      <div className="relative rounded-2xl border bg-card/60 backdrop-blur-md p-4 shadow-sm">
-        <form
-          onSubmit={(e) => {
-            e.preventDefault();
-            handleScanSubmit(manualInput);
-          }}
-          className="flex flex-col sm:flex-row gap-2.5 items-stretch"
+      {/* Live Feedback Banner */}
+      {statusMessage && (
+        <div
+          className={cn(
+            "px-4 py-3 rounded-xl text-xs md:text-sm font-medium flex items-center gap-2 transition-all shadow-xs",
+            statusMessage.type === "success" &&
+              "bg-emerald-500/15 text-emerald-700 dark:text-emerald-300 border border-emerald-500/30",
+            statusMessage.type === "warning" &&
+              "bg-amber-500/15 text-amber-700 dark:text-amber-300 border border-amber-500/30",
+            statusMessage.type === "error" &&
+              "bg-destructive/15 text-destructive border border-destructive/30",
+            statusMessage.type === "info" && "bg-primary/15 text-primary border border-primary/30"
+          )}
         >
-          <div className="relative flex-1">
-            <div className="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-muted-foreground">
-              {stationMode === "awaiting_nfc" ? (
-                <Nfc className="h-5 w-5 text-primary animate-pulse" />
-              ) : (
-                <Barcode className="h-5 w-5 text-primary" />
-              )}
-            </div>
-            <Input
-              ref={inputRef}
-              type="text"
-              value={manualInput}
-              onChange={(e) => setManualInput(e.target.value)}
-              disabled={isProcessing}
-              placeholder={
-                stationMode === "awaiting_nfc"
-                  ? "Scan NFC Card with connected scanner or enter NFC Card ID..."
-                  : scanAction === "return"
-                  ? "Scan Equipment Barcode to RETURN..."
-                  : "Scan Equipment Barcode to CHECK OUT..."
-              }
-              className="pl-11 h-12 text-sm md:text-base font-medium rounded-xl border-primary/30 focus-visible:ring-primary/40 shadow-inner"
-            />
-          </div>
-
+          {statusMessage.type === "success" && <CheckCircle2 className="h-4 w-4 shrink-0" />}
+          {statusMessage.type === "warning" && <AlertTriangle className="h-4 w-4 shrink-0" />}
+          {statusMessage.type === "error" && <XCircle className="h-4 w-4 shrink-0" />}
+          {statusMessage.type === "info" && <Sparkles className="h-4 w-4 shrink-0" />}
+          <span className="flex-1">{statusMessage.text}</span>
           <Button
-            type="submit"
-            disabled={isProcessing || !manualInput.trim()}
-            className="h-12 px-6 rounded-xl font-semibold gap-2 shrink-0 shadow-sm"
+            variant="ghost"
+            size="sm"
+            onClick={() => setStatusMessage(null)}
+            className="h-6 w-6 p-0 hover:bg-transparent text-current opacity-70 hover:opacity-100"
           >
-            <Search className="h-4 w-4" />
-            {stationMode === "awaiting_nfc" ? "Look Up Card" : "Submit Barcode"}
+            ✕
           </Button>
-        </form>
-
-        {/* Live Feedback / Notification Banner */}
-        {statusMessage && (
-          <div
-            className={cn(
-              "mt-3 px-3.5 py-2.5 rounded-lg text-xs md:text-sm font-medium flex items-center gap-2 transition-all",
-              statusMessage.type === "success" &&
-                "bg-emerald-500/15 text-emerald-700 dark:text-emerald-300 border border-emerald-500/30",
-              statusMessage.type === "warning" &&
-                "bg-amber-500/15 text-amber-700 dark:text-amber-300 border border-amber-500/30",
-              statusMessage.type === "error" &&
-                "bg-destructive/15 text-destructive border border-destructive/30",
-              statusMessage.type === "info" &&
-                "bg-primary/15 text-primary border border-primary/30"
-            )}
-          >
-            {statusMessage.type === "success" && <CheckCircle2 className="h-4 w-4 shrink-0" />}
-            {statusMessage.type === "warning" && <AlertTriangle className="h-4 w-4 shrink-0" />}
-            {statusMessage.type === "error" && <XCircle className="h-4 w-4 shrink-0" />}
-            {statusMessage.type === "info" && <Sparkles className="h-4 w-4 shrink-0" />}
-            <span className="flex-1">{statusMessage.text}</span>
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={() => setStatusMessage(null)}
-              className="h-6 w-6 p-0 hover:bg-transparent text-current opacity-70 hover:opacity-100"
-            >
-              ✕
-            </Button>
-          </div>
-        )}
-      </div>
+        </div>
+      )}
 
       {/* STATE 1: AWAITING NFC CARD SCAN */}
       {stationMode === "awaiting_nfc" && (
         <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
           {/* Main Hero Card */}
           <Card className="md:col-span-2 border-dashed border-2 border-primary/30 bg-gradient-to-br from-card/80 via-card/40 to-primary/5 rounded-2xl flex flex-col items-center justify-center p-8 sm:p-12 text-center relative overflow-hidden">
-            {/* Animated glowing wave background */}
             <div className="absolute -top-24 -right-24 w-64 h-64 bg-primary/10 rounded-full blur-3xl pointer-events-none" />
             <div className="absolute -bottom-24 -left-24 w-64 h-64 bg-indigo-500/10 rounded-full blur-3xl pointer-events-none" />
 
@@ -697,34 +667,57 @@ export function NFCStationClient({
               Ready for Member NFC Card
             </h2>
             <p className="text-sm text-muted-foreground max-w-md mb-6">
-              Hold or tap the club member&apos;s physical NFC card on the USB NFC scanner connected to
-              this laptop to begin.
+              Hold or tap the member&apos;s physical NFC card on the USB reader connected to this
+              laptop.
             </p>
 
-            <div className="flex flex-wrap items-center justify-center gap-2 text-xs text-muted-foreground">
+            {/* Input field for manual or USB typing */}
+            <form
+              onSubmit={(e) => {
+                e.preventDefault();
+                void handleNfcScanned(nfcInput);
+              }}
+              className="flex gap-2 w-full max-w-sm"
+            >
+              <Input
+                ref={nfcInputRef}
+                type="text"
+                value={nfcInput}
+                onChange={(e) => setNfcInput(e.target.value)}
+                placeholder="Or enter NFC Card ID manually..."
+                disabled={isProcessing}
+                className="h-11 rounded-xl text-sm"
+              />
+              <Button
+                type="submit"
+                disabled={isProcessing || !nfcInput.trim()}
+                className="h-11 rounded-xl px-4 font-semibold"
+              >
+                Scan
+              </Button>
+            </form>
+
+            <div className="flex flex-wrap items-center justify-center gap-2 text-xs text-muted-foreground mt-6">
               <span className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-muted/60 border">
                 <Laptop className="h-3.5 w-3.5 text-primary" /> USB NFC Scanner Active
-              </span>
-              <span className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-muted/60 border">
-                <Barcode className="h-3.5 w-3.5 text-primary" /> Barcode Ready
               </span>
             </div>
           </Card>
 
-          {/* Side panel: Registered Members quick test / list */}
+          {/* Quick Tap Simulator */}
           <Card className="rounded-2xl flex flex-col">
             <CardHeader className="pb-3">
               <CardTitle className="text-sm font-semibold flex items-center justify-between">
                 <span>Club Members ({usersList.length})</span>
                 <Badge variant="outline" className="text-[10px]">
-                  Quick Tap Simulator
+                  Simulator
                 </Badge>
               </CardTitle>
               <CardDescription className="text-xs">
-                Tap any member below to simulate their NFC card scan:
+                Click a member to simulate their NFC card tap:
               </CardDescription>
             </CardHeader>
-            <CardContent className="flex-1 overflow-y-auto max-h-72 space-y-2 pr-2">
+            <CardContent className="flex-1 overflow-y-auto max-h-80 space-y-2 pr-2">
               {usersList.map((user) => {
                 const hasNfc = Boolean(user.nfc_id);
                 return (
@@ -734,7 +727,6 @@ export function NFCStationClient({
                       if (user.nfc_id) {
                         void handleNfcScanned(user.nfc_id);
                       } else {
-                        // Prompt to assign
                         setUnregisteredCard(`NFC-${user.name.toUpperCase().replace(/\s+/g, "")}-01`);
                         setSelectedUserIdToPair(user.id);
                       }
@@ -773,19 +765,20 @@ export function NFCStationClient({
         </div>
       )}
 
-      {/* STATE 2: MEMBER ACTIVE */}
+      {/* STATE 2: MEMBER ACTIVE DASHBOARD */}
       {stationMode === "member_active" && memberData && (
         <div className="space-y-6">
-          {/* Member Identity Banner */}
-          <Card className="rounded-2xl border-primary/30 bg-gradient-to-r from-primary/10 via-background to-primary/5 p-5 shadow-sm">
-            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+          {/* Member Card Header with the TWO BIG ACTION BUTTONS */}
+          <Card className="rounded-2xl border-primary/30 bg-gradient-to-r from-primary/10 via-background to-primary/5 p-6 shadow-sm">
+            <div className="flex flex-col md:flex-row md:items-center justify-between gap-6">
+              {/* Member Profile */}
               <div className="flex items-center gap-4">
-                <div className="h-14 w-14 rounded-2xl bg-primary/20 border border-primary/40 flex items-center justify-center font-bold text-lg text-primary shadow-xs">
+                <div className="h-16 w-16 rounded-2xl bg-primary/20 border border-primary/40 flex items-center justify-center font-bold text-xl text-primary shadow-xs">
                   {memberData.member.name?.slice(0, 2).toUpperCase() || "MB"}
                 </div>
                 <div>
                   <div className="flex items-center gap-2">
-                    <h2 className="text-lg font-bold">{memberData.member.name}</h2>
+                    <h2 className="text-xl font-bold">{memberData.member.name}</h2>
                     {memberData.member.username && (
                       <span className="text-xs text-muted-foreground">
                         (@{memberData.member.username})
@@ -802,89 +795,47 @@ export function NFCStationClient({
                       className="font-mono text-[10px] gap-1 bg-background/80 border-primary/30 text-primary"
                     >
                       <Nfc className="h-3 w-3" />
-                      NFC: {memberData.member.nfc_id || "Registered"}
+                      Card UID: {memberData.member.nfc_id || "Registered"}
                     </Badge>
                   </div>
                 </div>
               </div>
 
-              {/* Action Mode Toggle Buttons */}
-              <div className="flex items-center gap-2 bg-background/80 p-1.5 rounded-xl border shadow-2xs">
+              {/* USER ACTION BUTTONS: CLICK TO OPEN POPUP SCANNING PAGE */}
+              <div className="flex flex-col sm:flex-row gap-3">
                 <Button
-                  type="button"
-                  variant={scanAction === "checkout" ? "default" : "ghost"}
-                  size="sm"
-                  onClick={() => {
-                    setScanAction("checkout");
-                    playSound("scan");
-                    inputRef.current?.focus();
-                  }}
-                  className={cn(
-                    "rounded-lg gap-2 text-xs font-semibold transition-all",
-                    scanAction === "checkout" &&
-                      "bg-emerald-600 hover:bg-emerald-700 text-white shadow-sm"
-                  )}
+                  onClick={() => openPopup("return")}
+                  size="lg"
+                  className="rounded-xl h-14 px-6 bg-blue-600 hover:bg-blue-700 text-white font-bold gap-2.5 shadow-md hover:shadow-lg transition-all"
                 >
-                  <ArrowUpRight className="h-4 w-4" />
-                  Checkout Equipment
+                  <ArrowDownLeft className="h-5 w-5" />
+                  <div className="text-left">
+                    <div className="text-sm">Return Equipments</div>
+                    <div className="text-[10px] font-normal opacity-90">Open Return Scanner</div>
+                  </div>
                 </Button>
 
                 <Button
-                  type="button"
-                  variant={scanAction === "return" ? "default" : "ghost"}
-                  size="sm"
-                  onClick={() => {
-                    setScanAction("return");
-                    playSound("scan");
-                    inputRef.current?.focus();
-                  }}
-                  className={cn(
-                    "rounded-lg gap-2 text-xs font-semibold transition-all",
-                    scanAction === "return" &&
-                      "bg-blue-600 hover:bg-blue-700 text-white shadow-sm"
-                  )}
+                  onClick={() => openPopup("checkout")}
+                  size="lg"
+                  className="rounded-xl h-14 px-6 bg-emerald-600 hover:bg-emerald-700 text-white font-bold gap-2.5 shadow-md hover:shadow-lg transition-all"
                 >
-                  <ArrowDownLeft className="h-4 w-4" />
-                  Return Equipment
+                  <ArrowUpRight className="h-5 w-5" />
+                  <div className="text-left">
+                    <div className="text-sm">Checkout Equipments</div>
+                    <div className="text-[10px] font-normal opacity-90">Open Checkout Scanner</div>
+                  </div>
                 </Button>
               </div>
             </div>
           </Card>
 
-          {/* Active Mode Notice */}
-          <div
-            className={cn(
-              "px-4 py-3 rounded-xl border flex items-center justify-between text-xs sm:text-sm font-medium shadow-xs transition-colors",
-              scanAction === "checkout"
-                ? "bg-emerald-500/10 text-emerald-700 dark:text-emerald-300 border-emerald-500/30"
-                : "bg-blue-500/10 text-blue-700 dark:text-blue-300 border-blue-500/30"
-            )}
-          >
-            <div className="flex items-center gap-2">
-              <Barcode className="h-4 w-4 animate-pulse shrink-0" />
-              <span>
-                {scanAction === "checkout"
-                  ? "SCANNER IN CHECKOUT MODE: Scan barcode of equipment to check out. (If already checked out to member, system prompts to return)."
-                  : "SCANNER IN RETURN MODE: Scan barcode of equipment to return it immediately."}
-              </span>
-            </div>
-            <Badge
-              variant="outline"
-              className={cn(
-                "text-[10px] uppercase font-bold shrink-0",
-                scanAction === "checkout" ? "border-emerald-500/40" : "border-blue-500/40"
-              )}
-            >
-              Listening...
-            </Badge>
-          </div>
-
-          {/* Navigation Tabs for Active Items vs History */}
+          {/* Sub Navigation Tabs */}
           <div className="flex border-b">
             <button
               onClick={() => setActiveTab("current")}
               className={cn(
-                "px-5 py-2.5 text-sm font-semibold border-b-2 transition-all flex items-center gap-2",
+                "px-5 py-3 text-sm font-semibold border-b-2 transition-all flex items-center gap-2",
                 activeTab === "current"
                   ? "border-primary text-primary"
                   : "border-transparent text-muted-foreground hover:text-foreground"
@@ -892,7 +843,7 @@ export function NFCStationClient({
             >
               <Package className="h-4 w-4" />
               Currently Checked Out
-              <Badge variant="secondary" className="ml-1 text-xs px-1.5 py-0.2">
+              <Badge variant="secondary" className="ml-1 text-xs px-2 py-0.5">
                 {memberData.activeCheckouts.length}
               </Badge>
             </button>
@@ -900,7 +851,7 @@ export function NFCStationClient({
             <button
               onClick={() => setActiveTab("history")}
               className={cn(
-                "px-5 py-2.5 text-sm font-semibold border-b-2 transition-all flex items-center gap-2",
+                "px-5 py-3 text-sm font-semibold border-b-2 transition-all flex items-center gap-2",
                 activeTab === "history"
                   ? "border-primary text-primary"
                   : "border-transparent text-muted-foreground hover:text-foreground"
@@ -908,7 +859,7 @@ export function NFCStationClient({
             >
               <Clock className="h-4 w-4" />
               Checkout History
-              <Badge variant="outline" className="ml-1 text-xs px-1.5 py-0.2">
+              <Badge variant="outline" className="ml-1 text-xs px-2 py-0.5">
                 {memberData.history.length}
               </Badge>
             </button>
@@ -922,20 +873,17 @@ export function NFCStationClient({
                   <Package className="h-10 w-10 text-muted-foreground/40 mx-auto mb-3" />
                   <h3 className="font-semibold text-base mb-1">No equipment currently checked out</h3>
                   <p className="text-xs text-muted-foreground max-w-sm mx-auto mb-4">
-                    This member has no active equipment checkouts. Scan an available equipment
-                    barcode to check it out to them.
+                    This member has no active equipment checkouts. Tap &quot;Checkout Equipments&quot; above
+                    to start scanning items to borrow.
                   </p>
                   <Button
+                    onClick={() => openPopup("checkout")}
                     variant="outline"
                     size="sm"
-                    onClick={() => {
-                      setScanAction("checkout");
-                      inputRef.current?.focus();
-                    }}
                     className="gap-1.5 text-xs font-semibold"
                   >
                     <ArrowUpRight className="h-4 w-4" />
-                    Scan Barcode to Checkout
+                    Open Checkout Scanner
                   </Button>
                 </Card>
               ) : (
@@ -974,20 +922,6 @@ export function NFCStationClient({
                           </p>
                           {item.notes && <p className="italic text-[10px]">Note: {item.notes}</p>}
                         </div>
-                      </div>
-
-                      {/* Instant Return Button */}
-                      <div className="pt-3 mt-2 border-t">
-                        <Button
-                          variant="outline"
-                          size="sm"
-                          onClick={() => executeReturn(item.equipment_id, item.equipment_name)}
-                          disabled={isProcessing}
-                          className="w-full text-xs font-semibold gap-1.5 hover:bg-blue-600 hover:text-white transition-colors"
-                        >
-                          <ArrowDownLeft className="h-3.5 w-3.5" />
-                          Return This Item
-                        </Button>
                       </div>
                     </Card>
                   ))}
@@ -1062,48 +996,233 @@ export function NFCStationClient({
               </div>
             </Card>
           )}
-
-          {/* Quick Equipment Barcode Test Bar for demo/convenience */}
-          <Card className="p-4 rounded-xl border-dashed">
-            <h4 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-2 flex items-center justify-between">
-              <span>Quick Barcode Test Palette (Simulate Barcode Scanner)</span>
-              <span className="text-[10px] normal-case">Click any equipment to test scan</span>
-            </h4>
-            <div className="flex flex-wrap gap-2 max-h-36 overflow-y-auto">
-              {equipmentList.slice(0, 12).map((eq) => {
-                const code = eq.serial_number || eq.name;
-                const isCheckedOutToMember = memberData.activeCheckouts.some(
-                  (c) => c.equipment_id === eq.id
-                );
-                return (
-                  <button
-                    key={eq.id}
-                    onClick={() => void handleBarcodeScanned(code)}
-                    className={cn(
-                      "px-2.5 py-1.5 rounded-lg border text-xs font-medium transition-all text-left flex items-center gap-1.5",
-                      isCheckedOutToMember
-                        ? "bg-blue-500/15 border-blue-500/40 text-blue-700 dark:text-blue-300"
-                        : eq.status === "Available"
-                        ? "bg-background hover:bg-emerald-500/10 hover:border-emerald-500/40"
-                        : "bg-muted text-muted-foreground"
-                    )}
-                  >
-                    <Barcode className="h-3.5 w-3.5" />
-                    <span>{eq.name}</span>
-                    {isCheckedOutToMember && (
-                      <span className="text-[9px] px-1 bg-blue-500 text-white rounded-full">
-                        Checked Out
-                      </span>
-                    )}
-                  </button>
-                );
-              })}
-            </div>
-          </Card>
         </div>
       )}
 
-      {/* DIALOG 1: EQUIPMENT ALREADY CHECKED OUT PROMPT (WORKFLOW REQUIREMENT 4) */}
+      {/* POPUP / BLACK PAGE SCANNING OVERLAY */}
+      {popupMode !== null && memberData && (
+        <div className="fixed inset-0 z-50 bg-black/90 backdrop-blur-xl flex flex-col justify-between p-4 sm:p-8 animate-in fade-in duration-200">
+          {/* Top Bar inside popup */}
+          <div className="flex items-center justify-between border-b border-border/40 pb-4">
+            <div className="flex items-center gap-3">
+              <div
+                className={cn(
+                  "p-3 rounded-2xl border shadow-md",
+                  popupMode === "checkout"
+                    ? "bg-emerald-500/20 text-emerald-400 border-emerald-500/30"
+                    : "bg-blue-500/20 text-blue-400 border-blue-500/30"
+                )}
+              >
+                <Barcode className="h-6 w-6 animate-pulse" />
+              </div>
+              <div>
+                <div className="flex items-center gap-2">
+                  <h2 className="text-xl sm:text-2xl font-bold tracking-tight text-white">
+                    {popupMode === "checkout" ? "Equipment Checkout Session" : "Equipment Return Session"}
+                  </h2>
+                  <Badge
+                    variant="outline"
+                    className={cn(
+                      "text-xs uppercase font-bold",
+                      popupMode === "checkout"
+                        ? "border-emerald-500/50 text-emerald-400"
+                        : "border-blue-500/50 text-blue-400"
+                    )}
+                  >
+                    {stagedItems.length} Scanned
+                  </Badge>
+                </div>
+                <p className="text-xs text-neutral-400">
+                  Member: <strong className="text-white">{memberData.member.name}</strong>{" "}
+                  {memberData.member.username ? `(@${memberData.member.username})` : ""}
+                </p>
+              </div>
+            </div>
+
+            {/* Cancel Button */}
+            <Button
+              variant="ghost"
+              size="icon"
+              onClick={closePopup}
+              className="h-10 w-10 text-neutral-400 hover:text-white rounded-xl hover:bg-neutral-800"
+            >
+              <X className="h-6 w-6" />
+            </Button>
+          </div>
+
+          {/* Center Content: Scanner Bar & One-by-One Staged Equipment List */}
+          <div className="flex-1 my-6 flex flex-col max-w-4xl w-full mx-auto overflow-hidden">
+            {/* Scanner Input Bar */}
+            <div className="mb-4">
+              <form
+                onSubmit={(e) => {
+                  e.preventDefault();
+                  handleBarcodeInPopup(popupBarcode);
+                }}
+                className="flex gap-2"
+              >
+                <div className="relative flex-1">
+                  <ScanLine
+                    className={cn(
+                      "absolute left-4 top-1/2 -translate-y-1/2 h-5 w-5 animate-pulse",
+                      popupMode === "checkout" ? "text-emerald-400" : "text-blue-400"
+                    )}
+                  />
+                  <Input
+                    ref={popupInputRef}
+                    type="text"
+                    value={popupBarcode}
+                    onChange={(e) => setPopupBarcode(e.target.value)}
+                    placeholder="Scan equipment barcode now with scanner or type barcode..."
+                    className="pl-12 h-14 text-base font-semibold bg-neutral-900/90 text-white rounded-2xl border-neutral-700 focus-visible:ring-2 focus-visible:ring-primary shadow-inner"
+                  />
+                </div>
+                <Button
+                  type="submit"
+                  disabled={!popupBarcode.trim()}
+                  className="h-14 px-6 rounded-2xl font-bold"
+                >
+                  Add Item
+                </Button>
+              </form>
+
+              {/* Popup Alert Banner */}
+              {popupMessage && (
+                <div
+                  className={cn(
+                    "mt-3 px-4 py-2.5 rounded-xl text-xs sm:text-sm font-medium flex items-center gap-2",
+                    popupMessage.type === "success" &&
+                      "bg-emerald-950/60 text-emerald-300 border border-emerald-500/40",
+                    popupMessage.type === "warning" &&
+                      "bg-amber-950/60 text-amber-300 border border-amber-500/40",
+                    popupMessage.type === "error" &&
+                      "bg-rose-950/60 text-rose-300 border border-rose-500/40",
+                    popupMessage.type === "info" &&
+                      "bg-neutral-800 text-neutral-200 border border-neutral-700"
+                  )}
+                >
+                  {popupMessage.type === "success" && <CheckCircle2 className="h-4 w-4 shrink-0" />}
+                  {popupMessage.type === "warning" && <AlertTriangle className="h-4 w-4 shrink-0" />}
+                  {popupMessage.type === "error" && <XCircle className="h-4 w-4 shrink-0" />}
+                  <span className="flex-1">{popupMessage.text}</span>
+                  <button
+                    onClick={() => setPopupMessage(null)}
+                    className="opacity-70 hover:opacity-100 text-current"
+                  >
+                    ✕
+                  </button>
+                </div>
+              )}
+            </div>
+
+            {/* List of scanned equipments appearing one by one */}
+            <div className="flex-1 overflow-y-auto rounded-2xl border border-neutral-800 bg-neutral-950/60 p-4 space-y-3 shadow-inner">
+              {stagedItems.length === 0 ? (
+                <div className="h-full flex flex-col items-center justify-center text-center p-8 text-neutral-500">
+                  <Barcode className="h-16 w-16 mb-3 opacity-30 animate-pulse" />
+                  <p className="font-semibold text-neutral-300 text-base">No equipment scanned yet</p>
+                  <p className="text-xs text-neutral-500 max-w-sm mt-1">
+                    Scan equipment barcodes one by one. Each item will appear here in your session.
+                  </p>
+                </div>
+              ) : (
+                <div className="space-y-2.5">
+                  <div className="text-xs font-semibold uppercase tracking-wider text-neutral-400 px-1 flex items-center justify-between">
+                    <span>Scanned Equipment ({stagedItems.length})</span>
+                    <span className="text-[10px] text-neutral-500">Appearing in order of scan</span>
+                  </div>
+
+                  {stagedItems.map((item, idx) => (
+                    <div
+                      key={item.id}
+                      className="p-4 rounded-xl bg-neutral-900/90 border border-neutral-800 hover:border-neutral-700 flex items-center justify-between gap-4 transition-all animate-in slide-in-from-top-2 duration-150"
+                    >
+                      <div className="flex items-center gap-3 min-w-0">
+                        <div className="h-8 w-8 rounded-lg bg-neutral-800 text-neutral-300 font-bold text-xs flex items-center justify-center shrink-0">
+                          #{idx + 1}
+                        </div>
+                        <div className="min-w-0">
+                          <h4 className="font-bold text-sm text-white truncate">{item.name}</h4>
+                          <div className="flex items-center gap-2 mt-0.5">
+                            <span className="font-mono text-xs text-neutral-400">
+                              {item.serial_number || "NO-BARCODE"}
+                            </span>
+                            <span className="text-neutral-600">•</span>
+                            <span className="text-xs text-neutral-400">📍 {item.location}</span>
+                          </div>
+                        </div>
+                      </div>
+
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        onClick={() => removeItemFromStaged(item.id)}
+                        className="h-8 w-8 text-neutral-400 hover:text-rose-400 hover:bg-rose-950/40 rounded-lg shrink-0"
+                        title="Remove from this session"
+                      >
+                        <Trash2 className="h-4 w-4" />
+                      </Button>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            {/* Quick Test Barcode Simulator Bar */}
+            <div className="mt-3 pt-2">
+              <div className="text-[11px] text-neutral-400 mb-1.5 flex items-center justify-between">
+                <span>Quick Test Barcode Simulator:</span>
+                <span className="text-[10px] text-neutral-500">Click to simulate scanner</span>
+              </div>
+              <div className="flex flex-wrap gap-1.5 max-h-20 overflow-y-auto">
+                {equipmentList.slice(0, 10).map((eq) => {
+                  const code = eq.serial_number || eq.name;
+                  return (
+                    <button
+                      key={eq.id}
+                      onClick={() => handleBarcodeInPopup(code)}
+                      className="px-2.5 py-1 rounded-lg bg-neutral-900 border border-neutral-800 hover:border-neutral-600 text-[11px] text-neutral-300 font-medium transition-all"
+                    >
+                      {eq.name}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          </div>
+
+          {/* Bottom Bar inside popup: Cancel or OK / Finish */}
+          <div className="border-t border-neutral-800 pt-4 flex flex-col sm:flex-row items-center justify-between gap-3 max-w-4xl w-full mx-auto">
+            <Button
+              variant="outline"
+              onClick={closePopup}
+              disabled={isProcessing}
+              className="w-full sm:w-auto h-12 px-6 rounded-xl border-neutral-700 text-neutral-300 hover:bg-neutral-800 font-semibold"
+            >
+              Cancel
+            </Button>
+
+            <Button
+              onClick={handleFinishBatch}
+              disabled={stagedItems.length === 0 || isProcessing}
+              className={cn(
+                "w-full sm:w-auto h-12 px-8 rounded-xl font-bold text-white shadow-lg transition-all text-sm sm:text-base",
+                popupMode === "checkout"
+                  ? "bg-emerald-600 hover:bg-emerald-500"
+                  : "bg-blue-600 hover:bg-blue-500"
+              )}
+            >
+              {isProcessing
+                ? "Processing..."
+                : popupMode === "checkout"
+                ? `OK / Finish Checkout (${stagedItems.length} items)`
+                : `OK / Finish Return (${stagedItems.length} items)`}
+            </Button>
+          </div>
+        </div>
+      )}
+
+      {/* DIALOG 1: ALREADY CHECKED OUT COLLISION PROMPT */}
       <Dialog
         open={collisionPrompt !== null}
         onOpenChange={(open) => {
@@ -1133,13 +1252,13 @@ export function NFCStationClient({
               type="button"
               variant="outline"
               onClick={() => {
-                // User says NO: ignore that scan
+                // Ignore that scan
                 setCollisionPrompt(null);
-                setStatusMessage({
+                setPopupMessage({
                   text: `Scan for "${collisionPrompt?.equipment.name}" ignored.`,
                   type: "info",
                 });
-                inputRef.current?.focus();
+                popupInputRef.current?.focus();
               }}
               className="rounded-xl"
             >
@@ -1149,11 +1268,34 @@ export function NFCStationClient({
             <Button
               type="button"
               onClick={async () => {
-                // User says YES: return the equipment
-                if (collisionPrompt) {
+                // Return the equipment
+                if (collisionPrompt && memberData) {
                   const eq = collisionPrompt.equipment;
                   setCollisionPrompt(null);
-                  await executeReturn(eq.id, eq.name);
+                  try {
+                    const res = await fetch("/api/nfc/return", {
+                      method: "POST",
+                      headers: { "Content-Type": "application/json" },
+                      body: JSON.stringify({
+                        equipment_id: eq.id,
+                        nfc_id: memberData.member.nfc_id,
+                      }),
+                    });
+                    if (res.ok) {
+                      playSound("return");
+                      setPopupMessage({
+                        text: `Successfully returned "${eq.name}"!`,
+                        type: "success",
+                      });
+                      if (memberData.member.nfc_id) {
+                        await refreshMemberData(memberData.member.nfc_id);
+                      }
+                      await refreshEquipmentList();
+                    }
+                  } catch {
+                    playSound("error");
+                  }
+                  popupInputRef.current?.focus();
                 }
               }}
               className="rounded-xl bg-blue-600 hover:bg-blue-700 text-white font-semibold gap-1.5"
