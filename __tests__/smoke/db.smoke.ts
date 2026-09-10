@@ -382,5 +382,85 @@ describe("Smoke — lib/db.ts (Vercel Postgres mock)", () => {
       expect(newItem!.status).toBe("Available"); // NEW ITEMS ARE AVAILABLE!
       expect(newItem!.tags).toContain("Support");
     });
+
+    test("enforces standard status-condition pairing during batch upsert", async () => {
+      // 1. Create items with various statuses
+      await createEquipment({
+        name: "Item 1",
+        serial_number: "IT-001",
+        tags: ["Gear"],
+        condition: "Working",
+        location: "Media Room",
+        status: "Checked Out",
+      });
+      await createEquipment({
+        name: "Item 2",
+        serial_number: "IT-002",
+        tags: ["Gear"],
+        condition: "Missing",
+        location: "Media Room",
+        status: "Unavailable (Missing)",
+      });
+      await createEquipment({
+        name: "Item 3",
+        serial_number: "IT-003",
+        tags: ["Gear"],
+        condition: "Broken",
+        location: "Media Room",
+        status: "Unavailable (Broken)",
+      });
+
+      // 2. Batch upsert:
+      // - IT-001 set to Missing -> status becomes Unavailable (Missing)
+      // - IT-002 set to Working -> status becomes Available
+      // - IT-003 set to Working -> status becomes Available
+      const result = await batchUpsertEquipment([
+        {
+          name: "Item 1 Updated",
+          serial_number: "IT-001",
+          tags: ["Gear", "UpdatedTag"],
+          description: "Now missing",
+          condition: "Missing",
+          location: "Showroom",
+        },
+        {
+          name: "Item 2 Recovered",
+          serial_number: "IT-002",
+          tags: ["Gear"],
+          description: "Found and working",
+          condition: "Working",
+          location: "Media Room",
+        },
+        {
+          name: "Item 3 Repaired",
+          serial_number: "IT-003",
+          tags: ["Gear"],
+          description: "Repaired and working",
+          condition: "Working",
+          location: "Control Room",
+        },
+      ]);
+
+      expect(result.updatedCount).toBe(3);
+
+      const all = await getAllEquipment();
+      const item1 = all.find((e) => e.serial_number === "IT-001");
+      const item2 = all.find((e) => e.serial_number === "IT-002");
+      const item3 = all.find((e) => e.serial_number === "IT-003");
+
+      expect(item1?.condition).toBe("Missing");
+      expect(item1?.status).toBe("Unavailable (Missing)");
+      expect(item1?.name).toBe("Item 1 Updated");
+      expect(item1?.location).toBe("Showroom");
+      expect(item1?.tags).toContain("UpdatedTag");
+
+      expect(item2?.condition).toBe("Working");
+      expect(item2?.status).toBe("Available");
+      expect(item2?.name).toBe("Item 2 Recovered");
+
+      expect(item3?.condition).toBe("Working");
+      expect(item3?.status).toBe("Available");
+      expect(item3?.name).toBe("Item 3 Repaired");
+    });
   });
 });

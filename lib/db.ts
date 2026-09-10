@@ -400,6 +400,8 @@ export async function updateEquipment(
       if (nextStatus !== "Unavailable (In Repairs)") {
         nextStatus = "Unavailable (Broken)";
       }
+    } else if (nextStatus === "Unavailable (Broken)") {
+      nextStatus = "Available";
     } else if (nextStatus === "Unavailable (In Repairs)" && nextCondition === "Working") {
       nextStatus = "Available";
     }
@@ -442,8 +444,8 @@ export async function batchUpsertEquipment(items: {
   const errors: string[] = [];
 
   // Fetch existing equipment and tags upfront to prevent hundreds of sequential roundtrips
-  const { rows: existingRows } = await sql<{ id: number; name: string; serial_number: string | null }>`
-    SELECT id, LOWER(TRIM(name)) as name, LOWER(TRIM(serial_number)) as serial_number FROM equipment
+  const { rows: existingRows } = await sql<{ id: number; name: string; serial_number: string | null; status: EquipmentStatus; condition: Condition }>`
+    SELECT id, LOWER(TRIM(name)) as name, LOWER(TRIM(serial_number)) as serial_number, status, condition FROM equipment
   `;
 
   const { rows: tagRows } = await sql<Tag>`
@@ -455,10 +457,12 @@ export async function batchUpsertEquipment(items: {
     if (t.name) tagMap.set(t.name.trim().toLowerCase(), t.id);
   }
 
+  const existingMap = new Map<number, { id: number; name: string; serial_number: string | null; status: EquipmentStatus; condition: Condition }>();
   const existingBySerial = new Map<string, number>();
   const existingByName = new Map<string, number>();
 
   for (const eq of existingRows) {
+    existingMap.set(eq.id, eq);
     if (eq.serial_number) {
       existingBySerial.set(eq.serial_number.toLowerCase(), eq.id);
     }
@@ -492,42 +496,50 @@ export async function batchUpsertEquipment(items: {
 
       if (existingId) {
         targetId = existingId;
-        // Update existing equipment: update status if Broken or Missing, otherwise preserve
+        const current = existingMap.get(existingId);
+        const currentStatus = current ? current.status : "Available";
+
+        // Determine next status: preserve existing status, but enforce standard status-condition pairing
+        let nextStatus: EquipmentStatus = currentStatus;
+
         if (item.condition === "Missing") {
-          await sql`
-            UPDATE equipment 
-            SET name = ${item.name},
-                description = ${item.description ?? null},
-                serial_number = ${item.serial_number ?? null},
-                condition = ${item.condition},
-                location = ${item.location},
-                status = 'Unavailable (Missing)',
-                updated_at = CURRENT_TIMESTAMP
-            WHERE id = ${existingId}
-          `;
+          nextStatus = "Unavailable (Missing)";
         } else if (item.condition === "Broken") {
-          await sql`
-            UPDATE equipment 
-            SET name = ${item.name},
-                description = ${item.description ?? null},
-                serial_number = ${item.serial_number ?? null},
-                condition = ${item.condition},
-                location = ${item.location},
-                status = CASE WHEN status = 'Unavailable (In Repairs)' THEN 'Unavailable (In Repairs)' ELSE 'Unavailable (Broken)' END,
-                updated_at = CURRENT_TIMESTAMP
-            WHERE id = ${existingId}
-          `;
-        } else {
-          await sql`
-            UPDATE equipment 
-            SET name = ${item.name},
-                description = ${item.description ?? null},
-                serial_number = ${item.serial_number ?? null},
-                condition = ${item.condition},
-                location = ${item.location},
-                updated_at = CURRENT_TIMESTAMP
-            WHERE id = ${existingId}
-          `;
+          if (currentStatus === "Unavailable (In Repairs)") {
+            nextStatus = "Unavailable (In Repairs)";
+          } else {
+            nextStatus = "Unavailable (Broken)";
+          }
+        } else if (item.condition === "Impaired") {
+          if (currentStatus === "Unavailable (Missing)" || currentStatus === "Unavailable (Broken)") {
+            nextStatus = "Available";
+          }
+        } else if (item.condition === "Working") {
+          if (
+            currentStatus === "Unavailable (Missing)" ||
+            currentStatus === "Unavailable (Broken)" ||
+            currentStatus === "Unavailable (In Repairs)"
+          ) {
+            nextStatus = "Available";
+          }
+        }
+
+        // Update ALL equipment information
+        await sql`
+          UPDATE equipment 
+          SET name = ${item.name},
+              description = ${item.description ?? null},
+              serial_number = ${item.serial_number ?? null},
+              condition = ${item.condition},
+              location = ${item.location},
+              status = ${nextStatus},
+              updated_at = CURRENT_TIMESTAMP
+          WHERE id = ${existingId}
+        `;
+
+        if (current) {
+          current.status = nextStatus;
+          current.condition = item.condition;
         }
         updatedCount++;
       } else {
