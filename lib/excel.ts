@@ -16,8 +16,9 @@ export function normalizeCondition(val: unknown): Condition {
   const s = String(val).trim().toLowerCase();
   if (s === "new" || s === "good" || s === "working") return "Working";
   if (s === "fair" || s === "impaired") return "Impaired";
-  if (s === "in repairs" || s === "in repair" || s === "repair" || s === "repairs") return "In repairs";
-  if (s === "poor" || s === "broken" || s === "damaged") return "Broken";
+  if (s === "in repairs" || s === "in repair" || s === "repair" || s === "repairs" || s === "poor" || s === "broken" || s === "damaged") {
+    return "Broken";
+  }
   return "Working";
 }
 
@@ -131,10 +132,13 @@ export function parseEquipmentExcel(data: ArrayBuffer | Uint8Array): ParsedEquip
   let currentTag = "";
 
   for (let r = 1; r < rows.length; r++) {
-    const row = rows[r];
-    if (!row || row.length === 0) continue;
+    const rawRow = rows[r];
+    if (!rawRow || rawRow.length === 0) continue;
 
-    // Check if entire row is empty
+    // Strictly ignore any columns past column F (indices 0..5)
+    const row = rawRow.slice(0, 6);
+
+    // Check if row (columns A through F) is empty
     const isEmpty = row.every((c) => c === null || c === undefined || String(c).trim() === "");
     if (isEmpty) continue;
 

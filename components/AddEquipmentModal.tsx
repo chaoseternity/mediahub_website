@@ -28,9 +28,9 @@ const AddSchema = z.object({
   tags: z.array(z.string().min(1)).min(1, "Please select at least one tag"),
   description: z.string().optional(),
   serial_number: z.string().optional(),
-  condition: z.enum(["Working", "Impaired", "In repairs", "Broken"]),
+  condition: z.enum(["Working", "Impaired", "Broken"]),
   location: z.enum(["Media Room", "Showroom", "Control Room"]),
-  status: z.enum(["Available", "Checked Out", "Under Maintenance", "Retired"]),
+  status: z.enum(["Available", "Checked Out", "In Repairs"]),
 });
 
 type AddFormValues = z.infer<typeof AddSchema>;
@@ -116,7 +116,7 @@ export function AddEquipmentModal({ open, onClose, onCreated }: AddEquipmentModa
               <Select defaultValue="Working" onValueChange={(v) => setValue("condition", v as AddFormValues["condition"])}>
                 <SelectTrigger><SelectValue /></SelectTrigger>
                 <SelectContent>
-                  {["Working", "Impaired", "In repairs", "Broken"].map(c => <SelectItem key={c} value={c}>{c}</SelectItem>)}
+                  {["Working", "Impaired", "Broken"].map(c => <SelectItem key={c} value={c}>{c}</SelectItem>)}
                 </SelectContent>
               </Select>
             </div>
@@ -137,7 +137,7 @@ export function AddEquipmentModal({ open, onClose, onCreated }: AddEquipmentModa
               <Select defaultValue="Available" onValueChange={(v) => setValue("status", v as AddFormValues["status"])}>
                 <SelectTrigger><SelectValue /></SelectTrigger>
                 <SelectContent>
-                  {["Available","Checked Out","Under Maintenance","Retired"].map(s => <SelectItem key={s} value={s}>{s}</SelectItem>)}
+                  {["Available", "Checked Out", "In Repairs"].map(s => <SelectItem key={s} value={s}>{s}</SelectItem>)}
                 </SelectContent>
               </Select>
             </div>

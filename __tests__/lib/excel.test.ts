@@ -36,8 +36,10 @@ describe("Excel utility - lib/excel.ts", () => {
       expect(normalizeCondition("working")).toBe("Working");
       expect(normalizeCondition("Fair")).toBe("Impaired");
       expect(normalizeCondition("Impaired")).toBe("Impaired");
-      expect(normalizeCondition("In repairs")).toBe("In repairs");
-      expect(normalizeCondition("in repairs")).toBe("In repairs");
+      expect(normalizeCondition("In repairs")).toBe("Broken");
+      expect(normalizeCondition("in repairs")).toBe("Broken");
+      expect(normalizeCondition("repair")).toBe("Broken");
+      expect(normalizeCondition("repairs")).toBe("Broken");
       expect(normalizeCondition("Poor")).toBe("Broken");
       expect(normalizeCondition("Broken")).toBe("Broken");
       expect(normalizeCondition("")).toBe("Working");
@@ -98,6 +100,31 @@ describe("Excel utility - lib/excel.ts", () => {
       expect(parsed[3].tags).toEqual(["Storage"]); // inherited from above!
       expect(parsed[3].serial_number).toBe("SD-02");
       expect(parsed[3].condition).toBe("Broken");
+    });
+
+    test("ignores any content beyond column F (column G, H, etc.)", () => {
+      // Build a worksheet with columns past F (e.g. column G = Notes, column H = Extra)
+      const XLSX = require("xlsx");
+      const data = [
+        ["Tag", "Equipment ID", "Equipment Name", "Description", "Condition", "Location", "Notes", "Extra Column"],
+        ["Laptop", "LP-NOTE-01", "Note Laptop", "Desc", "In repairs", "Media Room", "Do not import this note", "Ignore this too"],
+        // A row with only notes in column G should be completely ignored
+        ["", "", "", "", "", "", "Orphan note that should be ignored", "Also ignored"],
+      ];
+
+      const ws = XLSX.utils.aoa_to_sheet(data);
+      const wb = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(wb, ws, "Sheet1");
+      const buffer = XLSX.write(wb, { type: "buffer", bookType: "xlsx" });
+
+      const parsed = parseEquipmentExcel(buffer);
+      expect(parsed).toHaveLength(1);
+      expect(parsed[0].serial_number).toBe("LP-NOTE-01");
+      expect(parsed[0].name).toBe("Note Laptop");
+      expect(parsed[0].condition).toBe("Broken"); // "In repairs" mapped to "Broken"
+      expect(parsed[0].location).toBe("Media Room");
+      // Extra columns are not in parsed object
+      expect((parsed[0] as any).Notes).toBeUndefined();
     });
   });
 });

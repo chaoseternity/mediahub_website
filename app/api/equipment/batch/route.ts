@@ -8,7 +8,7 @@ const BatchItemSchema = z.object({
   serial_number: z.string().nullable().optional(),
   tags: z.array(z.string()).default([]),
   description: z.string().nullable().optional(),
-  condition: z.enum(["Working", "Impaired", "In repairs", "Broken"]).default("Working"),
+  condition: z.enum(["Working", "Impaired", "Broken"]).default("Working"),
   location: z.string().default("Media Room"),
 });
 

@@ -8,10 +8,10 @@ const CreateEquipmentSchema = z.object({
   tags: z.array(z.string().min(1)).min(1, "At least one tag is required"),
   description: z.string().optional(),
   serial_number: z.string().optional(),
-  condition: z.enum(["Working", "Impaired", "In repairs", "Broken"]).default("Working"),
+  condition: z.enum(["Working", "Impaired", "Broken"]).default("Working"),
   location: z.string().min(1),
   status: z
-    .enum(["Available", "Checked Out", "Under Maintenance", "Retired"])
+    .enum(["Available", "Checked Out", "In Repairs"])
     .default("Available"),
 });
 

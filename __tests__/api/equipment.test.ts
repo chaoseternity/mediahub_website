@@ -148,11 +148,11 @@ describe("Equipment DB helpers (in-memory SQLite) — AV CCA", () => {
     expect(row!.location).toBe("Auditorium Backstage");
   });
 
-  test("updates laptop status to Under Maintenance", () => {
+  test("updates laptop status to In Repairs", () => {
     const id = insertEquipment(db, { name: "Strawberry" });
-    db.prepare("UPDATE equipment SET status = 'Under Maintenance', updated_at = datetime('now') WHERE id = ?").run(id);
+    db.prepare("UPDATE equipment SET status = 'In Repairs', updated_at = datetime('now') WHERE id = ?").run(id);
     const row = getEquipmentRow(db, id);
-    expect(row!.status).toBe("Under Maintenance");
+    expect(row!.status).toBe("In Repairs");
   });
 
   test("updates SD card condition to Impaired after wear", () => {
@@ -196,10 +196,10 @@ describe("Equipment DB helpers (in-memory SQLite) — AV CCA", () => {
     expect(getEquipmentRow(db, id)).toBeUndefined();
   });
 
-  test("retires a damaged SD card", () => {
+  test("marks a damaged SD card as In Repairs", () => {
     const id = insertEquipment(db, { name: "SD-V-8", tags: ["SD Card (Video)"], condition: "Broken" });
-    db.prepare("UPDATE equipment SET status = 'Retired', updated_at = datetime('now') WHERE id = ?").run(id);
+    db.prepare("UPDATE equipment SET status = 'In Repairs', updated_at = datetime('now') WHERE id = ?").run(id);
     const row = getEquipmentRow(db, id);
-    expect(row!.status).toBe("Retired");
+    expect(row!.status).toBe("In Repairs");
   });
 });

@@ -53,7 +53,7 @@ export function EquipmentGrid({ initialData, role, onAddNew: _onAddNew, userName
 
   // Derive filter options
   const tags = Array.from(new Set(items.flatMap((i) => i.tags))).sort();
-  const statuses = ["Available", "Checked Out", "In Event", "In Event (Rehearsal)", "Under Maintenance", "Retired"];
+  const statuses = ["Available", "Checked Out", "In Event", "In Event (Rehearsal)", "In Repairs"];
 
   // 1. Derive available Variable 1 <a> options across all items
   const var1Options = Array.from(

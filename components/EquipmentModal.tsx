@@ -44,9 +44,9 @@ const EditSchema = z.object({
   tags: z.array(z.string().min(1)).min(1, "Please select at least one tag"),
   description: z.string().optional(),
   serial_number: z.string().optional(),
-  condition: z.enum(["Working", "Impaired", "In repairs", "Broken"]),
+  condition: z.enum(["Working", "Impaired", "Broken"]),
   location: z.string().min(1),
-  status: z.enum(["Available", "Checked Out", "In Event", "In Event (Rehearsal)", "Under Maintenance", "Retired"]),
+  status: z.enum(["Available", "Checked Out", "In Event", "In Event (Rehearsal)", "In Repairs"]),
 });
 
 type EditFormValues = z.infer<typeof EditSchema>;
@@ -390,7 +390,6 @@ export function EquipmentModal({
                     {renderSelectField("condition", "Condition", [
                       "Working",
                       "Impaired",
-                      "In repairs",
                       "Broken",
                     ])}
                     {renderSelectField("location", "Home Location", [
@@ -401,8 +400,9 @@ export function EquipmentModal({
                     {renderSelectField("status", "Status", [
                       "Available",
                       "Checked Out",
-                      "Under Maintenance",
-                      "Retired",
+                      "In Event",
+                      "In Event (Rehearsal)",
+                      "In Repairs",
                     ])}
                   </div>
                 </TabsContent>

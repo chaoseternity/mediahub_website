@@ -38,7 +38,7 @@ const laptops = [
   { name: "Clapper",      description: "Used for production management, scripts and clapperboard software",        serial: "LP-CLA-001", date: "2023-01-20", cond: "Working",  status: "Available"          },
   { name: "Bulbasaur",    description: "General-purpose laptop for presentations and event support",               serial: "LP-BUL-001", date: "2020-06-15", cond: "Impaired", status: "Checked Out"       },
   { name: "Middle Earth", description: "High-performance editing laptop for post-production video work",           serial: "LP-MID-001", date: "2023-09-01", cond: "Working",  status: "Available"          },
-  { name: "Strawberry",   description: "Backup laptop; used when primary units are unavailable",                   serial: "LP-STR-001", date: "2019-03-22", cond: "Impaired", status: "Under Maintenance"  },
+  { name: "Strawberry",   description: "Backup laptop; used when primary units are unavailable",                   serial: "LP-STR-001", date: "2019-03-22", cond: "Impaired", status: "In Repairs"  },
 ];
 
 const videoSdCards = Array.from({ length: 10 }, (_, i) => ({
