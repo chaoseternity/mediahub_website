@@ -16,6 +16,7 @@ export interface ParsedEquipmentId {
   partA: string;
   partB: string;
   partC: string;
+  partD: string;
   prefix: string;
   subPrefix: string;
   formatted: string;
@@ -23,24 +24,34 @@ export interface ParsedEquipmentId {
 
 export function parseEquipmentId(idString: string | null | undefined): ParsedEquipmentId {
   if (!idString || !idString.trim()) {
-    return { partA: "UNASSIGNED", partB: "", partC: "", prefix: "UNASSIGNED", subPrefix: "UNASSIGNED", formatted: "N/A" };
+    return {
+      partA: "UNASSIGNED",
+      partB: "",
+      partC: "",
+      partD: "",
+      prefix: "UNASSIGNED",
+      subPrefix: "UNASSIGNED",
+      formatted: "N/A",
+    };
   }
 
   const parts = idString.trim().split("-").map((p) => p.trim());
   const partA = parts[0] ? parts[0].toUpperCase() : "";
   const partB = parts[1] ? parts[1].toUpperCase() : "";
-  const partC = parts.slice(2).join("-").toUpperCase();
+  const partC = parts[2] ? parts[2].toUpperCase() : "";
+  const partD = parts.slice(3).join("-").toUpperCase();
 
   const prefix = partA || "UNASSIGNED";
   const subPrefix = partB ? `${partA}-${partB}` : prefix;
 
-  const formattedParts = [partA, partB, partC].filter(Boolean);
+  const formattedParts = [partA, partB, partC, partD].filter(Boolean);
   const formatted = formattedParts.join("-");
 
   return {
     partA,
     partB,
     partC,
+    partD,
     prefix,
     subPrefix,
     formatted,
@@ -60,5 +71,12 @@ export function sortEquipmentById(a: { serial_number: string | null }, b: { seri
   if (cmpB !== 0) return cmpB;
 
   // 3. Compare <c> (partC)
-  return pA.partC.localeCompare(pB.partC, undefined, { numeric: true, sensitivity: "base" });
+  const cmpC = pA.partC.localeCompare(pB.partC, undefined, { numeric: true, sensitivity: "base" });
+  if (cmpC !== 0) return cmpC;
+
+  // 4. Compare <d> (partD)
+  const cmpD = pA.partD.localeCompare(pB.partD, undefined, { numeric: true, sensitivity: "base" });
+  if (cmpD !== 0) return cmpD;
+
+  return (a.serial_number || "").localeCompare(b.serial_number || "", undefined, { numeric: true, sensitivity: "base" });
 }

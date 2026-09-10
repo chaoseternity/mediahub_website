@@ -68,6 +68,26 @@ describe("Excel utility - lib/excel.ts", () => {
       expect(sorted[2].serial_number).toBe("SD-V-02");
       expect(sorted[3].serial_number).toBe("SD-V-10");
     });
+
+    test("sorts by 4 sub-IDs hierarchy (A-B-C-1)", () => {
+      const items: Equipment[] = [
+        createMockEquipment({ id: 1, name: "Sony 10", tags: ["Camera"], serial_number: "CAM-SONY-A7-10" }),
+        createMockEquipment({ id: 2, name: "Sony 2", tags: ["Camera"], serial_number: "CAM-SONY-A7-2" }),
+        createMockEquipment({ id: 3, name: "Sony 1", tags: ["Camera"], serial_number: "CAM-SONY-A7-1" }),
+        createMockEquipment({ id: 4, name: "FX3", tags: ["Camera"], serial_number: "CAM-SONY-FX3-1" }),
+        createMockEquipment({ id: 5, name: "Canon", tags: ["Camera"], serial_number: "CAM-CANON-R5-1" }),
+      ];
+
+      const sorted = sortEquipmentForExcel(items);
+
+      expect(sorted.map((s) => s.serial_number)).toEqual([
+        "CAM-CANON-R5-1",
+        "CAM-SONY-A7-1",
+        "CAM-SONY-A7-2",
+        "CAM-SONY-A7-10",
+        "CAM-SONY-FX3-1",
+      ]);
+    });
   });
 
   describe("generateEquipmentExcel & parseEquipmentExcel round-trip", () => {

@@ -67,6 +67,7 @@ export function EquipmentCard({ equipment, onClick }: EquipmentCardProps) {
               <span className="font-bold">{parsedId.partA}</span>
               {parsedId.partB && <span>-{parsedId.partB}</span>}
               {parsedId.partC && <span>-{parsedId.partC}</span>}
+              {parsedId.partD && <span>-{parsedId.partD}</span>}
             </span>
           )}
 

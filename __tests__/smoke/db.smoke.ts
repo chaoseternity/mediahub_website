@@ -114,6 +114,7 @@ import {
   deleteSOPDocument,
   searchSOPDocuments,
   batchUpsertEquipment,
+  updateEquipment,
 } from "@/lib/db";
 
 // ── Smoke tests ───────────────────────────────────────────────────────────────
@@ -153,6 +154,64 @@ describe("Smoke — lib/db.ts (Vercel Postgres mock)", () => {
       expect(eq.name).toBe("Camera");
       expect(eq.tags).toEqual([]);
       expect(eq.status).toBe("Available");
+    });
+
+    test("allows condition 'Broken' with status 'Unavailable (In Repairs)'", async () => {
+      const eq = await createEquipment({
+        name: "Broken Lens in Repair",
+        tags: [],
+        condition: "Broken",
+        location: "Media Room",
+        status: "Unavailable (In Repairs)",
+      });
+      expect(eq.condition).toBe("Broken");
+      expect(eq.status).toBe("Unavailable (In Repairs)");
+    });
+
+    test("defaults condition 'Broken' to status 'Unavailable (Broken)' if given other status", async () => {
+      const eq = await createEquipment({
+        name: "Broken Lens",
+        tags: [],
+        condition: "Broken",
+        location: "Media Room",
+        status: "Available",
+      });
+      expect(eq.condition).toBe("Broken");
+      expect(eq.status).toBe("Unavailable (Broken)");
+    });
+  });
+
+  // ── updateEquipment ───────────────────────────────────────────────────────
+
+  describe("updateEquipment", () => {
+    test("allows setting Broken equipment status to Unavailable (In Repairs)", async () => {
+      const eq = await createEquipment({
+        name: "Tripod",
+        tags: [],
+        condition: "Broken",
+        location: "Media Room",
+        status: "Unavailable (Broken)",
+      });
+      const updated = await updateEquipment(eq.id, {
+        status: "Unavailable (In Repairs)",
+      });
+      expect(updated?.condition).toBe("Broken");
+      expect(updated?.status).toBe("Unavailable (In Repairs)");
+    });
+
+    test("preserves Unavailable (In Repairs) status when updating Broken equipment attributes", async () => {
+      const eq = await createEquipment({
+        name: "Tripod 2",
+        tags: [],
+        condition: "Broken",
+        location: "Media Room",
+        status: "Unavailable (In Repairs)",
+      });
+      const updated = await updateEquipment(eq.id, {
+        description: "Fixed screw issue",
+      });
+      expect(updated?.condition).toBe("Broken");
+      expect(updated?.status).toBe("Unavailable (In Repairs)");
     });
   });
 

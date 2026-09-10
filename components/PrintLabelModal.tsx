@@ -150,6 +150,7 @@ export function PrintLabelModal({ equipment, open, onClose }: PrintLabelModalPro
                   <span>{parsedId?.partA}</span>
                   {parsedId?.partB && <span>-{parsedId.partB}</span>}
                   {parsedId?.partC && <span>-{parsedId.partC}</span>}
+                  {parsedId?.partD && <span>-{parsedId.partD}</span>}
                 </div>
               )}
             </div>

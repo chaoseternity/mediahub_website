@@ -248,14 +248,16 @@ export function EquipmentModal({
         {isAdmin ? (
           <Select
             value={String(val ?? "")}
-            disabled={name === "status" && (watched.condition === "Broken" || watched.condition === "Missing")}
+            disabled={name === "status" && watched.condition === "Missing"}
             onValueChange={(v) => {
               if (name === "condition") {
                 setValue("condition", v as EditFormValues["condition"], { shouldDirty: true });
                 if (v === "Missing") {
                   setValue("status", "Unavailable (Missing)", { shouldDirty: true });
                 } else if (v === "Broken") {
-                  setValue("status", "Unavailable (Broken)", { shouldDirty: true });
+                  if (watched.status !== "Unavailable (In Repairs)") {
+                    setValue("status", "Unavailable (Broken)", { shouldDirty: true });
+                  }
                 } else if (watched.status === "Unavailable (Broken)" || watched.status === "Unavailable (Missing)") {
                   setValue("status", "Available", { shouldDirty: true });
                 } else if (watched.status === "Unavailable (In Repairs)" && v === "Working") {
@@ -425,7 +427,7 @@ export function EquipmentModal({
                       watched.condition === "Missing"
                         ? ["Unavailable (Missing)"]
                         : watched.condition === "Broken"
-                        ? ["Unavailable (Broken)"]
+                        ? ["Unavailable (Broken)", "Unavailable (In Repairs)"]
                         : watched.condition === "Impaired"
                         ? ["Available", "Checked Out", "In Event", "In Event (Rehearsal)", "Unavailable (In Repairs)", "Unavailable (Missing)"]
                         : ["Available", "Checked Out", "In Event", "In Event (Rehearsal)", "Unavailable (Missing)"]

@@ -38,10 +38,11 @@ export function EquipmentGrid({ initialData, role, onAddNew: _onAddNew, userName
   const [tagFilter, setTagFilter] = useState(ALL);
   const [statusFilter, setStatusFilter] = useState(ALL);
   
-  // Cascading Equipment ID variable filters (up to 3 variables: <a>-<b>-<c>)
+  // Cascading Equipment ID variable filters (up to 4 variables: <a>-<b>-<c>-<d>)
   const [idVar1, setIdVar1] = useState(ALL);
   const [idVar2, setIdVar2] = useState(ALL);
   const [idVar3, setIdVar3] = useState(ALL);
+  const [idVar4, setIdVar4] = useState(ALL);
 
   const [sortBy, setSortBy] = useState<"updated" | "id_asc" | "name_asc" | "status">("updated");
 
@@ -94,7 +95,17 @@ export function EquipmentGrid({ initialData, role, onAddNew: _onAddNew, userName
         .filter((p) => idVar1 !== ALL && idVar2 !== ALL && p.partA === idVar1 && p.partB === idVar2 && p.partC)
         .map((p) => p.partC)
     )
-  ).sort();
+  ).sort((a, b) => a.localeCompare(b, undefined, { numeric: true, sensitivity: "base" }));
+
+  // 4. Derive available Variable 4 <d> options under selected Variable 1, Variable 2, and Variable 3
+  const var4Options = Array.from(
+    new Set(
+      items
+        .map((i) => parseEquipmentId(i.serial_number))
+        .filter((p) => idVar1 !== ALL && idVar2 !== ALL && idVar3 !== ALL && p.partA === idVar1 && p.partB === idVar2 && p.partC === idVar3 && p.partD)
+        .map((p) => p.partD)
+    )
+  ).sort((a, b) => a.localeCompare(b, undefined, { numeric: true, sensitivity: "base" }));
 
   // Filter items
   const filtered = items.filter((item) => {
@@ -107,6 +118,7 @@ export function EquipmentGrid({ initialData, role, onAddNew: _onAddNew, userName
       parsedId.partA.toLowerCase().includes(q) ||
       parsedId.partB.toLowerCase().includes(q) ||
       parsedId.partC.toLowerCase().includes(q) ||
+      parsedId.partD.toLowerCase().includes(q) ||
       item.location.toLowerCase().includes(q) ||
       item.tags.some((t) => t.toLowerCase().includes(q));
 
@@ -117,8 +129,9 @@ export function EquipmentGrid({ initialData, role, onAddNew: _onAddNew, userName
     const matchVar1 = idVar1 === ALL || parsedId.partA === idVar1;
     const matchVar2 = idVar2 === ALL || parsedId.partB === idVar2;
     const matchVar3 = idVar3 === ALL || parsedId.partC === idVar3;
+    const matchVar4 = idVar4 === ALL || parsedId.partD === idVar4;
 
-    return matchSearch && matchTag && matchStatus && matchVar1 && matchVar2 && matchVar3;
+    return matchSearch && matchTag && matchStatus && matchVar1 && matchVar2 && matchVar3 && matchVar4;
   });
 
   // Apply Sorting
@@ -146,17 +159,25 @@ export function EquipmentGrid({ initialData, role, onAddNew: _onAddNew, userName
     setIdVar1(val);
     setIdVar2(ALL);
     setIdVar3(ALL);
+    setIdVar4(ALL);
   }
 
   function handleVar2Change(v: string | null) {
     const val = v ?? ALL;
     setIdVar2(val);
     setIdVar3(ALL);
+    setIdVar4(ALL);
   }
 
   function handleVar3Change(v: string | null) {
     const val = v ?? ALL;
     setIdVar3(val);
+    setIdVar4(ALL);
+  }
+
+  function handleVar4Change(v: string | null) {
+    const val = v ?? ALL;
+    setIdVar4(val);
   }
 
   const [isDownloadingBarcodes, setIsDownloadingBarcodes] = useState(false);
@@ -293,6 +314,26 @@ export function EquipmentGrid({ initialData, role, onAddNew: _onAddNew, userName
                   {var3Options.map((v3) => (
                     <SelectItem key={v3} value={v3} className="font-mono text-xs">
                       {v3}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </>
+          )}
+
+          {/* Variable 4 dropdown (opens when <c> is selected and <d> exists) */}
+          {idVar1 !== ALL && idVar2 !== ALL && idVar3 !== ALL && var4Options.length > 0 && (
+            <>
+              <span className="text-muted-foreground font-bold select-none">-</span>
+              <Select value={idVar4} onValueChange={handleVar4Change}>
+                <SelectTrigger className="h-7 w-20 px-2 py-0 text-xs font-mono font-medium border-primary/40 bg-primary/5 text-primary">
+                  <SelectValue>{idVar4 === ALL ? "All" : idVar4}</SelectValue>
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value={ALL}>All</SelectItem>
+                  {var4Options.map((v4) => (
+                    <SelectItem key={v4} value={v4} className="font-mono text-xs">
+                      {v4}
                     </SelectItem>
                   ))}
                 </SelectContent>

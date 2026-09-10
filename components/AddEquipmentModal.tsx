@@ -72,7 +72,9 @@ export function AddEquipmentModal({ open, onClose, onCreated }: AddEquipmentModa
     if (c === "Missing") {
       setValue("status", "Unavailable (Missing)", { shouldValidate: true, shouldDirty: true });
     } else if (c === "Broken") {
-      setValue("status", "Unavailable (Broken)", { shouldValidate: true, shouldDirty: true });
+      if (watchedStatus !== "Unavailable (In Repairs)") {
+        setValue("status", "Unavailable (Broken)", { shouldValidate: true, shouldDirty: true });
+      }
     } else if (watchedStatus === "Unavailable (Broken)" || watchedStatus === "Unavailable (Missing)") {
       setValue("status", "Available", { shouldValidate: true, shouldDirty: true });
     } else if (watchedStatus === "Unavailable (In Repairs)" && c === "Working") {
@@ -91,14 +93,14 @@ export function AddEquipmentModal({ open, onClose, onCreated }: AddEquipmentModa
 
   // Determine allowed status options:
   // - If condition is Missing: only 'Unavailable (Missing)'
-  // - If condition is Broken: only 'Unavailable (Broken)'
+  // - If condition is Broken: 'Unavailable (Broken)', 'Unavailable (In Repairs)'
   // - If condition is Impaired: 'Available', 'Checked Out', 'Unavailable (In Repairs)', 'Unavailable (Missing)'
   // - If condition is Working: 'Available', 'Checked Out', 'Unavailable (Missing)'
   const statusOptions: AddFormValues["status"][] =
     watchedCondition === "Missing"
       ? ["Unavailable (Missing)"]
       : watchedCondition === "Broken"
-      ? ["Unavailable (Broken)"]
+      ? ["Unavailable (Broken)", "Unavailable (In Repairs)"]
       : watchedCondition === "Impaired"
       ? ["Available", "Checked Out", "Unavailable (In Repairs)", "Unavailable (Missing)"]
       : ["Available", "Checked Out", "Unavailable (Missing)"];
@@ -148,7 +150,7 @@ export function AddEquipmentModal({ open, onClose, onCreated }: AddEquipmentModa
             </div>
             <div className="space-y-1">
               <Label htmlFor="new-serial">Equipment ID</Label>
-              <Input id="new-serial" placeholder="e.g. EQ-001" {...register("serial_number")} />
+              <Input id="new-serial" placeholder="e.g. A-B-C-1" {...register("serial_number")} />
             </div>
             <div className="space-y-1">
               <Label>Condition *</Label>
@@ -176,7 +178,7 @@ export function AddEquipmentModal({ open, onClose, onCreated }: AddEquipmentModa
               <Select
                 value={watchedStatus}
                 onValueChange={(v) => handleStatusChange(v as AddFormValues["status"])}
-                disabled={watchedCondition === "Broken" || watchedCondition === "Missing"}
+                disabled={watchedCondition === "Missing"}
               >
                 <SelectTrigger><SelectValue /></SelectTrigger>
                 <SelectContent>

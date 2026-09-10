@@ -325,7 +325,9 @@ export async function createEquipment(params: {
     condition = "Missing";
     status = "Unavailable (Missing)";
   } else if (condition === "Broken") {
-    status = "Unavailable (Broken)";
+    if (status !== "Unavailable (In Repairs)") {
+      status = "Unavailable (Broken)";
+    }
   } else if (status === "Unavailable (In Repairs)" && condition === "Working") {
     status = "Available";
   }
@@ -395,7 +397,9 @@ export async function updateEquipment(
     }
 
     if (nextCondition === "Broken") {
-      nextStatus = "Unavailable (Broken)";
+      if (nextStatus !== "Unavailable (In Repairs)") {
+        nextStatus = "Unavailable (Broken)";
+      }
     } else if (nextStatus === "Unavailable (In Repairs)" && nextCondition === "Working") {
       nextStatus = "Available";
     }
@@ -487,7 +491,7 @@ export async function batchUpsertEquipment(items: {
                 serial_number = ${item.serial_number ?? null},
                 condition = ${item.condition},
                 location = ${item.location},
-                status = 'Unavailable (Broken)',
+                status = CASE WHEN status = 'Unavailable (In Repairs)' THEN 'Unavailable (In Repairs)' ELSE 'Unavailable (Broken)' END,
                 updated_at = CURRENT_TIMESTAMP
             WHERE id = ${existingId}
           `;
