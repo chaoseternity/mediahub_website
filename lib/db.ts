@@ -382,6 +382,101 @@ export async function updateEquipment(
   return getEquipmentById(id);
 }
 
+export async function batchUpsertEquipment(items: {
+  name: string;
+  serial_number?: string | null;
+  tags: string[];
+  description?: string | null;
+  condition: Condition;
+  location: string;
+}[]): Promise<{ createdCount: number; updatedCount: number; errors: string[] }> {
+  await ensureSchema();
+  let createdCount = 0;
+  let updatedCount = 0;
+  const errors: string[] = [];
+
+  for (const item of items) {
+    try {
+      let existingId: number | null = null;
+
+      // 1. Try match by serial_number
+      if (item.serial_number && item.serial_number.trim()) {
+        const { rows } = await sql`
+          SELECT id FROM equipment 
+          WHERE LOWER(TRIM(serial_number)) = LOWER(TRIM(${item.serial_number}))
+          LIMIT 1
+        `;
+        if (rows.length > 0) {
+          existingId = rows[0].id;
+        }
+      }
+
+      // 2. Fallback match by name
+      if (!existingId && item.name && item.name.trim()) {
+        const { rows } = await sql`
+          SELECT id FROM equipment 
+          WHERE LOWER(TRIM(name)) = LOWER(TRIM(${item.name}))
+          LIMIT 1
+        `;
+        if (rows.length > 0) {
+          existingId = rows[0].id;
+        }
+      }
+
+      if (existingId) {
+        // Update existing equipment: preserve status, update other details
+        await sql`
+          UPDATE equipment 
+          SET name = ${item.name},
+              description = ${item.description ?? null},
+              serial_number = ${item.serial_number ?? null},
+              condition = ${item.condition},
+              location = ${item.location},
+              updated_at = CURRENT_TIMESTAMP
+          WHERE id = ${existingId}
+        `;
+
+        // Update tags
+        await sql`DELETE FROM equipment_tags WHERE equipment_id = ${existingId}`;
+        if (item.tags && item.tags.length > 0) {
+          for (const tagName of item.tags) {
+            let tagObj = (await sql<Tag>`SELECT * FROM tags WHERE LOWER(name) = LOWER(${tagName})`).rows[0];
+            if (!tagObj) {
+              tagObj = (await sql<Tag>`INSERT INTO tags (name) VALUES (${tagName}) RETURNING *`).rows[0];
+            }
+            await sql`INSERT INTO equipment_tags (equipment_id, tag_id) VALUES (${existingId}, ${tagObj.id}) ON CONFLICT DO NOTHING`;
+          }
+        }
+        updatedCount++;
+      } else {
+        // Insert new equipment: status is always 'Available'
+        const { rows } = await sql<Equipment>`
+          INSERT INTO equipment (name, description, serial_number, condition, location, status)
+          VALUES (${item.name}, ${item.description ?? null}, ${item.serial_number ?? null}, ${item.condition}, ${item.location}, 'Available')
+          RETURNING *
+        `;
+        const newId = rows[0].id;
+
+        if (item.tags && item.tags.length > 0) {
+          for (const tagName of item.tags) {
+            let tagObj = (await sql<Tag>`SELECT * FROM tags WHERE LOWER(name) = LOWER(${tagName})`).rows[0];
+            if (!tagObj) {
+              tagObj = (await sql<Tag>`INSERT INTO tags (name) VALUES (${tagName}) RETURNING *`).rows[0];
+            }
+            await sql`INSERT INTO equipment_tags (equipment_id, tag_id) VALUES (${newId}, ${tagObj.id}) ON CONFLICT DO NOTHING`;
+          }
+        }
+        createdCount++;
+      }
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      errors.push(`Error processing "${item.name}": ${msg}`);
+    }
+  }
+
+  return { createdCount, updatedCount, errors };
+}
+
 export async function deleteEquipment(id: number): Promise<{ success: boolean; error?: string }> {
   await ensureSchema();
   const activeCheckouts = await sql`SELECT id FROM checkouts WHERE equipment_id = ${id} AND returned_at IS NULL`;

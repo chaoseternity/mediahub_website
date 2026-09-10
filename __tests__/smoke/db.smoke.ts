@@ -41,9 +41,9 @@ jest.mock("@vercel/postgres", () => {
         .replace(/INSERT INTO (\w+) \((.*?)\) VALUES \((.*?)\) ON CONFLICT \((.*?)\) DO UPDATE SET (.*?)$/gi, "INSERT OR REPLACE INTO $1 ($2) VALUES ($3)");
 
       let isReturning = false;
-      if (/RETURNING \*/i.test(sqliteQuery)) {
+      if (/RETURNING\s+(\*|\w+)/i.test(sqliteQuery)) {
         isReturning = true;
-        sqliteQuery = sqliteQuery.replace(/RETURNING \*/gi, "");
+        sqliteQuery = sqliteQuery.replace(/RETURNING\s+(\*|\w+)/gi, "");
       }
 
       const trimmed = sqliteQuery.trim();
@@ -113,6 +113,7 @@ import {
   updateSOPDocument,
   deleteSOPDocument,
   searchSOPDocuments,
+  batchUpsertEquipment,
 } from "@/lib/db";
 
 // ── Smoke tests ───────────────────────────────────────────────────────────────
@@ -265,6 +266,62 @@ describe("Smoke — lib/db.ts (Vercel Postgres mock)", () => {
 
       const afterDelete = await getSOPDocumentById(sop1.id);
       expect(afterDelete).toBeUndefined();
+    });
+  });
+
+  // ── batchUpsertEquipment ──────────────────────────────────────────────────
+
+  describe("batchUpsertEquipment", () => {
+    test("creates new equipment with status Available and updates existing equipment preserving its status", async () => {
+      // 1. Create an existing equipment with Checked Out status
+      const existing = await createEquipment({
+        name: "Existing Mic",
+        serial_number: "MIC-001",
+        tags: ["Audio"],
+        condition: "Working",
+        location: "Media Room",
+        status: "Checked Out",
+      });
+
+      // 2. Batch upsert: update existing item details, and add a brand new item
+      const result = await batchUpsertEquipment([
+        {
+          name: "Existing Mic (Renamed)",
+          serial_number: "MIC-001",
+          tags: ["Audio", "Studio"],
+          description: "Updated description",
+          condition: "Impaired",
+          location: "Control Room",
+        },
+        {
+          name: "Brand New Tripod",
+          serial_number: "TRI-001",
+          tags: ["Support"],
+          description: "Heavy duty carbon fiber tripod",
+          condition: "Working",
+          location: "Showroom",
+        },
+      ]);
+
+      expect(result.createdCount).toBe(1);
+      expect(result.updatedCount).toBe(1);
+      expect(result.errors).toHaveLength(0);
+
+      // 3. Verify existing item details updated but status remains 'Checked Out'
+      const all = await getAllEquipment();
+      const updatedExisting = all.find((e) => e.serial_number === "MIC-001");
+      expect(updatedExisting).toBeDefined();
+      expect(updatedExisting!.name).toBe("Existing Mic (Renamed)");
+      expect(updatedExisting!.condition).toBe("Impaired");
+      expect(updatedExisting!.location).toBe("Control Room");
+      expect(updatedExisting!.status).toBe("Checked Out"); // PRESERVED!
+
+      // 4. Verify new item has status 'Available'
+      const newItem = all.find((e) => e.serial_number === "TRI-001");
+      expect(newItem).toBeDefined();
+      expect(newItem!.name).toBe("Brand New Tripod");
+      expect(newItem!.status).toBe("Available"); // NEW ITEMS ARE AVAILABLE!
+      expect(newItem!.tags).toContain("Support");
     });
   });
 });

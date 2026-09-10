@@ -16,7 +16,7 @@ const config: Config = {
     {
       displayName: "unit",
       testEnvironment: "node",
-      testMatch: ["**/__tests__/api/**/*.test.ts"],
+      testMatch: ["**/__tests__/api/**/*.test.ts", "**/__tests__/lib/**/*.test.ts"],
       transform: {
         "^.+\\.tsx?$": ["ts-jest", { tsconfig: { module: "commonjs" } }],
       },

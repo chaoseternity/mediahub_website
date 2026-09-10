@@ -4,8 +4,10 @@ import { useState } from "react";
 import dynamic from "next/dynamic";
 import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button";
-import { Plus, Package } from "lucide-react";
+import { Plus, Package, Download, Upload } from "lucide-react";
 import { AddEquipmentModal } from "@/components/AddEquipmentModal";
+import { UploadEquipmentModal } from "@/components/UploadEquipmentModal";
+import { generateEquipmentExcel } from "@/lib/excel";
 import type { Equipment, Role } from "@/lib/types";
 
 const EquipmentGrid = dynamic(
@@ -21,6 +23,8 @@ interface DashboardClientProps {
 
 export function DashboardClient({ initialData, role, userName }: DashboardClientProps) {
   const [addOpen, setAddOpen] = useState(false);
+  const [uploadOpen, setUploadOpen] = useState(false);
+  const [isDownloading, setIsDownloading] = useState(false);
   const [items, setItems] = useState<Equipment[]>(initialData);
   const router = useRouter();
 
@@ -37,6 +41,30 @@ export function DashboardClient({ initialData, role, userName }: DashboardClient
     router.refresh();
   }
 
+  function handleDownload() {
+    try {
+      setIsDownloading(true);
+      const buffer = generateEquipmentExcel(items);
+      const blob = new Blob([buffer as Uint8Array<ArrayBuffer>], {
+        type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+      });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      const today = new Date().toISOString().split("T")[0];
+      a.download = `MediaHub_Equipment_${today}.xlsx`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+    } catch (err) {
+      console.error("Export error:", err);
+      alert("Failed to generate Excel file.");
+    } finally {
+      setIsDownloading(false);
+    }
+  }
+
   return (
     <div className="px-4 py-4 md:px-6 md:py-8 w-full space-y-6">
       {/* Header */}
@@ -48,12 +76,36 @@ export function DashboardClient({ initialData, role, userName }: DashboardClient
           </h2>
           <p className="text-muted-foreground text-sm">{items.length} items total</p>
         </div>
-        {role === "admin" && (
-          <Button onClick={() => setAddOpen(true)} className="sm:w-auto">
-            <Plus className="h-4 w-4 mr-1.5" />
-            Add Equipment
+        <div className="flex flex-wrap items-center gap-2">
+          <Button
+            variant="outline"
+            onClick={handleDownload}
+            disabled={isDownloading || items.length === 0}
+            className="sm:w-auto gap-1.5"
+            title="Download equipment data as Excel"
+          >
+            <Download className="h-4 w-4" />
+            Download
           </Button>
-        )}
+
+          {role === "admin" && (
+            <>
+              <Button
+                variant="outline"
+                onClick={() => setUploadOpen(true)}
+                className="sm:w-auto gap-1.5"
+                title="Upload equipment Excel spreadsheet"
+              >
+                <Upload className="h-4 w-4" />
+                Upload
+              </Button>
+              <Button onClick={() => setAddOpen(true)} className="sm:w-auto gap-1.5">
+                <Plus className="h-4 w-4" />
+                Add Equipment
+              </Button>
+            </>
+          )}
+        </div>
       </div>
 
       <EquipmentGrid
@@ -64,11 +116,19 @@ export function DashboardClient({ initialData, role, userName }: DashboardClient
       />
 
       {role === "admin" && (
-        <AddEquipmentModal
-          open={addOpen}
-          onClose={() => setAddOpen(false)}
-          onCreated={refresh}
-        />
+        <>
+          <AddEquipmentModal
+            open={addOpen}
+            onClose={() => setAddOpen(false)}
+            onCreated={refresh}
+          />
+          <UploadEquipmentModal
+            open={uploadOpen}
+            onClose={() => setUploadOpen(false)}
+            onSuccess={refresh}
+            existingEquipment={items}
+          />
+        </>
       )}
     </div>
   );
