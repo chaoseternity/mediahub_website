@@ -80,3 +80,19 @@ export function sortEquipmentById(a: { serial_number: string | null }, b: { seri
 
   return (a.serial_number || "").localeCompare(b.serial_number || "", undefined, { numeric: true, sensitivity: "base" });
 }
+
+/**
+ * Calculates adaptive bar width (module width in px) for Code 128
+ * so barcodes of varying character lengths maintain a consistent overall width.
+ * Target barcode width: ~240-280px.
+ */
+export function getAdaptiveBarcodeWidth(text: string, targetWidthPx: number = 260): number {
+  const clean = text ? text.trim() : "";
+  const len = clean.length || 1;
+  // Code128 module count is approximately (len + 3) * 11 + 2
+  const estimatedModules = (len + 3) * 11 + 2;
+  const calculated = targetWidthPx / estimatedModules;
+  // Clamp between 1.0 (minimum for clean scanning) and 3.0 (so short codes don't look overly thick)
+  return Math.max(1.0, Math.min(3.0, Math.round(calculated * 10) / 10));
+}
+

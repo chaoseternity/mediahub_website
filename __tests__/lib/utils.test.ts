@@ -1,4 +1,4 @@
-import { parseEquipmentId, sortEquipmentById } from "@/lib/utils";
+import { parseEquipmentId, sortEquipmentById, getAdaptiveBarcodeWidth } from "@/lib/utils";
 
 describe("parseEquipmentId", () => {
   test("handles empty or null ID", () => {
@@ -80,5 +80,30 @@ describe("sortEquipmentById", () => {
       "CAM-SONY-A7-10",
       "CAM-SONY-FX3-1",
     ]);
+  });
+});
+
+describe("getAdaptiveBarcodeWidth", () => {
+  test("returns thicker bar width for short codes", () => {
+    const widthShort = getAdaptiveBarcodeWidth("SD-01", 260); // 5 chars
+    expect(widthShort).toBeGreaterThanOrEqual(2.5);
+    expect(widthShort).toBeLessThanOrEqual(3.0);
+  });
+
+  test("returns moderate bar width for 4 sub-ID codes", () => {
+    const widthMed = getAdaptiveBarcodeWidth("A-B-C-1", 260); // 7 chars
+    expect(widthMed).toBeGreaterThanOrEqual(2.0);
+    expect(widthMed).toBeLessThanOrEqual(2.6);
+  });
+
+  test("returns narrower bar width for long codes to keep total size consistent", () => {
+    const widthLong = getAdaptiveBarcodeWidth("CAM-SONY-A7-01", 260); // 14 chars
+    expect(widthLong).toBeLessThan(2.0);
+    expect(widthLong).toBeGreaterThanOrEqual(1.0);
+  });
+
+  test("clamps to minimum 1.0 for extremely long text", () => {
+    const widthUltraLong = getAdaptiveBarcodeWidth("VERY-LONG-EQUIPMENT-IDENTIFIER-STRING-HERE", 260);
+    expect(widthUltraLong).toBe(1.0);
   });
 });

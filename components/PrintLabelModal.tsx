@@ -12,7 +12,7 @@ import {
   DialogFooter,
 } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
-import { parseEquipmentId } from "@/lib/utils";
+import { parseEquipmentId, getAdaptiveBarcodeWidth } from "@/lib/utils";
 import type { Equipment, EquipmentDetail } from "@/lib/types";
 
 interface PrintLabelModalProps {
@@ -27,7 +27,7 @@ export function PrintLabelModal({ equipment, open, onClose }: PrintLabelModalPro
   const [barcodeError, setBarcodeError] = useState<string | null>(null);
 
   const codeValue =
-    equipment?.serial_number?.trim() || equipment?.name?.trim() || "EQUIPMENT";
+    equipment?.serial_number?.trim() || (equipment?.id ? `EQ-${equipment.id}` : equipment?.name?.trim() || "EQUIPMENT");
   const parsedId = equipment ? parseEquipmentId(equipment.serial_number) : null;
 
   useEffect(() => {
@@ -47,13 +47,14 @@ export function PrintLabelModal({ equipment, open, onClose }: PrintLabelModalPro
         console.error("Failed to generate QR code", err);
       });
 
-    // 2. Generate Barcode (Code128) via Offscreen Canvas to Data URL
+    // 2. Generate Barcode (Code128) via Offscreen Canvas to Data URL with Adaptive Bar Width
     try {
       setBarcodeError(null);
+      const adaptiveWidth = getAdaptiveBarcodeWidth(codeValue, 240);
       const canvas = document.createElement("canvas");
       JsBarcode(canvas, codeValue, {
         format: "CODE128",
-        width: 2,
+        width: adaptiveWidth,
         height: 50,
         displayValue: true,
         fontSize: 13,
@@ -69,10 +70,11 @@ export function PrintLabelModal({ equipment, open, onClose }: PrintLabelModalPro
       // Fallback: sanitized alphanumeric codeValue
       try {
         const fallbackValue = codeValue.replace(/[^A-Za-z0-9_-]/g, "") || "EQUIPMENT";
+        const fallbackAdaptiveWidth = getAdaptiveBarcodeWidth(fallbackValue, 240);
         const canvas = document.createElement("canvas");
         JsBarcode(canvas, fallbackValue, {
           format: "CODE128",
-          width: 2,
+          width: fallbackAdaptiveWidth,
           height: 50,
           displayValue: true,
           fontSize: 13,

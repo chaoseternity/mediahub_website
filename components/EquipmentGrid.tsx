@@ -12,7 +12,7 @@ import {
 } from "@/components/ui/select";
 import { EquipmentCard } from "@/components/EquipmentCard";
 import { EquipmentModal } from "@/components/EquipmentModal";
-import { parseEquipmentId, sortEquipmentById } from "@/lib/utils";
+import { parseEquipmentId, sortEquipmentById, getAdaptiveBarcodeWidth } from "@/lib/utils";
 import type { Equipment, Role } from "@/lib/types";
 import { Barcode, Loader2 } from "lucide-react";
 import JSZip from "jszip";
@@ -191,17 +191,19 @@ export function EquipmentGrid({ initialData, role, onAddNew: _onAddNew, userName
 
       // Generate a barcode PNG for each equipment item
       for (const eq of items) {
-        const codeValue = eq.serial_number?.trim() || eq.name?.trim() || `EQ-${eq.id}`;
+        const codeValue = eq.serial_number?.trim() || (eq.id ? `EQ-${eq.id}` : eq.name?.trim() || "EQUIPMENT");
         // Sanitize filename
-        const safeName = (eq.serial_number?.trim() || eq.name?.trim() || `equipment_${eq.id}`)
+        const safeName = (eq.serial_number?.trim() || `equipment_${eq.id}`)
           .replace(/[/\\?%*:|"<>]/g, "-");
         const filename = `${safeName}.png`;
+
+        const adaptiveWidth = getAdaptiveBarcodeWidth(codeValue, 280);
 
         const canvas = document.createElement("canvas");
         try {
           JsBarcode(canvas, codeValue, {
             format: "CODE128",
-            width: 2,
+            width: adaptiveWidth,
             height: 60,
             displayValue: true,
             fontSize: 14,
@@ -213,10 +215,11 @@ export function EquipmentGrid({ initialData, role, onAddNew: _onAddNew, userName
           });
         } catch {
           // Fallback if codeValue contains special characters not supported by CODE128
-          const fallbackVal = codeValue.replace(/[^a-zA-Z0-9_-]/g, "");
-          JsBarcode(canvas, fallbackVal || `EQ-${eq.id}`, {
+          const fallbackVal = codeValue.replace(/[^a-zA-Z0-9_-]/g, "") || `EQ-${eq.id}`;
+          const fallbackAdaptiveWidth = getAdaptiveBarcodeWidth(fallbackVal, 280);
+          JsBarcode(canvas, fallbackVal, {
             format: "CODE128",
-            width: 2,
+            width: fallbackAdaptiveWidth,
             height: 60,
             displayValue: true,
             fontSize: 14,
