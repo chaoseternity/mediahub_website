@@ -33,12 +33,12 @@ const photoSdIds  = Array.from({ length: 15 }, (_, i) => i + 17);
 // Equipment definitions (same data as before)
 // ---------------------------------------------------------------------------
 const laptops = [
-  { name: "Kamera",       description: "Primary filming laptop used for on-site recording and live preview",      serial: "LP-KAM-001", date: "2022-08-10", cond: "Good", status: "Available"          },
-  { name: "DJ",           description: "Used for DJ sets, music playback and live sound mixing",                   serial: "LP-DJ-001",  date: "2021-11-05", cond: "Good", status: "Checked Out"       },
-  { name: "Clapper",      description: "Used for production management, scripts and clapperboard software",        serial: "LP-CLA-001", date: "2023-01-20", cond: "Good", status: "Available"          },
-  { name: "Bulbasaur",    description: "General-purpose laptop for presentations and event support",               serial: "LP-BUL-001", date: "2020-06-15", cond: "Fair", status: "Checked Out"       },
-  { name: "Middle Earth", description: "High-performance editing laptop for post-production video work",           serial: "LP-MID-001", date: "2023-09-01", cond: "New",  status: "Available"          },
-  { name: "Strawberry",   description: "Backup laptop; used when primary units are unavailable",                   serial: "LP-STR-001", date: "2019-03-22", cond: "Fair", status: "Under Maintenance"  },
+  { name: "Kamera",       description: "Primary filming laptop used for on-site recording and live preview",      serial: "LP-KAM-001", date: "2022-08-10", cond: "Working",  status: "Available"          },
+  { name: "DJ",           description: "Used for DJ sets, music playback and live sound mixing",                   serial: "LP-DJ-001",  date: "2021-11-05", cond: "Working",  status: "Checked Out"       },
+  { name: "Clapper",      description: "Used for production management, scripts and clapperboard software",        serial: "LP-CLA-001", date: "2023-01-20", cond: "Working",  status: "Available"          },
+  { name: "Bulbasaur",    description: "General-purpose laptop for presentations and event support",               serial: "LP-BUL-001", date: "2020-06-15", cond: "Impaired", status: "Checked Out"       },
+  { name: "Middle Earth", description: "High-performance editing laptop for post-production video work",           serial: "LP-MID-001", date: "2023-09-01", cond: "Working",  status: "Available"          },
+  { name: "Strawberry",   description: "Backup laptop; used when primary units are unavailable",                   serial: "LP-STR-001", date: "2019-03-22", cond: "Impaired", status: "Under Maintenance"  },
 ];
 
 const videoSdCards = Array.from({ length: 10 }, (_, i) => ({
@@ -46,7 +46,7 @@ const videoSdCards = Array.from({ length: 10 }, (_, i) => ({
   description: "128 GB UHS-I U3 V30 card rated for 4K video recording",
   serial: `SD-V-${String(i + 1).padStart(2, "0")}`,
   date: "2023-05-01",
-  cond: i < 7 ? "Good" : "Fair",
+  cond: i < 7 ? "Working" : "Impaired",
   status: i === 2 || i === 5 ? "Checked Out" : "Available",
 }));
 
@@ -55,7 +55,7 @@ const photoSdCards = Array.from({ length: 15 }, (_, i) => ({
   description: "64 GB UHS-I U3 card for photography use",
   serial: `SD-P-${String(i + 1).padStart(2, "0")}`,
   date: "2022-11-15",
-  cond: i < 10 ? "Good" : "Fair",
+  cond: i < 10 ? "Working" : "Impaired",
   status: i === 0 || i === 3 || i === 7 ? "Checked Out" : "Available",
 }));
 

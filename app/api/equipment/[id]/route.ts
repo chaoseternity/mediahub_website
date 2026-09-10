@@ -8,7 +8,7 @@ const UpdateEquipmentSchema = z.object({
   tags: z.array(z.string().min(1)).optional(),
   description: z.string().optional(),
   serial_number: z.string().optional(),
-  condition: z.enum(["New", "Good", "Fair", "Poor"]).optional(),
+  condition: z.enum(["Working", "Impaired", "In repairs", "Broken"]).optional(),
   location: z.string().min(1).optional(),
   status: z
     .enum(["Available", "Checked Out", "In Event", "Under Maintenance", "Retired"])

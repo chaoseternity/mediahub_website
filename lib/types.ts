@@ -1,6 +1,6 @@
 export type Role = "admin" | "verified" | "viewer";
 
-export type Condition = "New" | "Good" | "Fair" | "Poor";
+export type Condition = "Working" | "Impaired" | "In repairs" | "Broken";
 
 export type EquipmentStatus =
   | "Available"

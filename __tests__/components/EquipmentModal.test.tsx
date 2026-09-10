@@ -22,7 +22,7 @@ const mockAvailable: EquipmentDetail = {
   tags: ["A/V"],
   description: null,
   serial_number: "SN-001",
-  condition: "Good",
+  condition: "Working",
   location: "Room 1",
   status: "Available",
   created_at: "2024-01-01T00:00:00Z",

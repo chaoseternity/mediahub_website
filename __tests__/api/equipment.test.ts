@@ -30,7 +30,7 @@ function insertEquipment(
     tags: ["Laptop"],
     description: null,
     serial_number: null,
-    condition: "Good" as Condition,
+    condition: "Working" as Condition,
     location: "AV Storage Room",
     status: "Available" as EquipmentStatus,
     ...overrides,
@@ -97,7 +97,7 @@ describe("Equipment DB helpers (in-memory SQLite) — AV CCA", () => {
     const id = insertEquipment(db, {
       name: "SD-V-1",
       tags: ["SD Card (Video)"],
-      condition: "New",
+      condition: "Working",
       location: "AV Storage Room – SD Card Wallet",
       status: "Available",
     });
@@ -105,7 +105,7 @@ describe("Equipment DB helpers (in-memory SQLite) — AV CCA", () => {
     expect(row!.name).toBe("SD-V-1");
     const tagRow = db.prepare("SELECT t.name FROM tags t JOIN equipment_tags et ON et.tag_id = t.id WHERE et.equipment_id = ?").get(id) as { name: string } | undefined;
     expect(tagRow?.name).toBe("SD Card (Video)");
-    expect(row!.condition).toBe("New");
+    expect(row!.condition).toBe("Working");
   });
 
   test("creates a photo SD card item", () => {
@@ -155,11 +155,11 @@ describe("Equipment DB helpers (in-memory SQLite) — AV CCA", () => {
     expect(row!.status).toBe("Under Maintenance");
   });
 
-  test("updates SD card condition to Fair after wear", () => {
-    const id = insertEquipment(db, { name: "SD-P-10", tags: ["SD Card (Photo)"], condition: "Good" });
-    db.prepare("UPDATE equipment SET condition = 'Fair', updated_at = datetime('now') WHERE id = ?").run(id);
+  test("updates SD card condition to Impaired after wear", () => {
+    const id = insertEquipment(db, { name: "SD-P-10", tags: ["SD Card (Photo)"], condition: "Working" });
+    db.prepare("UPDATE equipment SET condition = 'Impaired', updated_at = datetime('now') WHERE id = ?").run(id);
     const row = getEquipmentRow(db, id);
-    expect(row!.condition).toBe("Fair");
+    expect(row!.condition).toBe("Impaired");
   });
 
   // ── DELETE ─────────────────────────────────────────────────────────────────────
@@ -197,7 +197,7 @@ describe("Equipment DB helpers (in-memory SQLite) — AV CCA", () => {
   });
 
   test("retires a damaged SD card", () => {
-    const id = insertEquipment(db, { name: "SD-V-8", tags: ["SD Card (Video)"], condition: "Poor" });
+    const id = insertEquipment(db, { name: "SD-V-8", tags: ["SD Card (Video)"], condition: "Broken" });
     db.prepare("UPDATE equipment SET status = 'Retired', updated_at = datetime('now') WHERE id = ?").run(id);
     const row = getEquipmentRow(db, id);
     expect(row!.status).toBe("Retired");

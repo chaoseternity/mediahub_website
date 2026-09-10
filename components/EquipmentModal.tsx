@@ -44,7 +44,7 @@ const EditSchema = z.object({
   tags: z.array(z.string().min(1)).min(1, "Please select at least one tag"),
   description: z.string().optional(),
   serial_number: z.string().optional(),
-  condition: z.enum(["New", "Good", "Fair", "Poor"]),
+  condition: z.enum(["Working", "Impaired", "In repairs", "Broken"]),
   location: z.string().min(1),
   status: z.enum(["Available", "Checked Out", "In Event", "In Event (Rehearsal)", "Under Maintenance", "Retired"]),
 });
@@ -234,13 +234,16 @@ export function EquipmentModal({
   }
 
   function renderSelectField(
-    name: "condition" | "status",
+    name: "condition" | "status" | "location",
     label: string,
-    options: string[]
+    options: string[],
+    span?: "2"
   ) {
     const val = watched[name];
+    const effectiveOptions =
+      val && !options.includes(val) ? [val, ...options] : options;
     return (
-      <div className="space-y-0.5">
+      <div className={`space-y-0.5 ${span === "2" ? "col-span-2" : ""}`}>
         <Label className="text-xs text-muted-foreground font-medium">{label}</Label>
         {isAdmin ? (
           <Select
@@ -250,10 +253,10 @@ export function EquipmentModal({
             }
           >
             <SelectTrigger className="border-transparent bg-transparent hover:bg-accent hover:border-border shadow-none">
-              <SelectValue />
+              <SelectValue placeholder={`Select ${label.toLowerCase()}`} />
             </SelectTrigger>
             <SelectContent>
-              {options.map((o) => (
+              {effectiveOptions.map((o) => (
                 <SelectItem key={o} value={o}>
                   {o}
                 </SelectItem>
@@ -385,12 +388,16 @@ export function EquipmentModal({
                     {renderField("description", "Description", "text", "2")}
                     {renderField("serial_number", "Equipment ID")}
                     {renderSelectField("condition", "Condition", [
-                      "New",
-                      "Good",
-                      "Fair",
-                      "Poor",
+                      "Working",
+                      "Impaired",
+                      "In repairs",
+                      "Broken",
                     ])}
-                    {renderField("location", "Home Location", "text", "2")}
+                    {renderSelectField("location", "Home Location", [
+                      "Media Room",
+                      "Showroom",
+                      "Control Room",
+                    ])}
                     {renderSelectField("status", "Status", [
                       "Available",
                       "Checked Out",

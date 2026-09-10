@@ -15,7 +15,7 @@ function seedEquipment(db: Database.Database, name = "Kamera", tag = "Laptop", s
   const id = db
     .prepare(
       `INSERT INTO equipment (name, condition, location, status)
-       VALUES (?, 'Good', 'AV Storage Room', ?)`
+       VALUES (?, 'Working', 'AV Storage Room', ?)`
     )
     .run(name, status).lastInsertRowid as number;
   db.prepare(

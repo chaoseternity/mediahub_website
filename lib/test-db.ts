@@ -34,8 +34,8 @@ export const SCHEMA_SQL = `
     name          TEXT    NOT NULL,
     description   TEXT,
     serial_number TEXT,
-    condition     TEXT    NOT NULL DEFAULT 'Good'
-                  CHECK(condition IN ('New','Good','Fair','Poor')),
+    condition     TEXT    NOT NULL DEFAULT 'Working'
+                  CHECK(condition IN ('Working','Impaired','In repairs','Broken')),
     quantity      INTEGER NOT NULL DEFAULT 1,
     location      TEXT    NOT NULL,
     status        TEXT    NOT NULL DEFAULT 'Available'

@@ -39,7 +39,7 @@ function seedEquipment(
   const id = db
     .prepare(
       `INSERT INTO equipment (name, serial_number, condition, location, status)
-       VALUES (?, ?, 'Good', 'Media Studio', ?)`
+       VALUES (?, ?, 'Working', 'Media Studio', ?)`
     )
     .run(name, serial, status).lastInsertRowid as number;
   return id;

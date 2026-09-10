@@ -48,7 +48,7 @@ export async function ensureSchema(): Promise<void> {
           name TEXT NOT NULL,
           description TEXT,
           serial_number TEXT,
-          condition TEXT NOT NULL DEFAULT 'Good' CHECK(condition IN ('New','Good','Fair','Poor')),
+          condition TEXT NOT NULL DEFAULT 'Working' CHECK(condition IN ('Working','Impaired','In repairs','Broken')),
           quantity INT NOT NULL DEFAULT 1,
           location TEXT NOT NULL,
           status TEXT NOT NULL DEFAULT 'Available' CHECK(status IN ('Available','Checked Out','In Event','In Event (Rehearsal)','Under Maintenance','Retired')),
@@ -259,6 +259,30 @@ export async function ensureSchema(): Promise<void> {
     await runSafe(
       () => sql`ALTER TABLE equipment DROP COLUMN IF EXISTS purchase_date;`,
       "ALTER equipment drop purchase_date"
+    );
+    await runSafe(
+      () => sql`UPDATE equipment SET condition = 'Working' WHERE condition IN ('New', 'Good');`,
+      "UPDATE equipment condition New/Good -> Working"
+    );
+    await runSafe(
+      () => sql`UPDATE equipment SET condition = 'Impaired' WHERE condition = 'Fair';`,
+      "UPDATE equipment condition Fair -> Impaired"
+    );
+    await runSafe(
+      () => sql`UPDATE equipment SET condition = 'Broken' WHERE condition = 'Poor';`,
+      "UPDATE equipment condition Poor -> Broken"
+    );
+    await runSafe(
+      () => sql`ALTER TABLE equipment DROP CONSTRAINT IF EXISTS equipment_condition_check;`,
+      "DROP CONSTRAINT equipment_condition_check"
+    );
+    await runSafe(
+      () => sql`ALTER TABLE equipment ADD CONSTRAINT equipment_condition_check CHECK(condition IN ('Working', 'Impaired', 'In repairs', 'Broken'));`,
+      "ADD CONSTRAINT equipment_condition_check"
+    );
+    await runSafe(
+      () => sql`ALTER TABLE equipment ALTER COLUMN condition SET DEFAULT 'Working';`,
+      "ALTER COLUMN condition SET DEFAULT Working"
     );
 
     initialized = true;

@@ -129,8 +129,8 @@ describe("Smoke — lib/db.ts (Vercel Postgres mock)", () => {
 
     test("returns all created equipment", async () => {
       await createTag("Laptop");
-      await createEquipment({ name: "A", tags: ["Laptop"], condition: "Good", location: "L", status: "Available" });
-      await createEquipment({ name: "B", tags: [], condition: "New", location: "L", status: "Available" });
+      await createEquipment({ name: "A", tags: ["Laptop"], condition: "Working", location: "L", status: "Available" });
+      await createEquipment({ name: "B", tags: [], condition: "Working", location: "L", status: "Available" });
       const all = await getAllEquipment();
       expect(all).toHaveLength(2);
       expect(all.map((e) => e.name).sort()).toEqual(["A", "B"]);
@@ -144,7 +144,7 @@ describe("Smoke — lib/db.ts (Vercel Postgres mock)", () => {
       const eq = await createEquipment({
         name: "Camera",
         tags: [],
-        condition: "New",
+        condition: "Working",
         location: "Studio",
         status: "Available",
       });
@@ -164,7 +164,7 @@ describe("Smoke — lib/db.ts (Vercel Postgres mock)", () => {
       const photoIc = await upsertUser({ name: "Photo Bob", email: "bob@test.com", google_id: "g3", image: null, provider: "google" });
       const crewMember = await upsertUser({ name: "Crew Charlie", email: "charlie@test.com", google_id: "g4", image: null, provider: "google" });
 
-      const eq = await createEquipment({ name: "DSLR Camera", tags: [], condition: "New", location: "Cabinet", status: "Available" });
+      const eq = await createEquipment({ name: "DSLR Camera", tags: [], condition: "Working", location: "Cabinet", status: "Available" });
 
       const now = new Date();
       const startTime = new Date(now.getTime() - 1000 * 60 * 30).toISOString();
