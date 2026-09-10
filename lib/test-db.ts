@@ -35,11 +35,11 @@ export const SCHEMA_SQL = `
     description   TEXT,
     serial_number TEXT,
     condition     TEXT    NOT NULL DEFAULT 'Working'
-                  CHECK(condition IN ('Working','Impaired','Broken')),
+                  CHECK(condition IN ('Working','Impaired','Broken','Missing')),
     quantity      INTEGER NOT NULL DEFAULT 1,
     location      TEXT    NOT NULL,
     status        TEXT    NOT NULL DEFAULT 'Available'
-                  CHECK(status IN ('Available','Checked Out','In Event','In Event (Rehearsal)','In Repairs')),
+                  CHECK(status IN ('Available','Checked Out','In Event','In Event (Rehearsal)','Unavailable (In Repairs)','Unavailable (Broken)','Unavailable (Missing)')),
     created_at    TEXT    NOT NULL DEFAULT (datetime('now')),
     updated_at    TEXT    NOT NULL DEFAULT (datetime('now'))
   );

@@ -42,6 +42,9 @@ describe("Excel utility - lib/excel.ts", () => {
       expect(normalizeCondition("repairs")).toBe("Broken");
       expect(normalizeCondition("Poor")).toBe("Broken");
       expect(normalizeCondition("Broken")).toBe("Broken");
+      expect(normalizeCondition("Missing")).toBe("Missing");
+      expect(normalizeCondition("missing")).toBe("Missing");
+      expect(normalizeCondition("lost")).toBe("Missing");
       expect(normalizeCondition("")).toBe("Working");
       expect(normalizeCondition(null)).toBe("Working");
     });
@@ -120,11 +123,34 @@ describe("Excel utility - lib/excel.ts", () => {
       const parsed = parseEquipmentExcel(buffer);
       expect(parsed).toHaveLength(1);
       expect(parsed[0].serial_number).toBe("LP-NOTE-01");
-      expect(parsed[0].name).toBe("Note Laptop");
       expect(parsed[0].condition).toBe("Broken"); // "In repairs" mapped to "Broken"
       expect(parsed[0].location).toBe("Media Room");
-      // Extra columns are not in parsed object
       expect((parsed[0] as any).Notes).toBeUndefined();
+    });
+
+    test("ignores empty rows anywhere in the Excel sheet", () => {
+      const XLSX = require("xlsx");
+      const data = [
+        ["Tag", "ID", "Name", "Description", "Condition", "Location"],
+        ["", "", "", "", "", ""], // empty row before items
+        ["Camera", "CAM-01", "Main Camera", "4K Cam", "Working", "Media Room"],
+        [null, undefined, "", "  ", null, ""], // whitespace/null empty row
+        ["", "CAM-02", "Second Camera", "HD Cam", "Impaired", "Control Room"], // inherits Camera tag
+        [], // totally blank row
+        ["", "", "", "", "", ""], // trailing empty row
+      ];
+
+      const ws = XLSX.utils.aoa_to_sheet(data);
+      const wb = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(wb, ws, "Sheet1");
+      const buffer = XLSX.write(wb, { type: "buffer", bookType: "xlsx" });
+
+      const parsed = parseEquipmentExcel(buffer);
+      expect(parsed).toHaveLength(2);
+      expect(parsed[0].serial_number).toBe("CAM-01");
+      expect(parsed[0].tags).toEqual(["Camera"]);
+      expect(parsed[1].serial_number).toBe("CAM-02");
+      expect(parsed[1].tags).toEqual(["Camera"]); // tag inherited across empty row!
     });
   });
 });

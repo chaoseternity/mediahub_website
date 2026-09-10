@@ -8,10 +8,10 @@ const UpdateEquipmentSchema = z.object({
   tags: z.array(z.string().min(1)).optional(),
   description: z.string().optional(),
   serial_number: z.string().optional(),
-  condition: z.enum(["Working", "Impaired", "Broken"]).optional(),
+  condition: z.enum(["Working", "Impaired", "Broken", "Missing"]).optional(),
   location: z.string().min(1).optional(),
   status: z
-    .enum(["Available", "Checked Out", "In Event", "In Event (Rehearsal)", "In Repairs"])
+    .enum(["Available", "Checked Out", "In Event", "In Event (Rehearsal)", "Unavailable (In Repairs)", "Unavailable (Broken)", "Unavailable (Missing)"])
     .optional(),
 });
 

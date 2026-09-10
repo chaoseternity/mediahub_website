@@ -318,9 +318,21 @@ export async function createEquipment(params: {
   status: EquipmentStatus;
 }): Promise<Equipment> {
   await ensureSchema();
+  let status = params.status;
+  let condition = params.condition;
+
+  if (condition === "Missing" || status === "Unavailable (Missing)") {
+    condition = "Missing";
+    status = "Unavailable (Missing)";
+  } else if (condition === "Broken") {
+    status = "Unavailable (Broken)";
+  } else if (status === "Unavailable (In Repairs)" && condition === "Working") {
+    status = "Available";
+  }
+
   const { rows } = await sql<Equipment>`
     INSERT INTO equipment (name, description, serial_number, condition, location, status)
-    VALUES (${params.name}, ${params.description ?? null}, ${params.serial_number ?? null}, ${params.condition}, ${params.location}, ${params.status})
+    VALUES (${params.name}, ${params.description ?? null}, ${params.serial_number ?? null}, ${condition}, ${params.location}, ${status})
     RETURNING *
   `;
 
@@ -358,12 +370,42 @@ export async function updateEquipment(
   const { tags, ...scalars } = params;
 
   if (Object.keys(scalars).length > 0) {
+    let nextCondition = scalars.condition ?? existing.condition;
+    let nextStatus = scalars.status ?? existing.status;
+
+    // Condition / Status coupling for Missing
+    const isMissingCond = (scalars.condition as string) === "Missing";
+    const isMissingStatus = (scalars.status as string) === "Unavailable (Missing)";
+    const wasMissingCond = (existing.condition as string) === "Missing";
+    const wasMissingStatus = (existing.status as string) === "Unavailable (Missing)";
+
+    if (isMissingCond || isMissingStatus) {
+      nextCondition = "Missing";
+      nextStatus = "Unavailable (Missing)";
+    } else if (wasMissingCond && scalars.condition !== undefined && !isMissingCond) {
+      // If moving away from Missing condition and status wasn't explicitly provided, default status away from Unavailable (Missing)
+      if (scalars.status === undefined || isMissingStatus) {
+        nextStatus = "Available";
+      }
+    } else if (wasMissingStatus && scalars.status !== undefined && !isMissingStatus) {
+      // If moving away from Unavailable (Missing) status and condition wasn't explicitly provided, default condition to Working
+      if (scalars.condition === undefined || isMissingCond) {
+        nextCondition = "Working";
+      }
+    }
+
+    if (nextCondition === "Broken") {
+      nextStatus = "Unavailable (Broken)";
+    } else if (nextStatus === "Unavailable (In Repairs)" && nextCondition === "Working") {
+      nextStatus = "Available";
+    }
+
     if (scalars.name !== undefined) await sql`UPDATE equipment SET name = ${scalars.name} WHERE id = ${id}`;
     if (scalars.description !== undefined) await sql`UPDATE equipment SET description = ${scalars.description} WHERE id = ${id}`;
     if (scalars.serial_number !== undefined) await sql`UPDATE equipment SET serial_number = ${scalars.serial_number} WHERE id = ${id}`;
-    if (scalars.condition !== undefined) await sql`UPDATE equipment SET condition = ${scalars.condition} WHERE id = ${id}`;
+    await sql`UPDATE equipment SET condition = ${nextCondition} WHERE id = ${id}`;
     if (scalars.location !== undefined) await sql`UPDATE equipment SET location = ${scalars.location} WHERE id = ${id}`;
-    if (scalars.status !== undefined) await sql`UPDATE equipment SET status = ${scalars.status} WHERE id = ${id}`;
+    await sql`UPDATE equipment SET status = ${nextStatus} WHERE id = ${id}`;
     await sql`UPDATE equipment SET updated_at = CURRENT_TIMESTAMP WHERE id = ${id}`;
   }
 
@@ -424,17 +466,43 @@ export async function batchUpsertEquipment(items: {
       }
 
       if (existingId) {
-        // Update existing equipment: preserve status, update other details
-        await sql`
-          UPDATE equipment 
-          SET name = ${item.name},
-              description = ${item.description ?? null},
-              serial_number = ${item.serial_number ?? null},
-              condition = ${item.condition},
-              location = ${item.location},
-              updated_at = CURRENT_TIMESTAMP
-          WHERE id = ${existingId}
-        `;
+        // Update existing equipment: update status if Broken or Missing, otherwise preserve
+        if (item.condition === "Missing") {
+          await sql`
+            UPDATE equipment 
+            SET name = ${item.name},
+                description = ${item.description ?? null},
+                serial_number = ${item.serial_number ?? null},
+                condition = ${item.condition},
+                location = ${item.location},
+                status = 'Unavailable (Missing)',
+                updated_at = CURRENT_TIMESTAMP
+            WHERE id = ${existingId}
+          `;
+        } else if (item.condition === "Broken") {
+          await sql`
+            UPDATE equipment 
+            SET name = ${item.name},
+                description = ${item.description ?? null},
+                serial_number = ${item.serial_number ?? null},
+                condition = ${item.condition},
+                location = ${item.location},
+                status = 'Unavailable (Broken)',
+                updated_at = CURRENT_TIMESTAMP
+            WHERE id = ${existingId}
+          `;
+        } else {
+          await sql`
+            UPDATE equipment 
+            SET name = ${item.name},
+                description = ${item.description ?? null},
+                serial_number = ${item.serial_number ?? null},
+                condition = ${item.condition},
+                location = ${item.location},
+                updated_at = CURRENT_TIMESTAMP
+            WHERE id = ${existingId}
+          `;
+        }
 
         // Update tags
         await sql`DELETE FROM equipment_tags WHERE equipment_id = ${existingId}`;
@@ -449,10 +517,17 @@ export async function batchUpsertEquipment(items: {
         }
         updatedCount++;
       } else {
-        // Insert new equipment: status is always 'Available'
+        // Insert new equipment
+        let initialStatus: EquipmentStatus = "Available";
+        if (item.condition === "Missing") {
+          initialStatus = "Unavailable (Missing)";
+        } else if (item.condition === "Broken") {
+          initialStatus = "Unavailable (Broken)";
+        }
+
         const { rows } = await sql<Equipment>`
           INSERT INTO equipment (name, description, serial_number, condition, location, status)
-          VALUES (${item.name}, ${item.description ?? null}, ${item.serial_number ?? null}, ${item.condition}, ${item.location}, 'Available')
+          VALUES (${item.name}, ${item.description ?? null}, ${item.serial_number ?? null}, ${item.condition}, ${item.location}, ${initialStatus})
           RETURNING *
         `;
         const newId = rows[0].id;

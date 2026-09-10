@@ -25,7 +25,9 @@ const statusVariant: Record<
   "Checked Out": "secondary",
   "In Event": "secondary",
   "In Event (Rehearsal)": "secondary",
-  "In Repairs": "outline",
+  "Unavailable (In Repairs)": "outline",
+  "Unavailable (Broken)": "destructive",
+  "Unavailable (Missing)": "destructive",
 };
 
 const statusColour: Record<Equipment["status"], string> = {
@@ -33,7 +35,9 @@ const statusColour: Record<Equipment["status"], string> = {
   "Checked Out": "bg-yellow-100 text-yellow-800 border-yellow-200",
   "In Event": "bg-purple-100 text-purple-800 border-purple-200 dark:bg-purple-900/40 dark:text-purple-300",
   "In Event (Rehearsal)": "bg-purple-200 text-purple-900 border-purple-300 dark:bg-purple-950 dark:text-purple-200",
-  "In Repairs": "bg-blue-100 text-blue-800 border-blue-200",
+  "Unavailable (In Repairs)": "bg-blue-100 text-blue-800 border-blue-200",
+  "Unavailable (Broken)": "bg-red-100 text-red-800 border-red-200",
+  "Unavailable (Missing)": "bg-orange-100 text-orange-800 border-orange-200 dark:bg-orange-950/50 dark:text-orange-300 dark:border-orange-800",
 };
 
 export function EquipmentCard({ equipment, onClick }: EquipmentCardProps) {

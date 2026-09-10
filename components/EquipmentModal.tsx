@@ -44,9 +44,9 @@ const EditSchema = z.object({
   tags: z.array(z.string().min(1)).min(1, "Please select at least one tag"),
   description: z.string().optional(),
   serial_number: z.string().optional(),
-  condition: z.enum(["Working", "Impaired", "Broken"]),
+  condition: z.enum(["Working", "Impaired", "Broken", "Missing"]),
   location: z.string().min(1),
-  status: z.enum(["Available", "Checked Out", "In Event", "In Event (Rehearsal)", "In Repairs"]),
+  status: z.enum(["Available", "Checked Out", "In Event", "In Event (Rehearsal)", "Unavailable (In Repairs)", "Unavailable (Broken)", "Unavailable (Missing)"]),
 });
 
 type EditFormValues = z.infer<typeof EditSchema>;
@@ -248,9 +248,30 @@ export function EquipmentModal({
         {isAdmin ? (
           <Select
             value={String(val ?? "")}
-            onValueChange={(v) =>
-              setValue(name, v as EditFormValues[typeof name], { shouldDirty: true })
-            }
+            disabled={name === "status" && (watched.condition === "Broken" || watched.condition === "Missing")}
+            onValueChange={(v) => {
+              if (name === "condition") {
+                setValue("condition", v as EditFormValues["condition"], { shouldDirty: true });
+                if (v === "Missing") {
+                  setValue("status", "Unavailable (Missing)", { shouldDirty: true });
+                } else if (v === "Broken") {
+                  setValue("status", "Unavailable (Broken)", { shouldDirty: true });
+                } else if (watched.status === "Unavailable (Broken)" || watched.status === "Unavailable (Missing)") {
+                  setValue("status", "Available", { shouldDirty: true });
+                } else if (watched.status === "Unavailable (In Repairs)" && v === "Working") {
+                  setValue("status", "Available", { shouldDirty: true });
+                }
+              } else if (name === "status") {
+                setValue("status", v as EditFormValues["status"], { shouldDirty: true });
+                if (v === "Unavailable (Missing)") {
+                  setValue("condition", "Missing", { shouldDirty: true });
+                } else if (watched.condition === "Missing") {
+                  setValue("condition", "Working", { shouldDirty: true });
+                }
+              } else {
+                setValue(name, v as EditFormValues[typeof name], { shouldDirty: true });
+              }
+            }}
           >
             <SelectTrigger className="border-transparent bg-transparent hover:bg-accent hover:border-border shadow-none">
               <SelectValue placeholder={`Select ${label.toLowerCase()}`} />
@@ -391,19 +412,24 @@ export function EquipmentModal({
                       "Working",
                       "Impaired",
                       "Broken",
+                      "Missing",
                     ])}
                     {renderSelectField("location", "Home Location", [
                       "Media Room",
                       "Showroom",
                       "Control Room",
                     ])}
-                    {renderSelectField("status", "Status", [
-                      "Available",
-                      "Checked Out",
-                      "In Event",
-                      "In Event (Rehearsal)",
-                      "In Repairs",
-                    ])}
+                    {renderSelectField(
+                      "status",
+                      "Status",
+                      watched.condition === "Missing"
+                        ? ["Unavailable (Missing)"]
+                        : watched.condition === "Broken"
+                        ? ["Unavailable (Broken)"]
+                        : watched.condition === "Impaired"
+                        ? ["Available", "Checked Out", "In Event", "In Event (Rehearsal)", "Unavailable (In Repairs)", "Unavailable (Missing)"]
+                        : ["Available", "Checked Out", "In Event", "In Event (Rehearsal)", "Unavailable (Missing)"]
+                    )}
                   </div>
                 </TabsContent>
 

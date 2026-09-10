@@ -14,6 +14,7 @@ export interface ParsedEquipmentItem {
 export function normalizeCondition(val: unknown): Condition {
   if (!val) return "Working";
   const s = String(val).trim().toLowerCase();
+  if (s === "missing" || s === "lost") return "Missing";
   if (s === "new" || s === "good" || s === "working") return "Working";
   if (s === "fair" || s === "impaired") return "Impaired";
   if (s === "in repairs" || s === "in repair" || s === "repair" || s === "repairs" || s === "poor" || s === "broken" || s === "damaged") {

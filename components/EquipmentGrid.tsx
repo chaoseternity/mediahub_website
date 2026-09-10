@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { Input } from "@/components/ui/input";
+import { Button } from "@/components/ui/button";
 import {
   Select,
   SelectContent,
@@ -13,6 +14,9 @@ import { EquipmentCard } from "@/components/EquipmentCard";
 import { EquipmentModal } from "@/components/EquipmentModal";
 import { parseEquipmentId, sortEquipmentById } from "@/lib/utils";
 import type { Equipment, Role } from "@/lib/types";
+import { Barcode, Loader2 } from "lucide-react";
+import JSZip from "jszip";
+import JsBarcode from "jsbarcode";
 
 interface EquipmentGridProps {
   initialData: Equipment[];
@@ -53,7 +57,15 @@ export function EquipmentGrid({ initialData, role, onAddNew: _onAddNew, userName
 
   // Derive filter options
   const tags = Array.from(new Set(items.flatMap((i) => i.tags))).sort();
-  const statuses = ["Available", "Checked Out", "In Event", "In Event (Rehearsal)", "In Repairs"];
+  const statuses = [
+    "Available",
+    "Checked Out",
+    "In Event",
+    "In Event (Rehearsal)",
+    "Unavailable (In Repairs)",
+    "Unavailable (Broken)",
+    "Unavailable (Missing)",
+  ];
 
   // 1. Derive available Variable 1 <a> options across all items
   const var1Options = Array.from(
@@ -145,6 +157,77 @@ export function EquipmentGrid({ initialData, role, onAddNew: _onAddNew, userName
   function handleVar3Change(v: string | null) {
     const val = v ?? ALL;
     setIdVar3(val);
+  }
+
+  const [isDownloadingBarcodes, setIsDownloadingBarcodes] = useState(false);
+
+  async function handleDownloadAllBarcodes() {
+    if (items.length === 0) return;
+    try {
+      setIsDownloadingBarcodes(true);
+      const zip = new JSZip();
+      const folder = zip.folder("barcodes");
+
+      // Generate a barcode PNG for each equipment item
+      for (const eq of items) {
+        const codeValue = eq.serial_number?.trim() || eq.name?.trim() || `EQ-${eq.id}`;
+        // Sanitize filename
+        const safeName = (eq.serial_number?.trim() || eq.name?.trim() || `equipment_${eq.id}`)
+          .replace(/[/\\?%*:|"<>]/g, "-");
+        const filename = `${safeName}.png`;
+
+        const canvas = document.createElement("canvas");
+        try {
+          JsBarcode(canvas, codeValue, {
+            format: "CODE128",
+            width: 2,
+            height: 60,
+            displayValue: true,
+            fontSize: 14,
+            font: "monospace",
+            textMargin: 4,
+            margin: 10,
+            background: "#ffffff",
+            lineColor: "#000000",
+          });
+        } catch {
+          // Fallback if codeValue contains special characters not supported by CODE128
+          const fallbackVal = codeValue.replace(/[^a-zA-Z0-9_-]/g, "");
+          JsBarcode(canvas, fallbackVal || `EQ-${eq.id}`, {
+            format: "CODE128",
+            width: 2,
+            height: 60,
+            displayValue: true,
+            fontSize: 14,
+            font: "monospace",
+            textMargin: 4,
+            margin: 10,
+            background: "#ffffff",
+            lineColor: "#000000",
+          });
+        }
+
+        const dataUrl = canvas.toDataURL("image/png");
+        const base64Data = dataUrl.replace(/^data:image\/png;base64,/, "");
+        folder?.file(filename, base64Data, { base64: true });
+      }
+
+      const content = await zip.generateAsync({ type: "blob" });
+      const url = URL.createObjectURL(content);
+      const a = document.createElement("a");
+      a.href = url;
+      const today = new Date().toISOString().split("T")[0];
+      a.download = `Equipment_Barcodes_${today}.zip`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+    } catch (err) {
+      console.error("Failed to generate and download barcodes zip:", err);
+      alert("Failed to generate barcodes. Please try again.");
+    } finally {
+      setIsDownloadingBarcodes(false);
+    }
   }
 
   return (
@@ -272,6 +355,28 @@ export function EquipmentGrid({ initialData, role, onAddNew: _onAddNew, userName
             <SelectItem value="status">Sort: Status</SelectItem>
           </SelectContent>
         </Select>
+
+        {/* Download All Barcodes button beside Sort */}
+        <Button
+          type="button"
+          variant="outline"
+          onClick={handleDownloadAllBarcodes}
+          disabled={isDownloadingBarcodes || items.length === 0}
+          title="Download all equipment barcodes as a ZIP file"
+          className="gap-1.5"
+        >
+          {isDownloadingBarcodes ? (
+            <>
+              <Loader2 className="h-4 w-4 animate-spin" />
+              <span>Exporting…</span>
+            </>
+          ) : (
+            <>
+              <Barcode className="h-4 w-4" />
+              <span>Download Barcodes</span>
+            </>
+          )}
+        </Button>
       </div>
 
       {/* Grid */}

@@ -50,14 +50,34 @@ describe("EquipmentCard", () => {
     expect(screen.getByText("Alice")).toBeInTheDocument();
   });
 
-  test("renders In Repairs status badge", () => {
+  test("renders Unavailable (In Repairs) status badge", () => {
     render(
       <EquipmentCard
-        equipment={{ ...baseEquipment, status: "In Repairs" }}
+        equipment={{ ...baseEquipment, status: "Unavailable (In Repairs)" }}
         onClick={jest.fn()}
       />
     );
-    expect(screen.getByTestId("status-badge")).toHaveTextContent("In Repairs");
+    expect(screen.getByTestId("status-badge")).toHaveTextContent("Unavailable (In Repairs)");
+  });
+
+  test("renders Unavailable (Broken) status badge", () => {
+    render(
+      <EquipmentCard
+        equipment={{ ...baseEquipment, status: "Unavailable (Broken)" }}
+        onClick={jest.fn()}
+      />
+    );
+    expect(screen.getByTestId("status-badge")).toHaveTextContent("Unavailable (Broken)");
+  });
+
+  test("renders Unavailable (Missing) status badge", () => {
+    render(
+      <EquipmentCard
+        equipment={{ ...baseEquipment, status: "Unavailable (Missing)" }}
+        onClick={jest.fn()}
+      />
+    );
+    expect(screen.getByTestId("status-badge")).toHaveTextContent("Unavailable (Missing)");
   });
 
   test("calls onClick when the card is clicked", () => {
