@@ -441,35 +441,57 @@ export async function batchUpsertEquipment(items: {
   let updatedCount = 0;
   const errors: string[] = [];
 
+  // Fetch existing equipment and tags upfront to prevent hundreds of sequential roundtrips
+  const { rows: existingRows } = await sql<{ id: number; name: string; serial_number: string | null }>`
+    SELECT id, LOWER(TRIM(name)) as name, LOWER(TRIM(serial_number)) as serial_number FROM equipment
+  `;
+
+  const { rows: tagRows } = await sql<Tag>`
+    SELECT id, name FROM tags
+  `;
+
+  const tagMap = new Map<string, number>();
+  for (const t of tagRows) {
+    if (t.name) tagMap.set(t.name.trim().toLowerCase(), t.id);
+  }
+
+  const existingBySerial = new Map<string, number>();
+  const existingByName = new Map<string, number>();
+
+  for (const eq of existingRows) {
+    if (eq.serial_number) {
+      existingBySerial.set(eq.serial_number.toLowerCase(), eq.id);
+    }
+    if (eq.name && !existingByName.has(eq.name.toLowerCase())) {
+      existingByName.set(eq.name.toLowerCase(), eq.id);
+    }
+  }
+
   for (const item of items) {
     try {
       let existingId: number | null = null;
 
-      // 1. Try match by serial_number
-      if (item.serial_number && item.serial_number.trim()) {
-        const { rows } = await sql`
-          SELECT id FROM equipment 
-          WHERE LOWER(TRIM(serial_number)) = LOWER(TRIM(${item.serial_number}))
-          LIMIT 1
-        `;
-        if (rows.length > 0) {
-          existingId = rows[0].id;
+      const cleanSerial = item.serial_number ? item.serial_number.trim().toLowerCase() : "";
+      const cleanName = item.name ? item.name.trim().toLowerCase() : "";
+
+      // 1. Match by serial_number if provided
+      if (cleanSerial) {
+        const matched = existingBySerial.get(cleanSerial);
+        if (matched) {
+          existingId = matched;
+        }
+      } else if (cleanName) {
+        // 2. Only fallback match by name if NO serial_number was provided!
+        const matched = existingByName.get(cleanName);
+        if (matched) {
+          existingId = matched;
         }
       }
 
-      // 2. Fallback match by name
-      if (!existingId && item.name && item.name.trim()) {
-        const { rows } = await sql`
-          SELECT id FROM equipment 
-          WHERE LOWER(TRIM(name)) = LOWER(TRIM(${item.name}))
-          LIMIT 1
-        `;
-        if (rows.length > 0) {
-          existingId = rows[0].id;
-        }
-      }
+      let targetId: number;
 
       if (existingId) {
+        targetId = existingId;
         // Update existing equipment: update status if Broken or Missing, otherwise preserve
         if (item.condition === "Missing") {
           await sql`
@@ -507,18 +529,6 @@ export async function batchUpsertEquipment(items: {
             WHERE id = ${existingId}
           `;
         }
-
-        // Update tags
-        await sql`DELETE FROM equipment_tags WHERE equipment_id = ${existingId}`;
-        if (item.tags && item.tags.length > 0) {
-          for (const tagName of item.tags) {
-            let tagObj = (await sql<Tag>`SELECT * FROM tags WHERE LOWER(name) = LOWER(${tagName})`).rows[0];
-            if (!tagObj) {
-              tagObj = (await sql<Tag>`INSERT INTO tags (name) VALUES (${tagName}) RETURNING *`).rows[0];
-            }
-            await sql`INSERT INTO equipment_tags (equipment_id, tag_id) VALUES (${existingId}, ${tagObj.id}) ON CONFLICT DO NOTHING`;
-          }
-        }
         updatedCount++;
       } else {
         // Insert new equipment
@@ -534,18 +544,38 @@ export async function batchUpsertEquipment(items: {
           VALUES (${item.name}, ${item.description ?? null}, ${item.serial_number ?? null}, ${item.condition}, ${item.location}, ${initialStatus})
           RETURNING *
         `;
-        const newId = rows[0].id;
-
-        if (item.tags && item.tags.length > 0) {
-          for (const tagName of item.tags) {
-            let tagObj = (await sql<Tag>`SELECT * FROM tags WHERE LOWER(name) = LOWER(${tagName})`).rows[0];
-            if (!tagObj) {
-              tagObj = (await sql<Tag>`INSERT INTO tags (name) VALUES (${tagName}) RETURNING *`).rows[0];
-            }
-            await sql`INSERT INTO equipment_tags (equipment_id, tag_id) VALUES (${newId}, ${tagObj.id}) ON CONFLICT DO NOTHING`;
-          }
+        targetId = rows[0].id;
+        if (cleanSerial) {
+          existingBySerial.set(cleanSerial, targetId);
+        }
+        if (cleanName && !existingByName.has(cleanName)) {
+          existingByName.set(cleanName, targetId);
         }
         createdCount++;
+      }
+
+      // Update tags
+      await sql`DELETE FROM equipment_tags WHERE equipment_id = ${targetId}`;
+      if (item.tags && item.tags.length > 0) {
+        for (const tagName of item.tags) {
+          const tClean = tagName.trim();
+          if (!tClean) continue;
+          const tLower = tClean.toLowerCase();
+          let tagId = tagMap.get(tLower);
+          if (!tagId) {
+            let tagObj = (await sql<Tag>`SELECT * FROM tags WHERE LOWER(name) = LOWER(${tClean})`).rows[0];
+            if (!tagObj) {
+              tagObj = (await sql<Tag>`INSERT INTO tags (name) VALUES (${tClean}) RETURNING *`).rows[0];
+            }
+            if (tagObj) {
+              tagId = tagObj.id;
+              tagMap.set(tLower, tagId);
+            }
+          }
+          if (tagId) {
+            await sql`INSERT INTO equipment_tags (equipment_id, tag_id) VALUES (${targetId}, ${tagId}) ON CONFLICT DO NOTHING`;
+          }
+        }
       }
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);

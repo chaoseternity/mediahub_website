@@ -196,6 +196,9 @@ export function UploadEquipmentModal({
                 <Badge variant="outline" className="bg-blue-50 text-blue-800 border-blue-200">
                   {updateCount} Existing to Update (Status Preserved)
                 </Badge>
+                <p className="text-xs text-muted-foreground w-full pt-1 border-t mt-1">
+                  Ready to upload! Click <strong>&quot;Confirm & Apply ({parsedItems.length})&quot;</strong> at the bottom right to apply these changes to your database.
+                </p>
               </div>
 
               {/* Preview Table */}

@@ -27,7 +27,8 @@ export async function POST(req: NextRequest) {
     const body = await req.json();
     const parsed = BatchPayloadSchema.safeParse(body);
     if (!parsed.success) {
-      return NextResponse.json({ error: parsed.error.flatten() }, { status: 400 });
+      const issues = parsed.error.issues.map((i) => `${i.path.join(".")}: ${i.message}`).join("; ");
+      return NextResponse.json({ error: `Validation error: ${issues}` }, { status: 400 });
     }
 
     const result = await batchUpsertEquipment(parsed.data.items);
