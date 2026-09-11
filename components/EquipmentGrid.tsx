@@ -66,6 +66,7 @@ export function EquipmentGrid({ initialData, role, onAddNew: _onAddNew, userName
     "Unavailable (In Repairs)",
     "Unavailable (Broken)",
     "Unavailable (Missing)",
+    "Unavailable (Retired)",
   ];
 
   // 1. Derive available Variable 1 <a> options across all items

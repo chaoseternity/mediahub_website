@@ -210,4 +210,12 @@ describe("Equipment DB helpers (in-memory SQLite) — AV CCA", () => {
     expect(row!.condition).toBe("Missing");
     expect(row!.status).toBe("Unavailable (Missing)");
   });
+
+  test("marks a decommissioned item as Retired and Unavailable (Retired)", () => {
+    const id = insertEquipment(db, { name: "Old Cam 1", tags: ["Camera"], condition: "Retired" });
+    db.prepare("UPDATE equipment SET status = 'Unavailable (Retired)', updated_at = datetime('now') WHERE id = ?").run(id);
+    const row = getEquipmentRow(db, id);
+    expect(row!.condition).toBe("Retired");
+    expect(row!.status).toBe("Unavailable (Retired)");
+  });
 });

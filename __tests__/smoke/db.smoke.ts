@@ -115,6 +115,7 @@ import {
   searchSOPDocuments,
   batchUpsertEquipment,
   updateEquipment,
+  createCheckout,
 } from "@/lib/db";
 
 // ── Smoke tests ───────────────────────────────────────────────────────────────
@@ -179,6 +180,28 @@ describe("Smoke — lib/db.ts (Vercel Postgres mock)", () => {
       expect(eq.condition).toBe("Broken");
       expect(eq.status).toBe("Unavailable (Broken)");
     });
+
+    test("automatically couples condition 'Retired' with status 'Unavailable (Retired)'", async () => {
+      const eq1 = await createEquipment({
+        name: "Old Projector",
+        tags: [],
+        condition: "Retired",
+        location: "Media Room",
+        status: "Available",
+      });
+      expect(eq1.condition).toBe("Retired");
+      expect(eq1.status).toBe("Unavailable (Retired)");
+
+      const eq2 = await createEquipment({
+        name: "Old Cable",
+        tags: [],
+        condition: "Working",
+        location: "Media Room",
+        status: "Unavailable (Retired)",
+      });
+      expect(eq2.condition).toBe("Retired");
+      expect(eq2.status).toBe("Unavailable (Retired)");
+    });
   });
 
   // ── updateEquipment ───────────────────────────────────────────────────────
@@ -212,6 +235,31 @@ describe("Smoke — lib/db.ts (Vercel Postgres mock)", () => {
       });
       expect(updated?.condition).toBe("Broken");
       expect(updated?.status).toBe("Unavailable (In Repairs)");
+    });
+
+    test("automatically couples condition 'Retired' and status 'Unavailable (Retired)'", async () => {
+      const eq = await createEquipment({
+        name: "Speaker",
+        tags: [],
+        condition: "Working",
+        location: "Media Room",
+        status: "Available",
+      });
+
+      // Update condition to Retired -> status automatically becomes Unavailable (Retired)
+      const retired = await updateEquipment(eq.id, { condition: "Retired" });
+      expect(retired?.condition).toBe("Retired");
+      expect(retired?.status).toBe("Unavailable (Retired)");
+
+      // Update condition back to Working -> status automatically restores to Available
+      const restored = await updateEquipment(eq.id, { condition: "Working" });
+      expect(restored?.condition).toBe("Working");
+      expect(restored?.status).toBe("Available");
+
+      // Update status to Unavailable (Retired) -> condition automatically becomes Retired
+      const retiredByStatus = await updateEquipment(eq.id, { status: "Unavailable (Retired)" });
+      expect(retiredByStatus?.condition).toBe("Retired");
+      expect(retiredByStatus?.status).toBe("Unavailable (Retired)");
     });
   });
 
@@ -461,6 +509,107 @@ describe("Smoke — lib/db.ts (Vercel Postgres mock)", () => {
       expect(item3?.condition).toBe("Working");
       expect(item3?.status).toBe("Available");
       expect(item3?.name).toBe("Item 3 Repaired");
+    });
+
+    test("deletes missing equipment IDs and skips items with active checkouts", async () => {
+      const eq1 = await createEquipment({
+        name: "Item Keep",
+        serial_number: "KEEP-001",
+        tags: [],
+        condition: "Working",
+        location: "Media Room",
+        status: "Available",
+      });
+
+      const eq2 = await createEquipment({
+        name: "Item Delete",
+        serial_number: "DEL-001",
+        tags: [],
+        condition: "Working",
+        location: "Media Room",
+        status: "Available",
+      });
+
+      const eq3 = await createEquipment({
+        name: "Item Active Checkout",
+        serial_number: "CHECKOUT-001",
+        tags: [],
+        condition: "Working",
+        location: "Media Room",
+        status: "Available",
+      });
+
+      // Check out eq3 so it has an active checkout
+      await createCheckout({
+        equipment_id: eq3.id,
+        checked_out_by: null,
+        checked_out_by_name: "Alice",
+      });
+
+      // Run batch upsert: KEEP-001 is updated, eq2 and eq3 are marked for deletion in deleteMissingIds
+      const result = await batchUpsertEquipment(
+        [
+          {
+            name: "Item Keep Updated",
+            serial_number: "KEEP-001",
+            tags: ["UpdatedTag"],
+            condition: "Working",
+            location: "Room 101",
+          },
+        ],
+        [eq2.id, eq3.id]
+      );
+
+      expect(result.updatedCount).toBe(1);
+      expect(result.deletedCount).toBe(1);
+      expect(result.errors).toHaveLength(1);
+      expect(result.errors[0]).toContain("Cannot delete equipment with an active checkout");
+
+      const remaining = await getAllEquipment();
+      const ids = remaining.map((e) => e.id);
+      expect(ids).toContain(eq1.id);
+      expect(ids).not.toContain(eq2.id);
+      expect(ids).toContain(eq3.id);
+    });
+
+    test("couples condition 'Retired' to status 'Unavailable (Retired)' during batch upsert", async () => {
+      await createEquipment({
+        name: "Old Switcher",
+        serial_number: "SW-001",
+        tags: ["Gear"],
+        condition: "Working",
+        location: "Media Room",
+        status: "Available",
+      });
+
+      const result = await batchUpsertEquipment([
+        {
+          name: "Old Switcher Decommissioned",
+          serial_number: "SW-001",
+          tags: ["Gear"],
+          condition: "Retired",
+          location: "Media Room",
+        },
+        {
+          name: "Directly Retired New Item",
+          serial_number: "RET-001",
+          tags: ["Gear"],
+          condition: "Retired",
+          location: "Media Room",
+        },
+      ]);
+
+      expect(result.updatedCount).toBe(1);
+      expect(result.createdCount).toBe(1);
+
+      const all = await getAllEquipment();
+      const updated = all.find((e) => e.serial_number === "SW-001");
+      const created = all.find((e) => e.serial_number === "RET-001");
+
+      expect(updated?.condition).toBe("Retired");
+      expect(updated?.status).toBe("Unavailable (Retired)");
+      expect(created?.condition).toBe("Retired");
+      expect(created?.status).toBe("Unavailable (Retired)");
     });
   });
 });

@@ -28,6 +28,7 @@ const statusVariant: Record<
   "Unavailable (In Repairs)": "outline",
   "Unavailable (Broken)": "destructive",
   "Unavailable (Missing)": "destructive",
+  "Unavailable (Retired)": "outline",
 };
 
 const statusColour: Record<Equipment["status"], string> = {
@@ -38,6 +39,7 @@ const statusColour: Record<Equipment["status"], string> = {
   "Unavailable (In Repairs)": "bg-blue-100 text-blue-800 border-blue-200",
   "Unavailable (Broken)": "bg-red-100 text-red-800 border-red-200",
   "Unavailable (Missing)": "bg-orange-100 text-orange-800 border-orange-200 dark:bg-orange-950/50 dark:text-orange-300 dark:border-orange-800",
+  "Unavailable (Retired)": "bg-slate-100 text-slate-700 border-slate-300 dark:bg-slate-800 dark:text-slate-300 dark:border-slate-700",
 };
 
 export function EquipmentCard({ equipment, onClick }: EquipmentCardProps) {

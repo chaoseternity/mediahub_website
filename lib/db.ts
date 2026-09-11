@@ -324,6 +324,9 @@ export async function createEquipment(params: {
   if (condition === "Missing" || status === "Unavailable (Missing)") {
     condition = "Missing";
     status = "Unavailable (Missing)";
+  } else if (condition === "Retired" || status === "Unavailable (Retired)") {
+    condition = "Retired";
+    status = "Unavailable (Retired)";
   } else if (condition === "Broken") {
     if (status !== "Unavailable (In Repairs)") {
       status = "Unavailable (Broken)";
@@ -396,6 +399,25 @@ export async function updateEquipment(
       }
     }
 
+    // Condition / Status coupling for Retired
+    const isRetiredCond = (scalars.condition as string) === "Retired";
+    const isRetiredStatus = (scalars.status as string) === "Unavailable (Retired)";
+    const wasRetiredCond = (existing.condition as string) === "Retired";
+    const wasRetiredStatus = (existing.status as string) === "Unavailable (Retired)";
+
+    if (isRetiredCond || isRetiredStatus) {
+      nextCondition = "Retired";
+      nextStatus = "Unavailable (Retired)";
+    } else if (wasRetiredCond && scalars.condition !== undefined && !isRetiredCond) {
+      if (scalars.status === undefined || isRetiredStatus) {
+        nextStatus = "Available";
+      }
+    } else if (wasRetiredStatus && scalars.status !== undefined && !isRetiredStatus) {
+      if (scalars.condition === undefined || isRetiredCond) {
+        nextCondition = "Working";
+      }
+    }
+
     if (nextCondition === "Broken") {
       if (nextStatus !== "Unavailable (In Repairs)") {
         nextStatus = "Unavailable (Broken)";
@@ -430,17 +452,21 @@ export async function updateEquipment(
   return getEquipmentById(id);
 }
 
-export async function batchUpsertEquipment(items: {
-  name: string;
-  serial_number?: string | null;
-  tags: string[];
-  description?: string | null;
-  condition: Condition;
-  location: string;
-}[]): Promise<{ createdCount: number; updatedCount: number; errors: string[] }> {
+export async function batchUpsertEquipment(
+  items: {
+    name: string;
+    serial_number?: string | null;
+    tags: string[];
+    description?: string | null;
+    condition: Condition;
+    location: string;
+  }[],
+  deleteMissingIds?: number[]
+): Promise<{ createdCount: number; updatedCount: number; deletedCount: number; errors: string[] }> {
   await ensureSchema();
   let createdCount = 0;
   let updatedCount = 0;
+  let deletedCount = 0;
   const errors: string[] = [];
 
   // Fetch existing equipment and tags upfront to prevent hundreds of sequential roundtrips
@@ -504,6 +530,8 @@ export async function batchUpsertEquipment(items: {
 
         if (item.condition === "Missing") {
           nextStatus = "Unavailable (Missing)";
+        } else if (item.condition === "Retired") {
+          nextStatus = "Unavailable (Retired)";
         } else if (item.condition === "Broken") {
           if (currentStatus === "Unavailable (In Repairs)") {
             nextStatus = "Unavailable (In Repairs)";
@@ -511,14 +539,19 @@ export async function batchUpsertEquipment(items: {
             nextStatus = "Unavailable (Broken)";
           }
         } else if (item.condition === "Impaired") {
-          if (currentStatus === "Unavailable (Missing)" || currentStatus === "Unavailable (Broken)") {
+          if (
+            currentStatus === "Unavailable (Missing)" ||
+            currentStatus === "Unavailable (Broken)" ||
+            currentStatus === "Unavailable (Retired)"
+          ) {
             nextStatus = "Available";
           }
         } else if (item.condition === "Working") {
           if (
             currentStatus === "Unavailable (Missing)" ||
             currentStatus === "Unavailable (Broken)" ||
-            currentStatus === "Unavailable (In Repairs)"
+            currentStatus === "Unavailable (In Repairs)" ||
+            currentStatus === "Unavailable (Retired)"
           ) {
             nextStatus = "Available";
           }
@@ -547,6 +580,8 @@ export async function batchUpsertEquipment(items: {
         let initialStatus: EquipmentStatus = "Available";
         if (item.condition === "Missing") {
           initialStatus = "Unavailable (Missing)";
+        } else if (item.condition === "Retired") {
+          initialStatus = "Unavailable (Retired)";
         } else if (item.condition === "Broken") {
           initialStatus = "Unavailable (Broken)";
         }
@@ -595,7 +630,20 @@ export async function batchUpsertEquipment(items: {
     }
   }
 
-  return { createdCount, updatedCount, errors };
+  if (deleteMissingIds && deleteMissingIds.length > 0) {
+    for (const id of deleteMissingIds) {
+      const delResult = await deleteEquipment(id);
+      if (delResult.success) {
+        deletedCount++;
+      } else {
+        const current = existingMap.get(id);
+        const label = current ? `"${current.name}" (${current.serial_number || `ID ${current.id}`})` : `Equipment ID ${id}`;
+        errors.push(`Could not delete ${label}: ${delResult.error}`);
+      }
+    }
+  }
+
+  return { createdCount, updatedCount, deletedCount, errors };
 }
 
 export async function deleteEquipment(id: number): Promise<{ success: boolean; error?: string }> {

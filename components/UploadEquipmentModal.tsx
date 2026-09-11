@@ -12,7 +12,17 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { parseEquipmentExcel, type ParsedEquipmentItem } from "@/lib/excel";
 import type { Equipment } from "@/lib/types";
-import { Upload, FileSpreadsheet, AlertCircle, CheckCircle2, Loader2 } from "lucide-react";
+import {
+  Upload,
+  FileSpreadsheet,
+  AlertCircle,
+  CheckCircle2,
+  Loader2,
+  Trash2,
+  AlertTriangle,
+  ChevronDown,
+  ChevronUp,
+} from "lucide-react";
 
 interface UploadEquipmentModalProps {
   open: boolean;
@@ -31,6 +41,8 @@ export function UploadEquipmentModal({
   const [parsedItems, setParsedItems] = useState<ParsedEquipmentItem[]>([]);
   const [parseError, setParseError] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [confirmDeleteMissing, setConfirmDeleteMissing] = useState(false);
+  const [showMissingList, setShowMissingList] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   function resetState() {
@@ -38,6 +50,8 @@ export function UploadEquipmentModal({
     setParsedItems([]);
     setParseError(null);
     setIsSubmitting(false);
+    setConfirmDeleteMissing(false);
+    setShowMissingList(false);
     if (fileInputRef.current) {
       fileInputRef.current.value = "";
     }
@@ -55,6 +69,8 @@ export function UploadEquipmentModal({
 
     setParseError(null);
     setFile(selectedFile);
+    setConfirmDeleteMissing(false);
+    setShowMissingList(false);
 
     try {
       const buffer = await selectedFile.arrayBuffer();
@@ -99,8 +115,23 @@ export function UploadEquipmentModal({
     }
   }
 
+  const missingEquipment = existingEquipment.filter((eq) => !matchedExistingIds.has(eq.id));
+
   async function handleUpload() {
     if (parsedItems.length === 0 || isSubmitting) return;
+
+    if (confirmDeleteMissing && missingEquipment.length > 0) {
+      const activeCount = missingEquipment.filter(
+        (eq) => eq.active_checkout_id !== null || eq.status === "Checked Out"
+      ).length;
+      let confirmMsg = `⚠️ WARNING: You have selected to delete ${missingEquipment.length} equipment item(s) from your database that do not appear in the uploaded Excel file.\n\nAre you sure you want to permanently delete these items? This action cannot be undone.`;
+      if (activeCount > 0) {
+        confirmMsg += `\n\n(${activeCount} item(s) with active checkouts will be preserved and skipped).`;
+      }
+      const ok = window.confirm(confirmMsg);
+      if (!ok) return;
+    }
+
     setIsSubmitting(true);
     setParseError(null);
 
@@ -108,7 +139,13 @@ export function UploadEquipmentModal({
       const res = await fetch("/api/equipment/batch", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ items: parsedItems }),
+        body: JSON.stringify({
+          items: parsedItems,
+          deleteMissingIds:
+            confirmDeleteMissing && missingEquipment.length > 0
+              ? missingEquipment.map((eq) => eq.id)
+              : undefined,
+        }),
       });
 
       const data = await res.json();
@@ -116,7 +153,10 @@ export function UploadEquipmentModal({
         throw new Error(data.error ?? "Failed to upload equipment batch");
       }
 
-      const msg = `Successfully processed: ${data.createdCount} newly created (Available), ${data.updatedCount} updated (status preserved).`;
+      let msg = `Successfully processed: ${data.createdCount} newly created (Available), ${data.updatedCount} updated (status preserved).`;
+      if (data.deletedCount && data.deletedCount > 0) {
+        msg += ` ${data.deletedCount} missing equipment deleted.`;
+      }
       if (data.errors && data.errors.length > 0) {
         alert(`${msg}\n\nNotices:\n${data.errors.join("\n")}`);
       } else {
@@ -196,8 +236,27 @@ export function UploadEquipmentModal({
                 <Badge variant="outline" className="bg-blue-50 text-blue-800 border-blue-200">
                   {updateCount} Existing to Update (Status Preserved)
                 </Badge>
+                {missingEquipment.length > 0 && (
+                  <Badge variant="outline" className="bg-amber-50 text-amber-800 border-amber-200">
+                    {missingEquipment.length} Missing from Excel
+                  </Badge>
+                )}
                 <p className="text-xs text-muted-foreground w-full pt-1 border-t mt-1">
-                  Ready to upload! Click <strong>&quot;Confirm & Apply ({parsedItems.length})&quot;</strong> at the bottom right to apply these changes to your database.
+                  {confirmDeleteMissing && missingEquipment.length > 0 ? (
+                    <>
+                      Ready to sync! Click{" "}
+                      <strong>
+                        &quot;Confirm & Apply (Delete {missingEquipment.length} missing)&quot;
+                      </strong>{" "}
+                      below to update equipment and delete missing items.
+                    </>
+                  ) : (
+                    <>
+                      Ready to upload! Click{" "}
+                      <strong>&quot;Confirm & Apply ({parsedItems.length})&quot;</strong> at the
+                      bottom right to apply these changes to your database.
+                    </>
+                  )}
                 </p>
               </div>
 
@@ -231,6 +290,102 @@ export function UploadEquipmentModal({
                   </p>
                 )}
               </div>
+
+              {/* Missing Equipment & Deletion Section */}
+              {missingEquipment.length > 0 && (
+                <div className="rounded-lg border border-destructive/20 bg-destructive/5 p-3.5 space-y-3">
+                  <div className="flex items-start gap-2.5">
+                    <AlertTriangle className="h-5 w-5 text-amber-600 dark:text-amber-500 shrink-0 mt-0.5" />
+                    <div className="space-y-0.5">
+                      <h4 className="text-sm font-semibold text-foreground">
+                        Missing Equipment Detected ({missingEquipment.length})
+                      </h4>
+                      <p className="text-xs text-muted-foreground">
+                        {missingEquipment.length} item{missingEquipment.length === 1 ? "" : "s"}{" "}
+                        currently in your database do not appear in this Excel spreadsheet.
+                      </p>
+                    </div>
+                  </div>
+
+                  <label className="flex items-start gap-2.5 p-2.5 rounded-md border border-destructive/30 bg-background cursor-pointer hover:bg-muted/40 transition-colors">
+                    <input
+                      type="checkbox"
+                      checked={confirmDeleteMissing}
+                      onChange={(e) => setConfirmDeleteMissing(e.target.checked)}
+                      className="mt-0.5 h-4 w-4 rounded border-destructive text-destructive focus:ring-destructive cursor-pointer"
+                    />
+                    <div className="text-xs space-y-0.5">
+                      <span className="font-semibold text-destructive flex items-center gap-1.5">
+                        <Trash2 className="h-3.5 w-3.5" />
+                        Delete missing equipment from database ({missingEquipment.length} item
+                        {missingEquipment.length === 1 ? "" : "s"})
+                      </span>
+                      <p className="text-muted-foreground text-[11px]">
+                        Checked out equipment will be safely skipped. Requires confirmation before
+                        proceeding.
+                      </p>
+                    </div>
+                  </label>
+
+                  <div>
+                    <button
+                      type="button"
+                      onClick={() => setShowMissingList((prev) => !prev)}
+                      className="text-xs text-primary font-medium hover:underline flex items-center gap-1"
+                    >
+                      {showMissingList ? (
+                        <>
+                          <ChevronUp className="h-3.5 w-3.5" />
+                          Hide missing equipment list
+                        </>
+                      ) : (
+                        <>
+                          <ChevronDown className="h-3.5 w-3.5" />
+                          View {missingEquipment.length} missing equipment item
+                          {missingEquipment.length === 1 ? "" : "s"}
+                        </>
+                      )}
+                    </button>
+
+                    {showMissingList && (
+                      <div className="mt-2 border rounded-lg overflow-hidden max-h-48 overflow-y-auto bg-background">
+                        <table className="w-full text-xs text-left">
+                          <thead className="bg-muted/70 sticky top-0 border-b font-medium text-muted-foreground">
+                            <tr>
+                              <th className="p-2">ID</th>
+                              <th className="p-2">Name</th>
+                              <th className="p-2">Condition</th>
+                              <th className="p-2">Status</th>
+                            </tr>
+                          </thead>
+                          <tbody className="divide-y">
+                            {missingEquipment.map((eq) => {
+                              const isCheckedOut =
+                                eq.active_checkout_id !== null || eq.status === "Checked Out";
+                              return (
+                                <tr key={eq.id} className="hover:bg-muted/20">
+                                  <td className="p-2 font-mono">{eq.serial_number || "—"}</td>
+                                  <td className="p-2 font-medium">{eq.name}</td>
+                                  <td className="p-2">{eq.condition}</td>
+                                  <td className="p-2">
+                                    {isCheckedOut ? (
+                                      <span className="text-amber-600 dark:text-amber-400 font-medium flex items-center gap-1">
+                                        ⚠️ Checked Out (will skip)
+                                      </span>
+                                    ) : (
+                                      <span className="text-muted-foreground">{eq.status}</span>
+                                    )}
+                                  </td>
+                                </tr>
+                              );
+                            })}
+                          </tbody>
+                        </table>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              )}
             </div>
           )}
         </div>
@@ -242,12 +397,18 @@ export function UploadEquipmentModal({
           <Button
             onClick={handleUpload}
             disabled={parsedItems.length === 0 || isSubmitting}
+            variant={confirmDeleteMissing && missingEquipment.length > 0 ? "destructive" : "default"}
             className="gap-1.5"
           >
             {isSubmitting ? (
               <>
                 <Loader2 className="h-4 w-4 animate-spin" />
                 Applying Changes…
+              </>
+            ) : confirmDeleteMissing && missingEquipment.length > 0 ? (
+              <>
+                <Trash2 className="h-4 w-4" />
+                Confirm & Apply (Delete {missingEquipment.length} missing)
               </>
             ) : (
               <>

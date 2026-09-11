@@ -80,6 +80,16 @@ describe("EquipmentCard", () => {
     expect(screen.getByTestId("status-badge")).toHaveTextContent("Unavailable (Missing)");
   });
 
+  test("renders Unavailable (Retired) status badge", () => {
+    render(
+      <EquipmentCard
+        equipment={{ ...baseEquipment, status: "Unavailable (Retired)" }}
+        onClick={jest.fn()}
+      />
+    );
+    expect(screen.getByTestId("status-badge")).toHaveTextContent("Unavailable (Retired)");
+  });
+
   test("calls onClick when the card is clicked", () => {
     const handleClick = jest.fn();
     render(<EquipmentCard equipment={baseEquipment} onClick={handleClick} />);

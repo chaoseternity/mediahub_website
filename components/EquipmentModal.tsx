@@ -44,9 +44,9 @@ const EditSchema = z.object({
   tags: z.array(z.string().min(1)).min(1, "Please select at least one tag"),
   description: z.string().optional(),
   serial_number: z.string().optional(),
-  condition: z.enum(["Working", "Impaired", "Broken", "Missing"]),
+  condition: z.enum(["Working", "Impaired", "Broken", "Missing", "Retired"]),
   location: z.string().min(1),
-  status: z.enum(["Available", "Checked Out", "In Event", "In Event (Rehearsal)", "Unavailable (In Repairs)", "Unavailable (Broken)", "Unavailable (Missing)"]),
+  status: z.enum(["Available", "Checked Out", "In Event", "In Event (Rehearsal)", "Unavailable (In Repairs)", "Unavailable (Broken)", "Unavailable (Missing)", "Unavailable (Retired)"]),
 });
 
 type EditFormValues = z.infer<typeof EditSchema>;
@@ -248,17 +248,23 @@ export function EquipmentModal({
         {isAdmin ? (
           <Select
             value={String(val ?? "")}
-            disabled={name === "status" && watched.condition === "Missing"}
+            disabled={name === "status" && (watched.condition === "Missing" || watched.condition === "Retired")}
             onValueChange={(v) => {
               if (name === "condition") {
                 setValue("condition", v as EditFormValues["condition"], { shouldDirty: true });
                 if (v === "Missing") {
                   setValue("status", "Unavailable (Missing)", { shouldDirty: true });
+                } else if (v === "Retired") {
+                  setValue("status", "Unavailable (Retired)", { shouldDirty: true });
                 } else if (v === "Broken") {
                   if (watched.status !== "Unavailable (In Repairs)") {
                     setValue("status", "Unavailable (Broken)", { shouldDirty: true });
                   }
-                } else if (watched.status === "Unavailable (Broken)" || watched.status === "Unavailable (Missing)") {
+                } else if (
+                  watched.status === "Unavailable (Broken)" ||
+                  watched.status === "Unavailable (Missing)" ||
+                  watched.status === "Unavailable (Retired)"
+                ) {
                   setValue("status", "Available", { shouldDirty: true });
                 } else if (watched.status === "Unavailable (In Repairs)" && v === "Working") {
                   setValue("status", "Available", { shouldDirty: true });
@@ -267,7 +273,9 @@ export function EquipmentModal({
                 setValue("status", v as EditFormValues["status"], { shouldDirty: true });
                 if (v === "Unavailable (Missing)") {
                   setValue("condition", "Missing", { shouldDirty: true });
-                } else if (watched.condition === "Missing") {
+                } else if (v === "Unavailable (Retired)") {
+                  setValue("condition", "Retired", { shouldDirty: true });
+                } else if (watched.condition === "Missing" || watched.condition === "Retired") {
                   setValue("condition", "Working", { shouldDirty: true });
                 }
               } else {
@@ -415,6 +423,7 @@ export function EquipmentModal({
                       "Impaired",
                       "Broken",
                       "Missing",
+                      "Retired",
                     ])}
                     {renderSelectField("location", "Home Location", [
                       "Media Room",
@@ -426,6 +435,8 @@ export function EquipmentModal({
                       "Status",
                       watched.condition === "Missing"
                         ? ["Unavailable (Missing)"]
+                        : watched.condition === "Retired"
+                        ? ["Unavailable (Retired)"]
                         : watched.condition === "Broken"
                         ? ["Unavailable (Broken)", "Unavailable (In Repairs)"]
                         : watched.condition === "Impaired"

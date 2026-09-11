@@ -48,10 +48,10 @@ export async function ensureSchema(): Promise<void> {
           name TEXT NOT NULL,
           description TEXT,
           serial_number TEXT,
-          condition TEXT NOT NULL DEFAULT 'Working' CHECK(condition IN ('Working','Impaired','Broken','Missing')),
+          condition TEXT NOT NULL DEFAULT 'Working' CHECK(condition IN ('Working','Impaired','Broken','Missing','Retired')),
           quantity INT NOT NULL DEFAULT 1,
           location TEXT NOT NULL,
-          status TEXT NOT NULL DEFAULT 'Available' CHECK(status IN ('Available','Checked Out','In Event','In Event (Rehearsal)','Unavailable (In Repairs)','Unavailable (Broken)','Unavailable (Missing)')),
+          status TEXT NOT NULL DEFAULT 'Available' CHECK(status IN ('Available','Checked Out','In Event','In Event (Rehearsal)','Unavailable (In Repairs)','Unavailable (Broken)','Unavailable (Missing)','Unavailable (Retired)')),
           created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
           updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
         );
@@ -285,7 +285,7 @@ export async function ensureSchema(): Promise<void> {
       "DROP CONSTRAINT equipment_condition_check"
     );
     await runSafe(
-      () => sql`ALTER TABLE equipment ADD CONSTRAINT equipment_condition_check CHECK(condition IN ('Working', 'Impaired', 'Broken', 'Missing'));`,
+      () => sql`ALTER TABLE equipment ADD CONSTRAINT equipment_condition_check CHECK(condition IN ('Working', 'Impaired', 'Broken', 'Missing', 'Retired'));`,
       "ADD CONSTRAINT equipment_condition_check"
     );
     await runSafe(
@@ -309,11 +309,19 @@ export async function ensureSchema(): Promise<void> {
       "UPDATE equipment condition for Unavailable (Missing) status -> Missing"
     );
     await runSafe(
+      () => sql`UPDATE equipment SET status = 'Unavailable (Retired)' WHERE condition = 'Retired';`,
+      "UPDATE equipment status for Retired condition -> Unavailable (Retired)"
+    );
+    await runSafe(
+      () => sql`UPDATE equipment SET condition = 'Retired' WHERE status = 'Unavailable (Retired)';`,
+      "UPDATE equipment condition for Unavailable (Retired) status -> Retired"
+    );
+    await runSafe(
       () => sql`ALTER TABLE equipment DROP CONSTRAINT IF EXISTS equipment_status_check;`,
       "DROP CONSTRAINT equipment_status_check"
     );
     await runSafe(
-      () => sql`ALTER TABLE equipment ADD CONSTRAINT equipment_status_check CHECK(status IN ('Available', 'Checked Out', 'In Event', 'In Event (Rehearsal)', 'Unavailable (In Repairs)', 'Unavailable (Broken)', 'Unavailable (Missing)'));`,
+      () => sql`ALTER TABLE equipment ADD CONSTRAINT equipment_status_check CHECK(status IN ('Available', 'Checked Out', 'In Event', 'In Event (Rehearsal)', 'Unavailable (In Repairs)', 'Unavailable (Broken)', 'Unavailable (Missing)', 'Unavailable (Retired)'));`,
       "ADD CONSTRAINT equipment_status_check"
     );
     await runSafe(

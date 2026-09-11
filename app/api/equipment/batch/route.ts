@@ -8,12 +8,13 @@ const BatchItemSchema = z.object({
   serial_number: z.string().nullable().optional(),
   tags: z.array(z.string()).default([]),
   description: z.string().nullable().optional(),
-  condition: z.enum(["Working", "Impaired", "Broken", "Missing"]).default("Working"),
+  condition: z.enum(["Working", "Impaired", "Broken", "Missing", "Retired"]).default("Working"),
   location: z.string().default("Media Room"),
 });
 
 const BatchPayloadSchema = z.object({
   items: z.array(BatchItemSchema).min(1, "At least one item is required"),
+  deleteMissingIds: z.array(z.number()).optional(),
 });
 
 export async function POST(req: NextRequest) {
@@ -31,11 +32,12 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: `Validation error: ${issues}` }, { status: 400 });
     }
 
-    const result = await batchUpsertEquipment(parsed.data.items);
+    const result = await batchUpsertEquipment(parsed.data.items, parsed.data.deleteMissingIds);
     return NextResponse.json({
       success: true,
       createdCount: result.createdCount,
       updatedCount: result.updatedCount,
+      deletedCount: result.deletedCount,
       errors: result.errors,
     });
   } catch (err) {

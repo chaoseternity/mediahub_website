@@ -28,9 +28,9 @@ const AddSchema = z.object({
   tags: z.array(z.string().min(1)).min(1, "Please select at least one tag"),
   description: z.string().optional(),
   serial_number: z.string().optional(),
-  condition: z.enum(["Working", "Impaired", "Broken", "Missing"]),
+  condition: z.enum(["Working", "Impaired", "Broken", "Missing", "Retired"]),
   location: z.enum(["Media Room", "Showroom", "Control Room"]),
-  status: z.enum(["Available", "Checked Out", "Unavailable (In Repairs)", "Unavailable (Broken)", "Unavailable (Missing)"]),
+  status: z.enum(["Available", "Checked Out", "Unavailable (In Repairs)", "Unavailable (Broken)", "Unavailable (Missing)", "Unavailable (Retired)"]),
 });
 
 type AddFormValues = z.infer<typeof AddSchema>;
@@ -71,11 +71,17 @@ export function AddEquipmentModal({ open, onClose, onCreated }: AddEquipmentModa
     setValue("condition", c, { shouldValidate: true, shouldDirty: true });
     if (c === "Missing") {
       setValue("status", "Unavailable (Missing)", { shouldValidate: true, shouldDirty: true });
+    } else if (c === "Retired") {
+      setValue("status", "Unavailable (Retired)", { shouldValidate: true, shouldDirty: true });
     } else if (c === "Broken") {
       if (watchedStatus !== "Unavailable (In Repairs)") {
         setValue("status", "Unavailable (Broken)", { shouldValidate: true, shouldDirty: true });
       }
-    } else if (watchedStatus === "Unavailable (Broken)" || watchedStatus === "Unavailable (Missing)") {
+    } else if (
+      watchedStatus === "Unavailable (Broken)" ||
+      watchedStatus === "Unavailable (Missing)" ||
+      watchedStatus === "Unavailable (Retired)"
+    ) {
       setValue("status", "Available", { shouldValidate: true, shouldDirty: true });
     } else if (watchedStatus === "Unavailable (In Repairs)" && c === "Working") {
       setValue("status", "Available", { shouldValidate: true, shouldDirty: true });
@@ -86,19 +92,24 @@ export function AddEquipmentModal({ open, onClose, onCreated }: AddEquipmentModa
     setValue("status", s, { shouldValidate: true, shouldDirty: true });
     if (s === "Unavailable (Missing)") {
       setValue("condition", "Missing", { shouldValidate: true, shouldDirty: true });
-    } else if (watchedCondition === "Missing") {
+    } else if (s === "Unavailable (Retired)") {
+      setValue("condition", "Retired", { shouldValidate: true, shouldDirty: true });
+    } else if (watchedCondition === "Missing" || watchedCondition === "Retired") {
       setValue("condition", "Working", { shouldValidate: true, shouldDirty: true });
     }
   };
 
   // Determine allowed status options:
   // - If condition is Missing: only 'Unavailable (Missing)'
+  // - If condition is Retired: only 'Unavailable (Retired)'
   // - If condition is Broken: 'Unavailable (Broken)', 'Unavailable (In Repairs)'
   // - If condition is Impaired: 'Available', 'Checked Out', 'Unavailable (In Repairs)', 'Unavailable (Missing)'
   // - If condition is Working: 'Available', 'Checked Out', 'Unavailable (Missing)'
   const statusOptions: AddFormValues["status"][] =
     watchedCondition === "Missing"
       ? ["Unavailable (Missing)"]
+      : watchedCondition === "Retired"
+      ? ["Unavailable (Retired)"]
       : watchedCondition === "Broken"
       ? ["Unavailable (Broken)", "Unavailable (In Repairs)"]
       : watchedCondition === "Impaired"
@@ -157,7 +168,7 @@ export function AddEquipmentModal({ open, onClose, onCreated }: AddEquipmentModa
               <Select value={watchedCondition} onValueChange={(v) => handleConditionChange(v as AddFormValues["condition"])}>
                 <SelectTrigger><SelectValue /></SelectTrigger>
                 <SelectContent>
-                  {["Working", "Impaired", "Broken", "Missing"].map(c => <SelectItem key={c} value={c}>{c}</SelectItem>)}
+                  {["Working", "Impaired", "Broken", "Missing", "Retired"].map(c => <SelectItem key={c} value={c}>{c}</SelectItem>)}
                 </SelectContent>
               </Select>
             </div>
@@ -178,7 +189,7 @@ export function AddEquipmentModal({ open, onClose, onCreated }: AddEquipmentModa
               <Select
                 value={watchedStatus}
                 onValueChange={(v) => handleStatusChange(v as AddFormValues["status"])}
-                disabled={watchedCondition === "Missing"}
+                disabled={watchedCondition === "Missing" || watchedCondition === "Retired"}
               >
                 <SelectTrigger><SelectValue /></SelectTrigger>
                 <SelectContent>

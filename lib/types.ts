@@ -1,6 +1,6 @@
 export type Role = "admin" | "verified" | "viewer";
 
-export type Condition = "Working" | "Impaired" | "Broken" | "Missing";
+export type Condition = "Working" | "Impaired" | "Broken" | "Missing" | "Retired";
 
 export type EquipmentStatus =
   | "Available"
@@ -9,7 +9,8 @@ export type EquipmentStatus =
   | "In Event (Rehearsal)"
   | "Unavailable (In Repairs)"
   | "Unavailable (Broken)"
-  | "Unavailable (Missing)";
+  | "Unavailable (Missing)"
+  | "Unavailable (Retired)";
 
 export interface Tag {
   id: number;
