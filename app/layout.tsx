@@ -16,16 +16,20 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "MediaHub",
-  description: "Equipment inventory & events management system",
+  title: "Media Club | MediaHub",
+  description: "Official Media Club equipment inventory & events management system",
   manifest: "/manifest.webmanifest",
   appleWebApp: {
     capable: true,
     statusBarStyle: "default",
-    title: "MediaHub NFC Station",
+    title: "Media Club NFC Station",
   },
   icons: {
-    icon: "/icons/icon-192.png",
+    icon: [
+      { url: "/favicon.ico", sizes: "any" },
+      { url: "/icons/icon-192.png", sizes: "192x192", type: "image/png" },
+      { url: "/icons/icon.svg", type: "image/svg+xml" },
+    ],
     apple: "/icons/icon-192.png",
   },
 };

@@ -3,8 +3,8 @@ import { getAllEquipment, getAllNfcCards } from "@/lib/db";
 import { NFCStationClient } from "@/components/NFCStationClient";
 
 export const metadata = {
-  title: "NFC Station | MediaHub",
-  description: "NFC card member checkout and return workstation",
+  title: "Media Club NFC Station | MediaHub",
+  description: "Official Media Club NFC card member checkout and return workstation",
 };
 
 export default async function NFCPage() {

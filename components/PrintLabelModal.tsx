@@ -13,6 +13,7 @@ import {
 } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import { parseEquipmentId, getAdaptiveBarcodeWidth } from "@/lib/utils";
+import { MediaClubLogo } from "@/components/MediaClubLogo";
 import type { Equipment, EquipmentDetail } from "@/lib/types";
 
 interface PrintLabelModalProps {
@@ -136,7 +137,10 @@ export function PrintLabelModal({ equipment, open, onClose }: PrintLabelModalPro
             className="border-2 border-dashed border-primary/30 rounded-xl p-4 bg-white text-black shadow-sm flex flex-col items-center text-center space-y-3"
           >
             <div className="flex items-center justify-between w-full border-b pb-1.5 px-1">
-              <span className="font-bold text-xs tracking-wider uppercase text-gray-700">MediaHub</span>
+              <div className="flex items-center gap-1.5">
+                <MediaClubLogo className="h-5 w-auto text-black" variant="solid" />
+                <span className="font-bold text-xs tracking-wider uppercase text-gray-900">Media Club</span>
+              </div>
               {equipment.tags && equipment.tags.length > 0 && (
                 <span className="text-[10px] font-medium bg-gray-100 text-gray-800 px-1.5 py-0.5 rounded">
                   {equipment.tags.join(" • ")}

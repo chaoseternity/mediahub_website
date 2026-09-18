@@ -29,6 +29,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { Logo } from "@/components/Logo";
+import { MediaClubLogo } from "@/components/MediaClubLogo";
 import {
   Card,
   CardHeader,
@@ -641,12 +642,17 @@ export function NFCStationClient({
     <div className="space-y-6 max-w-6xl mx-auto w-full pb-12">
       {/* Header bar */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b pb-4">
-        <div className="flex items-center gap-3">
-          <Logo size="lg" iconOnly={true} />
+        <div className="flex items-center gap-3.5">
+          <Logo size="xl" iconOnly={true} />
           <div>
-            <h1 className="text-2xl font-bold tracking-tight">NFC Equipment Station</h1>
+            <div className="flex items-center gap-2">
+              <h1 className="text-2xl font-bold tracking-tight">NFC Equipment Station</h1>
+              <Badge variant="outline" className="hidden sm:inline-flex text-[11px] font-bold uppercase tracking-wider bg-primary/5 border-primary/30 text-primary">
+                Media Club
+              </Badge>
+            </div>
             <p className="text-xs text-muted-foreground">
-              Scan member NFC card, then start a checkout or return session with barcode scanner
+              Official Media Club equipment checkout &amp; return workstation
             </p>
           </div>
         </div>
@@ -755,16 +761,23 @@ export function NFCStationClient({
             <div className="absolute -top-24 -right-24 w-64 h-64 bg-primary/10 rounded-full blur-3xl pointer-events-none" />
             <div className="absolute -bottom-24 -left-24 w-64 h-64 bg-indigo-500/10 rounded-full blur-3xl pointer-events-none" />
 
-            <div className="relative mb-6">
-              <div className="w-24 h-24 rounded-full bg-primary/10 border-2 border-primary/30 flex items-center justify-center shadow-lg animate-pulse">
-                <Nfc className="h-12 w-12 text-primary" />
+            <div className="mb-4">
+              <MediaClubLogo className="h-16 sm:h-20 w-auto opacity-95 hover:scale-105 transition-transform drop-shadow-sm" />
+            </div>
+
+            <div className="relative mb-5">
+              <div className="w-20 h-20 rounded-full bg-primary/10 border-2 border-primary/30 flex items-center justify-center shadow-lg animate-pulse">
+                <Nfc className="h-10 w-10 text-primary" />
               </div>
               <div className="absolute -inset-2 rounded-full border border-primary/20 animate-ping pointer-events-none" />
             </div>
 
-            <h2 className="text-xl sm:text-2xl font-bold tracking-tight mb-2">
+            <h2 className="text-xl sm:text-2xl font-bold tracking-tight mb-1">
               Scan Member NFC Card
             </h2>
+            <span className="text-xs font-semibold uppercase tracking-wider text-primary/80 mb-2 block">
+              Media Club Station
+            </span>
             <p className="text-sm text-muted-foreground max-w-md mb-6">
               Hold or tap the member&apos;s physical NFC card on the USB scanner connected to this
               laptop.
@@ -873,14 +886,17 @@ export function NFCStationClient({
             <div className="flex flex-col md:flex-row md:items-center justify-between gap-6">
               {/* Card Profile */}
               <div className="flex items-center gap-4">
-                <div className="h-16 w-16 rounded-2xl bg-primary/20 border border-primary/40 flex items-center justify-center font-bold text-xl text-primary shadow-xs">
-                  <Nfc className="h-8 w-8" />
+                <div className="h-16 w-16 rounded-2xl border border-primary/40 flex items-center justify-center shadow-xs overflow-hidden bg-[#0b0f19]">
+                  <Logo size="lg" iconOnly={true} />
                 </div>
                 <div>
                   <div className="flex items-center gap-2">
                     <h2 className="text-xl font-bold">{cardData.card.member_name}</h2>
-                    <Badge variant="outline" className="font-mono text-xs text-primary border-primary/30">
-                      UID: {cardData.card.nfc_value}
+                    <Badge variant="outline" className="text-xs font-semibold text-primary border-primary/30 bg-primary/5">
+                      Media Club
+                    </Badge>
+                    <Badge variant="outline" className="font-mono text-xs text-muted-foreground border-border">
+                      {cardData.card.nfc_value}
                     </Badge>
                   </div>
                   {cardData.card.notes && (
@@ -1095,22 +1111,16 @@ export function NFCStationClient({
         <div className="fixed inset-0 z-50 bg-black/90 backdrop-blur-xl flex flex-col justify-between p-4 sm:p-8 animate-in fade-in duration-200">
           {/* Top Bar inside popup */}
           <div className="flex items-center justify-between border-b border-border/40 pb-4">
-            <div className="flex items-center gap-3">
-              <div
-                className={cn(
-                  "p-3 rounded-2xl border shadow-md",
-                  popupMode === "checkout"
-                    ? "bg-emerald-500/20 text-emerald-400 border-emerald-500/30"
-                    : "bg-blue-500/20 text-blue-400 border-blue-500/30"
-                )}
-              >
-                <Barcode className="h-6 w-6 animate-pulse" />
-              </div>
+            <div className="flex items-center gap-3.5">
+              <Logo size="lg" iconOnly={true} />
               <div>
                 <div className="flex items-center gap-2">
                   <h2 className="text-xl sm:text-2xl font-bold tracking-tight text-white">
                     {popupMode === "checkout" ? "Equipment Checkout Session" : "Equipment Return Session"}
                   </h2>
+                  <Badge variant="outline" className="hidden sm:inline-flex text-[10px] font-bold uppercase tracking-wider border-primary/40 text-primary bg-primary/10">
+                    Media Club
+                  </Badge>
                   <Badge
                     variant="outline"
                     className={cn(

@@ -10,6 +10,7 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { Logo } from "@/components/Logo";
+import { MediaClubLogo } from "@/components/MediaClubLogo";
 
 function MicrosoftIcon() {
   return (
@@ -40,7 +41,7 @@ export default function LoginPage() {
       <Card className="w-full max-w-sm shadow-md">
         <CardHeader className="text-center pb-4 flex flex-col items-center">
           <div className="mb-3">
-            <Logo size="xl" iconOnly={true} />
+            <MediaClubLogo className="h-16 w-auto drop-shadow-sm hover:scale-105 transition-transform" />
           </div>
           <CardTitle className="text-2xl font-extrabold tracking-tight">
             <span>Media</span>
