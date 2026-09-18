@@ -7,8 +7,8 @@ export default function manifest(): MetadataRoute.Manifest {
     description: "Official Media Club equipment checkout & return kiosk workstation",
     start_url: "/dashboard/nfc",
     display: "standalone",
-    background_color: "#0f172a",
-    theme_color: "#2563eb",
+    background_color: "#000000",
+    theme_color: "#000000",
     icons: [
       {
         src: "/icons/icon-192.png",

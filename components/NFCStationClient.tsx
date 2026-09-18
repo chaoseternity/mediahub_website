@@ -761,8 +761,8 @@ export function NFCStationClient({
             <div className="absolute -top-24 -right-24 w-64 h-64 bg-primary/10 rounded-full blur-3xl pointer-events-none" />
             <div className="absolute -bottom-24 -left-24 w-64 h-64 bg-indigo-500/10 rounded-full blur-3xl pointer-events-none" />
 
-            <div className="mb-4">
-              <MediaClubLogo className="h-16 sm:h-20 w-auto opacity-95 hover:scale-105 transition-transform drop-shadow-sm" />
+            <div className="mb-4 bg-black px-5 py-3.5 rounded-2xl border border-white/15 shadow-md flex items-center justify-center">
+              <MediaClubLogo className="h-14 sm:h-16 w-auto" variant="white" />
             </div>
 
             <div className="relative mb-5">
