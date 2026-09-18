@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <defs>
+    <linearGradient id="nfcGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#3b82f6" />
+      <stop offset="100%" stop-color="#1d4ed8" />
+    </linearGradient>
+  </defs>
+  <rect width="512" height="512" rx="110" fill="url(#nfcGrad)" />
+  <rect x="24" y="24" width="464" height="464" rx="90" fill="none" stroke="#93c5fd" stroke-width="8" opacity="0.6" />
+  <g fill="none" stroke="#ffffff" stroke-linecap="round">
+    <circle cx="230" cy="280" r="18" fill="#ffffff" stroke="none" />
+    <path d="M 230 215 A 65 65 0 0 1 295 280" stroke-width="26" />
+    <path d="M 230 160 A 120 120 0 0 1 350 280" stroke-width="26" />
+    <path d="M 230 105 A 175 175 0 0 1 405 280" stroke-width="26" />
+  </g>
+</svg>

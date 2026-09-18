@@ -21,6 +21,9 @@ import {
   ScanLine,
   PlusCircle,
   IdCard,
+  Download,
+  Maximize,
+  Minimize,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -183,6 +186,57 @@ export function NFCStationClient({
     equipment: Equipment;
     checkoutItem?: NFCCheckoutItem;
   } | null>(null);
+
+  // PWA & Kiosk desktop states
+  const [isStandalone, setIsStandalone] = useState(false);
+  const [deferredPrompt, setDeferredPrompt] = useState<any>(null);
+  const [showInstallHelp, setShowInstallHelp] = useState(false);
+  const [isFullscreen, setIsFullscreen] = useState(false);
+
+  useEffect(() => {
+    const checkStandalone = () => {
+      const isStandaloneMode =
+        window.matchMedia("(display-mode: standalone)").matches ||
+        (window.navigator as unknown as { standalone?: boolean }).standalone === true ||
+        document.referrer.includes("android-app://");
+      setIsStandalone(Boolean(isStandaloneMode));
+    };
+    checkStandalone();
+
+    const handleBeforeInstall = (e: Event) => {
+      e.preventDefault();
+      setDeferredPrompt(e);
+    };
+
+    window.addEventListener("beforeinstallprompt", handleBeforeInstall);
+    const onFullscreenChange = () => setIsFullscreen(Boolean(document.fullscreenElement));
+    document.addEventListener("fullscreenchange", onFullscreenChange);
+
+    return () => {
+      window.removeEventListener("beforeinstallprompt", handleBeforeInstall);
+      document.removeEventListener("fullscreenchange", onFullscreenChange);
+    };
+  }, []);
+
+  async function handleInstallApp() {
+    if (deferredPrompt) {
+      deferredPrompt.prompt();
+      const choice = await deferredPrompt.userChoice;
+      if (choice.outcome === "accepted") {
+        setDeferredPrompt(null);
+      }
+    } else {
+      setShowInstallHelp(true);
+    }
+  }
+
+  function toggleFullscreen() {
+    if (!document.fullscreenElement) {
+      document.documentElement.requestFullscreen().catch(() => {});
+    } else {
+      document.exitFullscreen().catch(() => {});
+    }
+  }
 
   const nfcInputRef = useRef<HTMLInputElement | null>(null);
   const popupInputRef = useRef<HTMLInputElement | null>(null);
@@ -598,7 +652,35 @@ export function NFCStationClient({
           </div>
         </div>
 
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2">
+          {!isStandalone ? (
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={handleInstallApp}
+              className="gap-1.5 text-xs font-semibold bg-primary/5 hover:bg-primary/10 border-primary/30 text-primary"
+              title="Install as dedicated desktop app on this laptop"
+            >
+              <Download className="h-3.5 w-3.5" />
+              Install App
+            </Button>
+          ) : (
+            <Badge variant="outline" className="text-xs gap-1 border-primary/30 bg-primary/5 text-primary py-1 px-2.5">
+              <Laptop className="h-3.5 w-3.5" />
+              Kiosk App
+            </Badge>
+          )}
+
+          <Button
+            variant="ghost"
+            size="icon-sm"
+            onClick={toggleFullscreen}
+            title={isFullscreen ? "Exit Fullscreen" : "Enter Fullscreen Kiosk"}
+            className="text-muted-foreground hover:text-foreground"
+          >
+            {isFullscreen ? <Minimize className="h-4 w-4" /> : <Maximize className="h-4 w-4" />}
+          </Button>
+
           <Button
             variant="outline"
             size="sm"
@@ -1430,6 +1512,57 @@ export function NFCStationClient({
             >
               Close
             </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* PWA Install Instructions Dialog */}
+      <Dialog open={showInstallHelp} onOpenChange={setShowInstallHelp}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <div className="flex items-center gap-2 text-primary mb-1">
+              <Laptop className="h-5 w-5" />
+              <DialogTitle>Install NFC Station App</DialogTitle>
+            </div>
+            <DialogDescription>
+              Run MediaHub NFC Station in its own dedicated, borderless desktop window on this laptop.
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="space-y-3 py-2 text-xs text-muted-foreground">
+            <div className="p-3.5 rounded-xl border bg-muted/40 space-y-2">
+              <p className="font-semibold text-foreground text-sm flex items-center gap-1.5">
+                <Download className="h-4 w-4 text-primary" />
+                How to install in Edge or Chrome:
+              </p>
+              <ol className="list-decimal pl-4 space-y-1.5 text-xs">
+                <li>
+                  Look at the right side of the <strong>address bar</strong> at the top of your browser.
+                </li>
+                <li>
+                  Click the <strong>Install App</strong> icon (looks like a computer screen 🖥️ or ➕).
+                </li>
+                <li>
+                  Or click the browser menu (<strong>...</strong> or <strong>⋮</strong>) &rarr;{" "}
+                  <strong>Apps</strong> &rarr; <strong>Install MediaHub NFC Station</strong>.
+                </li>
+                <li>Click <strong>Install</strong> to confirm.</li>
+              </ol>
+            </div>
+
+            <div className="rounded-xl border border-emerald-500/30 bg-emerald-500/5 p-3 text-emerald-700 dark:text-emerald-400 space-y-1">
+              <p className="font-semibold text-xs flex items-center gap-1.5">
+                <CheckCircle2 className="h-3.5 w-3.5 text-emerald-600" />
+                Dedicated Kiosk App:
+              </p>
+              <p className="text-[11px] leading-relaxed text-muted-foreground">
+                Once installed, a dedicated shortcut appears on your Windows Desktop and Taskbar. When clicked, it launches directly into this NFC Station with no browser URL bar or tabs, perfectly configured for USB card readers and barcode scanners.
+              </p>
+            </div>
+          </div>
+
+          <DialogFooter>
+            <Button onClick={() => setShowInstallHelp(false)}>Got It</Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
