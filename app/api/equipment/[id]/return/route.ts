@@ -24,14 +24,11 @@ export async function POST(
   const isAdmin = session.user.role === "admin";
   const activeCheckout = equipment.active_checkout;
   if (!isAdmin && activeCheckout) {
-    const callerName = (session.user.name || "").trim().toLowerCase();
-    const checkedOutName = (activeCheckout.checked_out_by_name || "").trim().toLowerCase();
     const callerId = Number(session.user.id);
     const checkedOutById = activeCheckout.checked_out_by;
 
     const isBorrower =
-      (checkedOutById !== null && callerId === checkedOutById) ||
-      (callerName.length > 0 && callerName === checkedOutName);
+      checkedOutById !== null && Number.isInteger(callerId) && callerId === checkedOutById;
 
     if (!isBorrower) {
       return NextResponse.json(

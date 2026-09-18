@@ -5,7 +5,11 @@ import { z } from "zod";
 
 const CheckoutSchema = z.object({
   checked_out_by_name: z.string().trim().min(1).max(100),
-  expected_return_at: z.string().max(100).optional(),
+  expected_return_at: z
+    .string()
+    .max(100)
+    .optional()
+    .refine((v) => !v || !isNaN(Date.parse(v)), { message: "Invalid date format" }),
   notes: z.string().trim().min(1).max(500),
   checkout_location: z.string().trim().max(200).optional(),
 });
@@ -29,14 +33,20 @@ export async function POST(
   const equipment = await getEquipmentById(eqId);
   if (!equipment) return NextResponse.json({ error: "Not found" }, { status: 404 });
 
-  if (equipment.status !== "Available") {
+  if (equipment.status?.toLowerCase() !== "available") {
     return NextResponse.json(
       { error: `Equipment is not available (current status: ${equipment.status})` },
       { status: 409 }
     );
   }
 
-  const body = await req.json();
+  let body: unknown;
+  try {
+    body = await req.json();
+  } catch {
+    return NextResponse.json({ error: "Invalid JSON body" }, { status: 400 });
+  }
+
   const parsed = CheckoutSchema.safeParse(body);
   if (!parsed.success) {
     return NextResponse.json({ error: parsed.error.flatten() }, { status: 400 });

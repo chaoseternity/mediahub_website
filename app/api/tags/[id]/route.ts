@@ -39,7 +39,10 @@ export async function DELETE(
 
   const result = await deleteTag(tagId);
   if (!result.success) {
-    return NextResponse.json({ error: result.error }, { status: 409 });
+    return NextResponse.json(
+      { error: result.error },
+      { status: result.error === "Tag not found." ? 404 : 409 }
+    );
   }
   return NextResponse.json({ success: true });
 }

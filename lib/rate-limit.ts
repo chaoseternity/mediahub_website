@@ -38,9 +38,23 @@ if (typeof setInterval !== "undefined") {
  */
 const MAX_ENTRIES = 10_000;
 
-export function checkRateLimit(ip: string, limit: number, windowMs: number): boolean {
+let lastSweepTime = Date.now();
+
+export function checkRateLimit(rawIp: string, limit: number, windowMs: number): boolean {
+  const ip = (rawIp || "unknown").trim().slice(0, 64) || "unknown";
   const now = Date.now();
   const windowStart = now - windowMs;
+
+  // Lazy sweep on active requests for serverless/edge environments where setInterval is frozen
+  if (now - lastSweepTime > SWEEP_INTERVAL_MS) {
+    lastSweepTime = now;
+    const cutoff = now - SWEEP_INTERVAL_MS;
+    for (const [key, timestamps] of store) {
+      if (timestamps.length === 0 || timestamps[timestamps.length - 1] < cutoff) {
+        store.delete(key);
+      }
+    }
+  }
 
   const timestamps = (store.get(ip) ?? []).filter((t) => t > windowStart);
 

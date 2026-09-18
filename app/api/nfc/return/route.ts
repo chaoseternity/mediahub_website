@@ -39,28 +39,28 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "Forbidden" }, { status: 403 });
   }
 
-  const body = await req.json();
-  const parsed = NfcReturnSchema.safeParse(body);
-  if (!parsed.success) {
-    return NextResponse.json({ error: parsed.error.flatten() }, { status: 400 });
-  }
-
-  const { barcode, equipment_ids } = parsed.data;
-  const cardValue = (parsed.data.nfc_value || parsed.data.nfc_id || "").trim();
-  const isAdmin = session.user.role === "admin";
-  const callerName = (session.user.name || "").trim().toLowerCase();
-  const callerId = Number(session.user.id);
-
-  let card: Awaited<ReturnType<typeof getNfcCardByValue>> = undefined;
-  if (cardValue) {
-    card = await getNfcCardByValue(cardValue);
-    if (!card) {
-      return NextResponse.json({ error: `NFC card "${cardValue}" not found in database` }, { status: 404 });
+  try {
+    const body = await req.json();
+    const parsed = NfcReturnSchema.safeParse(body);
+    if (!parsed.success) {
+      return NextResponse.json({ error: parsed.error.flatten() }, { status: 400 });
     }
-  }
 
-  // Handle batch return
-  if (equipment_ids && equipment_ids.length > 0) {
+    const { barcode, equipment_ids } = parsed.data;
+    const cardValue = (parsed.data.nfc_value || parsed.data.nfc_id || "").trim();
+    const isAdmin = session.user.role === "admin";
+    const callerId = Number(session.user.id);
+
+    let card: Awaited<ReturnType<typeof getNfcCardByValue>> = undefined;
+    if (cardValue) {
+      card = await getNfcCardByValue(cardValue);
+      if (!card) {
+        return NextResponse.json({ error: `NFC card "${cardValue}" not found in database` }, { status: 404 });
+      }
+    }
+
+    // Handle batch return
+    if (equipment_ids && equipment_ids.length > 0) {
     for (const eqId of equipment_ids) {
       const eq = await getEquipmentById(eqId);
       if (eq && eq.active_checkout) {
@@ -76,11 +76,9 @@ export async function POST(req: NextRequest) {
             );
           }
         } else if (!isAdmin) {
-          const checkedOutName = (eq.active_checkout.checked_out_by_name || "").trim().toLowerCase();
           const checkedOutById = eq.active_checkout.checked_out_by;
           const isBorrower =
-            (checkedOutById !== null && callerId === checkedOutById) ||
-            (callerName.length > 0 && callerName === checkedOutName);
+            checkedOutById !== null && Number.isInteger(callerId) && callerId === checkedOutById;
 
           if (!isBorrower) {
             return NextResponse.json(
@@ -136,11 +134,9 @@ export async function POST(req: NextRequest) {
       }, { status: 409 });
     }
   } else if (!isAdmin) {
-    const checkedOutName = (equipment.active_checkout.checked_out_by_name || "").trim().toLowerCase();
     const checkedOutById = equipment.active_checkout.checked_out_by;
     const isBorrower =
-      (checkedOutById !== null && callerId === checkedOutById) ||
-      (callerName.length > 0 && callerName === checkedOutName);
+      checkedOutById !== null && Number.isInteger(callerId) && callerId === checkedOutById;
 
     if (!isBorrower) {
       return NextResponse.json({
@@ -149,7 +145,6 @@ export async function POST(req: NextRequest) {
     }
   }
 
-  try {
     const checkout = await nfcReturn(equipment.id);
     return NextResponse.json({ success: true, checkout, equipment });
   } catch (err: unknown) {

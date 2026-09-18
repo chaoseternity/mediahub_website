@@ -4,7 +4,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 
 const CreateTagSchema = z.object({
-  name: z.string().min(1).max(50),
+  name: z.string().trim().min(1, "Tag name is required").max(50, "Tag name cannot exceed 50 characters"),
 });
 
 export async function GET() {
@@ -22,13 +22,13 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "Forbidden" }, { status: 403 });
   }
 
-  const body = await req.json();
-  const parsed = CreateTagSchema.safeParse(body);
-  if (!parsed.success) {
-    return NextResponse.json({ error: parsed.error.flatten() }, { status: 400 });
-  }
-
   try {
+    const body = await req.json();
+    const parsed = CreateTagSchema.safeParse(body);
+    if (!parsed.success) {
+      return NextResponse.json({ error: parsed.error.flatten() }, { status: 400 });
+    }
+
     const tag = await createTag(parsed.data.name);
     return NextResponse.json(tag, { status: 201 });
   } catch (err: unknown) {

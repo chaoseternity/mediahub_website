@@ -7,12 +7,12 @@ import { z } from "zod";
 export const runtime = "nodejs";
 
 const CreateSOPManualSchema = z.object({
-  title: z.string().min(1, "Title is required"),
-  category: z.string().optional(),
-  content: z.string().min(1, "Content is required"),
-  file_name: z.string().nullable().optional(),
-  file_type: z.string().nullable().optional(),
-  file_size: z.number().nullable().optional(),
+  title: z.string().trim().min(1, "Title is required").max(200, "Title cannot exceed 200 characters"),
+  category: z.string().trim().max(100, "Category cannot exceed 100 characters").optional(),
+  content: z.string().trim().min(1, "Content is required").max(500000, "Content cannot exceed 500,000 characters"),
+  file_name: z.string().trim().max(255, "File name cannot exceed 255 characters").nullable().optional(),
+  file_type: z.string().trim().max(100, "File type cannot exceed 100 characters").nullable().optional(),
+  file_size: z.number().max(10 * 1024 * 1024, "File size cannot exceed 10MB").nullable().optional(),
   overwrite_id: z.number().int().positive().nullable().optional(),
 });
 
@@ -26,9 +26,8 @@ export async function GET() {
     const documents = await getAllSOPDocuments();
     return NextResponse.json(documents);
   } catch (err: unknown) {
-    const errMsg = err instanceof Error ? `${err.name}: ${err.message}` : "Failed to load SOP documents";
     console.error("Failed to fetch SOP documents:", err);
-    return NextResponse.json({ error: errMsg }, { status: 500 });
+    return NextResponse.json({ error: "Failed to load SOP documents" }, { status: 500 });
   }
 }
 
@@ -119,10 +118,17 @@ export async function POST(req: NextRequest) {
       const formData = await req.formData();
       const file = formData.get("file") as File | null;
       const customTitle = formData.get("title") as string | null;
-      const category = (formData.get("category") as string | null) || "General";
+      if (customTitle && customTitle.trim().length > 200) {
+        return NextResponse.json({ error: "Title cannot exceed 200 characters" }, { status: 400 });
+      }
+      const rawCategory = (formData.get("category") as string | null) || "General";
+      const category = rawCategory.trim().slice(0, 100);
       const clientExtractedContent = formData.get("content") as string | null;
+      if (clientExtractedContent && clientExtractedContent.trim().length > 500000) {
+        return NextResponse.json({ error: "Content cannot exceed 500,000 characters" }, { status: 400 });
+      }
       const overwriteIdStr = formData.get("overwrite_id") as string | null;
-      const overwriteId = overwriteIdStr ? Number(overwriteIdStr) : null;
+      const overwriteId = overwriteIdStr && /^\d+$/.test(overwriteIdStr) ? Number(overwriteIdStr) : null;
 
       if (!file && !clientExtractedContent) {
         return NextResponse.json({ error: "No file or text content provided in upload." }, { status: 400 });
@@ -204,8 +210,7 @@ export async function POST(req: NextRequest) {
 
     return NextResponse.json({ error: "Unsupported Content-Type header." }, { status: 400 });
   } catch (err: unknown) {
-    const errorDetail = err instanceof Error ? `${err.name}: ${err.message}` : "Internal server error occurred.";
     console.error("SOP Upload API Error Detail:", err);
-    return NextResponse.json({ error: errorDetail }, { status: 500 });
+    return NextResponse.json({ error: "Internal server error occurred." }, { status: 500 });
   }
 }

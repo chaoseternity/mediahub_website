@@ -3,7 +3,12 @@ import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 
 const RSVPPostSchema = z.object({
-  token: z.string().trim().min(1, "Token required").max(100, "Invalid token length"),
+  token: z
+    .string()
+    .trim()
+    .min(1, "Token required")
+    .max(100, "Invalid token length")
+    .regex(/^[0-9a-zA-Z_-]+$/, "Invalid token format"),
   status: z.enum(["confirmed", "declined"]),
 });
 
@@ -13,7 +18,7 @@ export async function GET(req: NextRequest) {
     const rawToken = searchParams.get("token");
     const token = rawToken?.trim();
 
-    if (!token || token.length > 100) {
+    if (!token || token.length > 100 || !/^[0-9a-zA-Z_-]+$/.test(token)) {
       return NextResponse.json({ error: "Token is required and must be valid" }, { status: 400 });
     }
 
@@ -59,7 +64,11 @@ export async function POST(req: NextRequest) {
     const result = await updateDeploymentRSVP(token, status);
 
     if (!result.success) {
-      return NextResponse.json({ error: result.error || "Failed to update RSVP" }, { status: 400 });
+      const isNotFound = result.error?.includes("Invalid or expired");
+      return NextResponse.json(
+        { error: result.error || "Failed to update RSVP" },
+        { status: isNotFound ? 404 : 400 }
+      );
     }
 
     return NextResponse.json({ success: true, status });

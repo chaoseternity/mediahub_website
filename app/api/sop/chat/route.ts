@@ -35,13 +35,20 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
+  let body: unknown;
   try {
-    const body = await req.json();
-    const parsed = ChatRequestSchema.safeParse(body);
-    if (!parsed.success) {
-      const issue = parsed.error.issues[0]?.message || "Invalid request. Please provide a question.";
-      return NextResponse.json({ error: issue }, { status: 400 });
-    }
+    body = await req.json();
+  } catch {
+    return NextResponse.json({ error: "Invalid JSON body" }, { status: 400 });
+  }
+
+  const parsed = ChatRequestSchema.safeParse(body);
+  if (!parsed.success) {
+    const issue = parsed.error.issues[0]?.message || "Invalid request. Please provide a question.";
+    return NextResponse.json({ error: issue }, { status: 400 });
+  }
+
+  try {
 
     const question = (parsed.data.question || parsed.data.message || "").trim();
     const history = parsed.data.history || [];
@@ -70,7 +77,7 @@ export async function POST(req: NextRequest) {
   } catch (err: unknown) {
     console.error("SOP Chat API Error:", err);
     return NextResponse.json(
-      { error: err instanceof Error ? err.message : "Failed to process chat query" },
+      { error: "Failed to process chat query" },
       { status: 500 }
     );
   }

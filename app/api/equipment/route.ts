@@ -30,12 +30,17 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "Forbidden" }, { status: 403 });
   }
 
-  const body = await req.json();
-  const parsed = CreateEquipmentSchema.safeParse(body);
-  if (!parsed.success) {
-    return NextResponse.json({ error: parsed.error.flatten() }, { status: 400 });
-  }
+  try {
+    const body = await req.json();
+    const parsed = CreateEquipmentSchema.safeParse(body);
+    if (!parsed.success) {
+      return NextResponse.json({ error: parsed.error.flatten() }, { status: 400 });
+    }
 
-  const item = await createEquipment(parsed.data);
-  return NextResponse.json(item, { status: 201 });
+    const item = await createEquipment(parsed.data);
+    return NextResponse.json(item, { status: 201 });
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : "Failed to create equipment";
+    return NextResponse.json({ error: msg }, { status: 400 });
+  }
 }

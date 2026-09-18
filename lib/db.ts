@@ -45,6 +45,7 @@ export async function getUserByEmail(email: string): Promise<User | undefined> {
 }
 
 export async function getUserById(id: number): Promise<User | undefined> {
+  if (!Number.isInteger(id) || id <= 0) return undefined;
   await ensureSchema();
   const { rows } = await sql<User>`SELECT * FROM users WHERE id = ${id}`;
   return rows[0];
@@ -103,19 +104,70 @@ export async function upsertUser(params: {
   return rows[0];
 }
 
-export async function updateUserRole(id: number, role: Role): Promise<void> {
+export async function countAdmins(): Promise<number> {
   await ensureSchema();
-  await sql`UPDATE users SET role = ${role} WHERE id = ${id}`;
+  const { rows } = await sql<{ c: string }>`SELECT COUNT(*)::text as c FROM users WHERE role = 'admin'`;
+  return parseInt(rows[0]?.c ?? "0", 10);
 }
 
-export async function deleteUser(id: number): Promise<void> {
+export async function updateUserRole(id: number, role: Role): Promise<{ success: boolean; error?: string }> {
   await ensureSchema();
+  if (!Number.isInteger(id) || id <= 0) {
+    return { success: false, error: "Invalid user ID" };
+  }
+  const user = await getUserById(id);
+  if (!user) {
+    return { success: false, error: "User not found" };
+  }
+  if (user.role === "admin" && role !== "admin") {
+    const adminCount = await countAdmins();
+    if (adminCount <= 1) {
+      return { success: false, error: "Cannot demote the only remaining admin account." };
+    }
+  }
+  await sql`UPDATE users SET role = ${role} WHERE id = ${id}`;
+  return { success: true };
+}
+
+export async function deleteUser(id: number): Promise<{ success: boolean; error?: string }> {
+  await ensureSchema();
+  if (!Number.isInteger(id) || id <= 0) {
+    return { success: false, error: "Invalid user ID" };
+  }
+  const user = await getUserById(id);
+  if (!user) {
+    return { success: false, error: "User not found" };
+  }
+  if (user.role === "admin") {
+    const adminCount = await countAdmins();
+    if (adminCount <= 1) {
+      return { success: false, error: "Cannot delete the only remaining admin account." };
+    }
+  }
+  const activeCheckouts = await sql`
+    SELECT id FROM checkouts WHERE checked_out_by = ${id} AND returned_at IS NULL LIMIT 1
+  `;
+  if (activeCheckouts.rows.length > 0) {
+    return {
+      success: false,
+      error: "Cannot delete user with active equipment checkouts. Please return all equipment first.",
+    };
+  }
+  await sql`UPDATE checkouts SET checked_out_by = NULL WHERE checked_out_by = ${id}`;
   await sql`DELETE FROM users WHERE id = ${id}`;
+  return { success: true };
 }
 
 export async function updateUsername(id: number, username: string): Promise<void> {
+  if (!Number.isInteger(id) || id <= 0) {
+    throw new Error("Invalid user ID");
+  }
+  const trimmed = username ? username.trim() : "";
+  if (!trimmed || trimmed.length > 50) {
+    throw new Error("Invalid username");
+  }
   await ensureSchema();
-  await sql`UPDATE users SET username = ${username} WHERE id = ${id}`;
+  await sql`UPDATE users SET username = ${trimmed} WHERE id = ${id}`;
 }
 
 // ---------------------------------------------------------------------------
@@ -123,9 +175,10 @@ export async function updateUsername(id: number, username: string): Promise<void
 // ---------------------------------------------------------------------------
 
 export async function getNfcCardByValue(nfcValue: string): Promise<NFCCard | undefined> {
-  await ensureSchema();
-  const trimmed = nfcValue.trim();
+  if (!nfcValue || typeof nfcValue !== "string") return undefined;
+  const trimmed = nfcValue.trim().slice(0, 100);
   if (!trimmed) return undefined;
+  await ensureSchema();
   const { rows } = await sql<NFCCard>`
     SELECT * FROM nfc_cards WHERE LOWER(nfc_value) = LOWER(${trimmed})
   `;
@@ -161,6 +214,9 @@ export async function createNfcCard(params: {
 }
 
 export async function updateNfcCard(id: number, memberName: string, notes?: string): Promise<void> {
+  if (!Number.isInteger(id) || id <= 0) {
+    throw new Error("Invalid NFC card ID");
+  }
   await ensureSchema();
   await sql`
     UPDATE nfc_cards
@@ -170,6 +226,9 @@ export async function updateNfcCard(id: number, memberName: string, notes?: stri
 }
 
 export async function deleteNfcCard(id: number): Promise<void> {
+  if (!Number.isInteger(id) || id <= 0) {
+    throw new Error("Invalid NFC card ID");
+  }
   await ensureSchema();
   await sql`DELETE FROM nfc_cards WHERE id = ${id}`;
 }
@@ -236,6 +295,7 @@ export async function getAllEquipment(): Promise<Equipment[]> {
 }
 
 export async function getEquipmentById(id: number): Promise<EquipmentDetail | undefined> {
+  if (!Number.isInteger(id) || id <= 0) return undefined;
   await ensureSchema();
   const { rows: eqRows } = await sql<EquipmentRawRow>`
     SELECT 
@@ -648,16 +708,34 @@ export async function batchUpsertEquipment(
 
 export async function deleteEquipment(id: number): Promise<{ success: boolean; error?: string }> {
   await ensureSchema();
+  if (!Number.isInteger(id) || id <= 0) {
+    return { success: false, error: "Invalid equipment ID." };
+  }
   const activeCheckouts = await sql`SELECT id FROM checkouts WHERE equipment_id = ${id} AND returned_at IS NULL`;
   if (activeCheckouts.rows.length > 0) {
     return { success: false, error: "Cannot delete equipment with an active checkout." };
   }
 
-  await sql`DELETE FROM equipment WHERE id = ${id}`;
+  const activeEvents = await sql`
+    SELECT ee.event_id, ev.name 
+    FROM event_equipment ee 
+    JOIN events ev ON ev.id = ee.event_id 
+    WHERE ee.equipment_id = ${id} AND ev.end_time > CURRENT_TIMESTAMP
+    LIMIT 1
+  `;
+  if (activeEvents.rows.length > 0) {
+    return { success: false, error: `Cannot delete equipment allocated to upcoming/ongoing event "${activeEvents.rows[0].name}".` };
+  }
+
+  const { rowCount } = await sql`DELETE FROM equipment WHERE id = ${id}`;
+  if (!rowCount || rowCount === 0) {
+    return { success: false, error: "Equipment not found." };
+  }
   return { success: true };
 }
 
 export async function getEquipmentByTagId(tagId: number): Promise<Equipment[]> {
+  if (!Number.isInteger(tagId) || tagId <= 0) return [];
   await ensureSchema();
   const { rows } = await sql<EquipmentRawRow>`
     SELECT 
@@ -740,7 +818,20 @@ export async function createCheckout(params: {
   nfc_value?: string;
   nfc_id?: string;
 }): Promise<Checkout> {
+  if (!Number.isInteger(params.equipment_id) || params.equipment_id <= 0) {
+    throw new Error("Invalid equipment ID");
+  }
   await ensureSchema();
+  const eqRes = await sql<{ id: number; status: EquipmentStatus }>`
+    SELECT id, status FROM equipment WHERE id = ${params.equipment_id}
+  `;
+  if (eqRes.rows.length === 0) {
+    throw new Error("Equipment not found.");
+  }
+  if (eqRes.rows[0].status?.toLowerCase() !== "available") {
+    throw new Error(`Equipment is not available for checkout (current status: ${eqRes.rows[0].status}).`);
+  }
+
   const active = await sql`SELECT id FROM checkouts WHERE equipment_id = ${params.equipment_id} AND returned_at IS NULL`;
   if (active.rows.length > 0) {
     throw new Error("Equipment is already checked out.");
@@ -758,6 +849,9 @@ export async function createCheckout(params: {
 }
 
 export async function returnCheckout(equipment_id: number): Promise<Checkout> {
+  if (!Number.isInteger(equipment_id) || equipment_id <= 0) {
+    throw new Error("Invalid equipment ID");
+  }
   await ensureSchema();
   const active = await sql<Checkout>`SELECT * FROM checkouts WHERE equipment_id = ${equipment_id} AND returned_at IS NULL`;
   if (active.rows.length === 0) {
@@ -769,7 +863,18 @@ export async function returnCheckout(equipment_id: number): Promise<Checkout> {
     UPDATE checkouts SET returned_at = CURRENT_TIMESTAMP WHERE id = ${checkoutId} RETURNING *
   `;
 
-  await sql`UPDATE equipment SET status = 'Available', updated_at = CURRENT_TIMESTAMP WHERE id = ${equipment_id}`;
+  const eqRes = await sql<{ condition: Condition }>`SELECT condition FROM equipment WHERE id = ${equipment_id}`;
+  const cond = eqRes.rows[0]?.condition;
+  let returnedStatus: EquipmentStatus = "Available";
+  if (cond === "Retired") {
+    returnedStatus = "Unavailable (Retired)";
+  } else if (cond === "Broken") {
+    returnedStatus = "Unavailable (Broken)";
+  } else if (cond === "Missing") {
+    returnedStatus = "Unavailable (Missing)";
+  }
+
+  await sql`UPDATE equipment SET status = ${returnedStatus}, updated_at = CURRENT_TIMESTAMP WHERE id = ${equipment_id}`;
   return rows[0];
 }
 
@@ -824,6 +929,7 @@ export async function getNfcMemberData(nfcValue: string): Promise<NFCMemberData 
     JOIN equipment e ON e.id = c.equipment_id
     WHERE (LOWER(c.nfc_value) = LOWER(${trimmed}) OR LOWER(c.nfc_id) = LOWER(${trimmed}))
     ORDER BY c.checked_out_at DESC
+    LIMIT 100
   `;
 
   return {
@@ -927,6 +1033,7 @@ export async function getAllEvents(): Promise<AppEvent[]> {
 }
 
 export async function getEventById(id: number): Promise<AppEvent | undefined> {
+  if (!Number.isInteger(id) || id <= 0) return undefined;
   await ensureSchema();
   const { rows } = await sql<Omit<AppEvent, "oics" | "section_ics" | "section_equipment" | "section_deployments" | "section_rehearsals" | "status" | "ics" | "equipment">>`
     SELECT id, name, description, start_time, end_time, location, created_by, has_rehearsal, rehearsal_start_time, rehearsal_end_time, created_at, updated_at
@@ -1158,7 +1265,13 @@ export async function updateEvent(
 
 export async function deleteEvent(id: number): Promise<{ success: boolean; error?: string }> {
   await ensureSchema();
-  await sql`DELETE FROM events WHERE id = ${id}`;
+  if (!Number.isInteger(id) || id <= 0) {
+    return { success: false, error: "Invalid event ID." };
+  }
+  const { rowCount } = await sql`DELETE FROM events WHERE id = ${id}`;
+  if (!rowCount || rowCount === 0) {
+    return { success: false, error: "Event not found." };
+  }
   return { success: true };
 }
 
@@ -1425,6 +1538,7 @@ export async function getAllSOPDocuments(): Promise<SOPDocument[]> {
 }
 
 export async function getSOPDocumentById(id: number): Promise<SOPDocument | undefined> {
+  if (!Number.isInteger(id) || id <= 0) return undefined;
   await ensureSOPTable();
   const { rows } = await sql<SOPDocument>`
     SELECT 
@@ -1532,12 +1646,22 @@ export async function updateSOPDocument(
 
 export async function deleteSOPDocument(id: number): Promise<{ success: boolean; error?: string }> {
   await ensureSOPTable();
-  await sql`DELETE FROM sop_documents WHERE id = ${id}`;
+  if (!Number.isInteger(id) || id <= 0) {
+    return { success: false, error: "Invalid document ID." };
+  }
+  const { rowCount } = await sql`DELETE FROM sop_documents WHERE id = ${id}`;
+  if (!rowCount || rowCount === 0) {
+    return { success: false, error: "SOP Document not found." };
+  }
   return { success: true };
 }
 
-export async function searchSOPDocuments(query: string): Promise<SOPDocument[]> {
+export async function searchSOPDocuments(rawQuery: string): Promise<SOPDocument[]> {
   await ensureSOPTable();
+  const query = (rawQuery || "").trim().slice(0, 200);
+  if (!query) {
+    return getAllSOPDocuments();
+  }
   const escaped = query.replace(/[%_\\]/g, "\\$&");
   const pattern = `%${escaped}%`;
   const { rows } = await sql<SOPDocument>`

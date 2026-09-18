@@ -18,8 +18,13 @@ export async function DELETE(
     return NextResponse.json({ error: "Invalid parameters" }, { status: 400 });
   }
 
-  const result = await removeTagFromEquipment(eqId, tagId);
-  if (!result.success)
-    return NextResponse.json({ error: result.error }, { status: 409 });
-  return NextResponse.json({ success: true });
+  try {
+    const result = await removeTagFromEquipment(eqId, tagId);
+    if (!result.success)
+      return NextResponse.json({ error: result.error }, { status: 409 });
+    return NextResponse.json({ success: true });
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : "Failed to remove tag from equipment";
+    return NextResponse.json({ error: msg }, { status: 500 });
+  }
 }

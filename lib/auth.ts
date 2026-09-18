@@ -29,15 +29,24 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
       // roles take effect on the user's next page navigation without re-login.
       if (!token.email) return token;
       const dbUser = await getUserByEmail(token.email);
-      token.role = dbUser?.role ?? "viewer";
-      token.userId = String(dbUser?.id ?? "");
-      token.username = dbUser?.username ?? null;
+      if (!dbUser) {
+        token.userId = "";
+        token.role = "viewer";
+        token.username = null;
+        return token;
+      }
+      token.role = dbUser.role ?? "viewer";
+      token.userId = String(dbUser.id);
+      token.username = dbUser.username ?? null;
       // On initial sign-in, account is present — no extra work needed.
       void account;
       return token;
     },
 
     async session({ session, token }) {
+      if (!token.userId) {
+        return null as any;
+      }
       if (session.user) {
         session.user.role = (token.role as Role) ?? "viewer";
         session.user.id = token.userId as string;

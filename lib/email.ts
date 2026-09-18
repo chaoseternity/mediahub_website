@@ -75,14 +75,25 @@ export async function sendDeploymentInvitationEmail({
   origin,
 }: SendDeploymentInvitationParams): Promise<{ success: boolean; previewUrl?: string; error?: string }> {
   try {
-    const baseUrl =
+    const rawBaseUrl =
       process.env.NEXTAUTH_URL ||
       (process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : origin) ||
       "http://localhost:3000";
 
-    const rsvpUrl = `${baseUrl}/rsvp/${token}`;
-    const confirmUrl = `${baseUrl}/rsvp/${token}?action=confirm`;
-    const declineUrl = `${baseUrl}/rsvp/${token}?action=decline`;
+    let baseUrl = "http://localhost:3000";
+    try {
+      const parsed = new URL(rawBaseUrl);
+      if (parsed.protocol === "http:" || parsed.protocol === "https:") {
+        baseUrl = parsed.origin;
+      }
+    } catch {
+      baseUrl = "http://localhost:3000";
+    }
+
+    const safeToken = encodeURIComponent(token.trim());
+    const rsvpUrl = `${baseUrl}/rsvp/${safeToken}`;
+    const confirmUrl = `${baseUrl}/rsvp/${safeToken}?action=confirm`;
+    const declineUrl = `${baseUrl}/rsvp/${safeToken}?action=decline`;
 
     const sectionName = SECTION_NAMES[section] || section;
     const sectionColor = SECTION_COLORS[section] || "#7c3aed";
@@ -196,12 +207,12 @@ export async function sendDeploymentInvitationEmail({
               <table role="presentation" border="0" cellpadding="0" cellspacing="0" style="margin: 0 auto;">
                 <tr>
                   <td style="padding: 0 8px;">
-                    <a href="${confirmUrl}" style="display: inline-block; padding: 12px 24px; background-color: #16a34a; color: #ffffff; font-weight: 600; font-size: 14px; text-decoration: none; border-radius: 8px; box-shadow: 0 2px 4px rgba(22, 163, 74, 0.2);">
+                    <a href="${escapeHtml(confirmUrl)}" style="display: inline-block; padding: 12px 24px; background-color: #16a34a; color: #ffffff; font-weight: 600; font-size: 14px; text-decoration: none; border-radius: 8px; box-shadow: 0 2px 4px rgba(22, 163, 74, 0.2);">
                       ✓ I am Free (Confirm)
                     </a>
                   </td>
                   <td style="padding: 0 8px;">
-                    <a href="${declineUrl}" style="display: inline-block; padding: 12px 24px; background-color: #ef4444; color: #ffffff; font-weight: 600; font-size: 14px; text-decoration: none; border-radius: 8px; box-shadow: 0 2px 4px rgba(239, 68, 68, 0.2);">
+                    <a href="${escapeHtml(declineUrl)}" style="display: inline-block; padding: 12px 24px; background-color: #ef4444; color: #ffffff; font-weight: 600; font-size: 14px; text-decoration: none; border-radius: 8px; box-shadow: 0 2px 4px rgba(239, 68, 68, 0.2);">
                       ✕ Not Free (Decline)
                     </a>
                   </td>
@@ -211,7 +222,7 @@ export async function sendDeploymentInvitationEmail({
 
             <p style="margin: 0; font-size: 12px; text-align: center; color: #71717a;">
               Need to add a note or change your response later? 
-              <a href="${rsvpUrl}" style="color: #4f46e5; text-decoration: underline;">View the Event RSVP Page</a>
+              <a href="${escapeHtml(rsvpUrl)}" style="color: #4f46e5; text-decoration: underline;">View the Event RSVP Page</a>
             </p>
           </div>
 

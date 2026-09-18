@@ -1,11 +1,18 @@
 import { auth } from "@/lib/auth";
-import { updateUserRole, updateUsername, deleteUser } from "@/lib/db";
+import { getUserById, updateUserRole, updateUsername, deleteUser } from "@/lib/db";
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 
 const UpdateUserSchema = z.union([
   z.object({ role: z.enum(["admin", "verified", "viewer"]) }),
-  z.object({ username: z.string().trim().min(1).max(50) }),
+  z.object({
+    username: z
+      .string()
+      .trim()
+      .min(1)
+      .max(50)
+      .regex(/^[\p{L}\p{N}_\-. ]+$/u, "Username contains invalid characters"),
+  }),
 ]);
 
 export async function PUT(
@@ -24,18 +31,33 @@ export async function PUT(
     return NextResponse.json({ error: "Invalid user ID" }, { status: 400 });
   }
 
-  const body = await req.json();
+  let body: unknown;
+  try {
+    body = await req.json();
+  } catch {
+    return NextResponse.json({ error: "Invalid JSON body" }, { status: 400 });
+  }
+
   const parsed = UpdateUserSchema.safeParse(body);
   if (!parsed.success) {
     return NextResponse.json({ error: parsed.error.flatten() }, { status: 400 });
   }
 
+  if ("role" in parsed.data && Number(session.user.id) === userId && parsed.data.role !== "admin") {
+    return NextResponse.json({ error: "Cannot demote your own admin account" }, { status: 400 });
+  }
+
+  const user = await getUserById(userId);
+  if (!user) {
+    return NextResponse.json({ error: "User not found" }, { status: 404 });
+  }
+
   try {
     if ("role" in parsed.data) {
-      if (Number(session.user.id) === userId && parsed.data.role !== "admin") {
-        return NextResponse.json({ error: "Cannot demote your own admin account" }, { status: 400 });
+      const result = await updateUserRole(userId, parsed.data.role);
+      if (!result.success) {
+        return NextResponse.json({ error: result.error }, { status: 400 });
       }
-      await updateUserRole(userId, parsed.data.role);
     } else if ("username" in parsed.data) {
       await updateUsername(userId, parsed.data.username);
     }
@@ -66,6 +88,14 @@ export async function DELETE(
     return NextResponse.json({ error: "Cannot delete your own account" }, { status: 400 });
   }
 
-  await deleteUser(userId);
+  const user = await getUserById(userId);
+  if (!user) {
+    return NextResponse.json({ error: "User not found" }, { status: 404 });
+  }
+
+  const result = await deleteUser(userId);
+  if (!result.success) {
+    return NextResponse.json({ error: result.error }, { status: 400 });
+  }
   return NextResponse.json({ success: true });
 }

@@ -109,6 +109,21 @@ export async function extractTextFromDocument(
   const nameLower = fileName.toLowerCase();
   const typeLower = fileType.toLowerCase();
 
+  let text: string;
+
+  const allowedExtensions = [".pdf", ".docx", ".doc", ".txt", ".md", ".markdown", ".csv"];
+  const ext = nameLower.includes(".") ? nameLower.slice(nameLower.lastIndexOf(".")) : "";
+  const isTextMime = typeLower.startsWith("text/");
+  const isDocMime =
+    typeLower.includes("pdf") ||
+    typeLower.includes("wordprocessingml") ||
+    typeLower.includes("msword") ||
+    typeLower.includes("officedocument");
+
+  if (!allowedExtensions.includes(ext) && !isTextMime && !isDocMime) {
+    throw new Error("Unsupported document format. Allowed formats: .docx, .doc, .pdf, .txt, .md, .csv");
+  }
+
   // 1. Word Document (.docx / .doc)
   if (
     nameLower.endsWith(".docx") ||
@@ -117,19 +132,23 @@ export async function extractTextFromDocument(
     typeLower.includes("msword") ||
     typeLower.includes("officedocument")
   ) {
-    return extractTextFromDocx(data);
+    text = await extractTextFromDocx(data);
+  } else if (nameLower.endsWith(".pdf") || typeLower.includes("pdf")) {
+    // 2. PDF Document (.pdf)
+    text = await extractTextFromPdf(data);
+  } else {
+    // 3. Plain Text / Markdown (.txt, .md, .markdown, .csv)
+    const buffer = toBuffer(data);
+    text = buffer.toString("utf-8").trim();
+    if (!text) {
+      throw new Error("The text file is empty.");
+    }
   }
 
-  // 2. PDF Document (.pdf)
-  if (nameLower.endsWith(".pdf") || typeLower.includes("pdf")) {
-    return extractTextFromPdf(data);
+  // Cap extracted text to 500,000 characters to prevent memory exhaustion
+  if (text.length > 500_000) {
+    text = text.slice(0, 500_000);
   }
 
-  // 3. Plain Text / Markdown (.txt, .md, .markdown, .csv)
-  const buffer = toBuffer(data);
-  const text = buffer.toString("utf-8").trim();
-  if (!text) {
-    throw new Error("The text file is empty.");
-  }
   return text;
 }

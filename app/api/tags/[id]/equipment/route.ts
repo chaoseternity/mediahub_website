@@ -35,13 +35,22 @@ export async function POST(
   if (!Number.isInteger(tagId) || tagId <= 0) {
     return NextResponse.json({ error: "Invalid tag ID" }, { status: 400 });
   }
-  const body = await req.json();
-  const parsed = AddEquipmentSchema.safeParse(body);
-  if (!parsed.success)
-    return NextResponse.json({ error: parsed.error.flatten() }, { status: 400 });
+  try {
+    const body = await req.json();
+    const parsed = AddEquipmentSchema.safeParse(body);
+    if (!parsed.success)
+      return NextResponse.json({ error: parsed.error.flatten() }, { status: 400 });
 
-  const result = await addTagToEquipment(parsed.data.equipmentId, tagId);
-  if (!result.success)
-    return NextResponse.json({ error: result.error }, { status: 409 });
-  return NextResponse.json({ success: true });
+    const result = await addTagToEquipment(parsed.data.equipmentId, tagId);
+    if (!result.success) {
+      return NextResponse.json(
+        { error: result.error },
+        { status: result.error?.includes("not found") ? 404 : 409 }
+      );
+    }
+    return NextResponse.json({ success: true });
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : "Failed to add tag to equipment";
+    return NextResponse.json({ error: msg }, { status: 400 });
+  }
 }

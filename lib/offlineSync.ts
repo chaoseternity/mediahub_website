@@ -66,7 +66,15 @@ export function getOfflineQueue(): QueuedAction[] {
   const raw = safeGetItem(STORAGE_KEYS.QUEUE);
   if (!raw) return [];
   try {
-    return JSON.parse(raw) as QueuedAction[];
+    const parsed = JSON.parse(raw) as QueuedAction[];
+    if (!Array.isArray(parsed)) return [];
+    return parsed.filter(
+      (action) =>
+        action &&
+        typeof action.endpoint === "string" &&
+        action.endpoint.startsWith("/api/") &&
+        !action.endpoint.startsWith("//")
+    );
   } catch {
     return [];
   }
@@ -84,7 +92,7 @@ export function enqueueOfflineAction(params: EnqueueParams): QueuedAction {
   const method: "POST" | "PUT" | "PATCH" | "DELETE" = params.method || "POST";
   const body = params.payload || params.body || {};
 
-  if (!endpoint) {
+  if (!endpoint || !endpoint.startsWith("/api/") || endpoint.startsWith("//")) {
     if (params.type === "checkout") endpoint = "/api/nfc/checkout";
     else if (params.type === "return") endpoint = "/api/nfc/return";
     else if (params.type === "register_card") endpoint = "/api/nfc/card";

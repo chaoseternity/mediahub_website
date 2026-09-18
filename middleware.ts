@@ -49,6 +49,25 @@ export default auth((req) => {
     );
   }
 
+  // --- CSRF Protection for state-modifying requests ---
+  const isMutation = ["POST", "PUT", "PATCH", "DELETE"].includes(req.method);
+  if (isMutation && pathname.startsWith("/api/") && !pathname.startsWith("/api/auth/")) {
+    const origin = req.headers.get("origin");
+    if (origin && (origin === "null" || origin !== req.nextUrl.origin)) {
+      return NextResponse.json(
+        { error: "Forbidden: Cross-site requests are not allowed" },
+        { status: 403 }
+      );
+    }
+    const secFetchSite = req.headers.get("sec-fetch-site");
+    if (secFetchSite === "cross-site") {
+      return NextResponse.json(
+        { error: "Forbidden: Cross-site requests are not allowed" },
+        { status: 403 }
+      );
+    }
+  }
+
   // --- Auth checks ---
   const isAuthenticated = !!req.auth;
   const isPublicApiRoute = pathname.startsWith("/api/auth/") || pathname.startsWith("/api/rsvp");

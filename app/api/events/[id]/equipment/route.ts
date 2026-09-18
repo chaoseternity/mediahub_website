@@ -1,6 +1,12 @@
 import { auth } from "@/lib/auth";
-import { getEventById, getUserByEmail, attachEquipmentToEventSection, detachEquipmentFromEventSection } from "@/lib/db";
-import type { EventSection } from "@/lib/types";
+import {
+  getEventById,
+  getEquipmentById,
+  getUserByEmail,
+  attachEquipmentToEventSection,
+  detachEquipmentFromEventSection,
+} from "@/lib/db";
+import type { AppEvent, EventSection } from "@/lib/types";
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 
@@ -9,15 +15,11 @@ const EquipmentEventSchema = z.object({
   section: z.enum(["photo", "video", "av"]).optional().default("photo"),
 });
 
-async function canManageEventEquipment(eventId: number, section: EventSection, userEmail: string, role: string): Promise<boolean> {
+function canManageEventEquipment(event: AppEvent, section: EventSection, userEmail: string, role: string, currentUserId?: number): boolean {
   if (role === "admin") return true;
-  const event = await getEventById(eventId);
-  if (!event) return false;
-  const currentUser = await getUserByEmail(userEmail);
-  if (!currentUser) return false;
-  if (event.oics.some((u) => u.id === currentUser.id)) return true;
+  if (currentUserId && event.oics.some((u) => u.id === currentUserId)) return true;
   const secIcs = event.section_ics[section] || [];
-  return secIcs.some((ic) => ic.id === currentUser.id);
+  return !!currentUserId && secIcs.some((ic) => ic.id === currentUserId);
 }
 
 export async function POST(
@@ -33,24 +35,44 @@ export async function POST(
     return NextResponse.json({ error: "Invalid event ID" }, { status: 400 });
   }
 
-  const body = await req.json();
+  let body: unknown;
+  try {
+    body = await req.json();
+  } catch {
+    return NextResponse.json({ error: "Invalid JSON body" }, { status: 400 });
+  }
+
   const parsed = EquipmentEventSchema.safeParse(body);
   if (!parsed.success) {
     return NextResponse.json({ error: parsed.error.flatten() }, { status: 400 });
   }
 
-  const isAllowed = await canManageEventEquipment(eventId, parsed.data.section, session.user.email!, session.user.role);
+  const event = await getEventById(eventId);
+  if (!event) {
+    return NextResponse.json({ error: "Event not found" }, { status: 404 });
+  }
+
+  const currentUser = await getUserByEmail(session.user.email!);
+  const isAllowed = canManageEventEquipment(event, parsed.data.section, session.user.email!, session.user.role, currentUser?.id);
   if (!isAllowed) {
     return NextResponse.json({ error: "Only admins, OICs, and section ICs can add equipment to this event" }, { status: 403 });
   }
 
-  const currentUser = await getUserByEmail(session.user.email!);
-  const result = await attachEquipmentToEventSection(eventId, parsed.data.equipment_id, parsed.data.section, false, currentUser?.id ?? null);
-  if (!result.success) {
-    return NextResponse.json({ error: result.error }, { status: 400 });
+  const equipment = await getEquipmentById(parsed.data.equipment_id);
+  if (!equipment) {
+    return NextResponse.json({ error: "Equipment not found" }, { status: 404 });
   }
 
-  return NextResponse.json({ success: true });
+  try {
+    const result = await attachEquipmentToEventSection(eventId, parsed.data.equipment_id, parsed.data.section, false, currentUser?.id ?? null);
+    if (!result.success) {
+      return NextResponse.json({ error: result.error }, { status: 400 });
+    }
+    return NextResponse.json({ success: true });
+  } catch (err) {
+    console.error("Failed to attach equipment to event:", err);
+    return NextResponse.json({ error: "Failed to attach equipment to event" }, { status: 500 });
+  }
 }
 
 export async function DELETE(
@@ -66,21 +88,37 @@ export async function DELETE(
     return NextResponse.json({ error: "Invalid event ID" }, { status: 400 });
   }
 
-  const body = await req.json();
+  const event = await getEventById(eventId);
+  if (!event) {
+    return NextResponse.json({ error: "Event not found" }, { status: 404 });
+  }
+
+  let body: unknown;
+  try {
+    body = await req.json();
+  } catch {
+    return NextResponse.json({ error: "Invalid JSON body" }, { status: 400 });
+  }
+
   const parsed = EquipmentEventSchema.safeParse(body);
   if (!parsed.success) {
     return NextResponse.json({ error: parsed.error.flatten() }, { status: 400 });
   }
 
-  const isAllowed = await canManageEventEquipment(eventId, parsed.data.section, session.user.email!, session.user.role);
+  const currentUser = await getUserByEmail(session.user.email!);
+  const isAllowed = canManageEventEquipment(event, parsed.data.section, session.user.email!, session.user.role, currentUser?.id);
   if (!isAllowed) {
     return NextResponse.json({ error: "Only admins, OICs, and section ICs can remove equipment from this event" }, { status: 403 });
   }
 
-  const result = await detachEquipmentFromEventSection(eventId, parsed.data.equipment_id, parsed.data.section);
-  if (!result.success) {
-    return NextResponse.json({ error: result.error }, { status: 400 });
+  try {
+    const result = await detachEquipmentFromEventSection(eventId, parsed.data.equipment_id, parsed.data.section);
+    if (!result.success) {
+      return NextResponse.json({ error: result.error }, { status: 400 });
+    }
+    return NextResponse.json({ success: true });
+  } catch (err) {
+    console.error("Failed to detach equipment from event:", err);
+    return NextResponse.json({ error: "Failed to detach equipment from event" }, { status: 500 });
   }
-
-  return NextResponse.json({ success: true });
 }

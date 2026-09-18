@@ -243,10 +243,16 @@ Please answer the user's question clearly and accurately using the appropriate k
     }
   }
 
+function sanitizeErrorMessage(msg: string): string {
+  return msg
+    .replace(/key=[^&\s]+/gi, "key=[REDACTED]")
+    .replace(/AIza[0-9A-Za-z-_]{35}/g, "[REDACTED_API_KEY]");
+}
+
   console.error("All Gemini models in chain failed:", lastError);
-  throw new Error(
+  const rawMsg =
     lastError instanceof Error
       ? lastError.message
-      : "Failed to generate AI response from Gemini API models."
-  );
+      : "Failed to generate AI response from Gemini API models.";
+  throw new Error(sanitizeErrorMessage(rawMsg));
 }

@@ -50,17 +50,22 @@ export async function PUT(
     return NextResponse.json({ error: "Invalid equipment ID" }, { status: 400 });
   }
 
-  const body = await req.json();
-  // Verified users may only update the description field
-  const allowedBody = role === "verified" ? { description: body.description } : body;
-  const parsed = UpdateEquipmentSchema.safeParse(allowedBody);
-  if (!parsed.success) {
-    return NextResponse.json({ error: parsed.error.flatten() }, { status: 400 });
-  }
+  try {
+    const body = await req.json();
+    // Verified users may only update the description field
+    const allowedBody = role === "verified" ? { description: body.description } : body;
+    const parsed = UpdateEquipmentSchema.safeParse(allowedBody);
+    if (!parsed.success) {
+      return NextResponse.json({ error: parsed.error.flatten() }, { status: 400 });
+    }
 
-  const updated = await updateEquipment(eqId, parsed.data);
-  if (!updated) return NextResponse.json({ error: "Not found" }, { status: 404 });
-  return NextResponse.json(updated);
+    const updated = await updateEquipment(eqId, parsed.data);
+    if (!updated) return NextResponse.json({ error: "Not found" }, { status: 404 });
+    return NextResponse.json(updated);
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : "Failed to update equipment";
+    return NextResponse.json({ error: msg }, { status: 400 });
+  }
 }
 
 export async function DELETE(
@@ -79,9 +84,17 @@ export async function DELETE(
     return NextResponse.json({ error: "Invalid equipment ID" }, { status: 400 });
   }
 
-  const result = await deleteEquipment(eqId);
-  if (!result.success) {
-    return NextResponse.json({ error: result.error }, { status: 409 });
+  try {
+    const result = await deleteEquipment(eqId);
+    if (!result.success) {
+      return NextResponse.json(
+        { error: result.error },
+        { status: result.error === "Equipment not found." ? 404 : 409 }
+      );
+    }
+    return NextResponse.json({ success: true });
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : "Failed to delete equipment";
+    return NextResponse.json({ error: msg }, { status: 500 });
   }
-  return NextResponse.json({ success: true });
 }

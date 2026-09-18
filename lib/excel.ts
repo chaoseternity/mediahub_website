@@ -52,6 +52,29 @@ export function sortEquipmentForExcel(equipment: Equipment[]): Equipment[] {
 }
 
 /**
+ * Neutralizes CSV/Excel formula injection (CWE-1236).
+ * Values starting with =, +, -, @, tab, or newline are prefixed with an apostrophe (')
+ * so spreadsheet applications (Excel, LibreOffice, Google Sheets) treat them as text.
+ */
+export function sanitizeExcelCell(val: string | null | undefined): string {
+  if (!val) return "";
+  const str = String(val);
+  if (/^[=+\-@\t\r\n]/.test(str)) {
+    return `'${str}`;
+  }
+  return str;
+}
+
+export function desanitizeExcelCell(val: unknown): string {
+  if (val === null || val === undefined) return "";
+  const str = String(val).trim();
+  if (str.startsWith("'") && /^[=+\-@\t\r\n]/.test(str.slice(1))) {
+    return str.slice(1);
+  }
+  return str;
+}
+
+/**
  * Generates an Excel workbook buffer from equipment data.
  * Columns: Tag - ID - Name - Description - Condition - Location
  * Subsequent items with the same tag leave the Tag cell empty.
@@ -71,12 +94,12 @@ export function generateEquipmentExcel(equipment: Equipment[]): Uint8Array {
     lastTag = currentTag;
 
     rows.push([
-      displayTag,
-      item.serial_number ?? "",
-      item.name,
-      item.description ?? "",
-      item.condition,
-      item.location,
+      sanitizeExcelCell(displayTag),
+      sanitizeExcelCell(item.serial_number ?? ""),
+      sanitizeExcelCell(item.name),
+      sanitizeExcelCell(item.description ?? ""),
+      sanitizeExcelCell(item.condition),
+      sanitizeExcelCell(item.location),
     ]);
   }
 
@@ -132,8 +155,9 @@ export function parseEquipmentExcel(data: ArrayBuffer | Uint8Array): ParsedEquip
 
   const parsedItems: ParsedEquipmentItem[] = [];
   let currentTag = "";
+  const maxRows = Math.min(rows.length, 5001); // Cap at 5000 rows
 
-  for (let r = 1; r < rows.length; r++) {
+  for (let r = 1; r < maxRows; r++) {
     const rawRow = rows[r];
     if (!rawRow || rawRow.length === 0) continue;
 
@@ -144,37 +168,35 @@ export function parseEquipmentExcel(data: ArrayBuffer | Uint8Array): ParsedEquip
     const isEmpty = row.every((c) => c === null || c === undefined || String(c).trim() === "");
     if (isEmpty) continue;
 
-    const rawTag = row[colTag];
-    if (rawTag !== undefined && rawTag !== null && String(rawTag).trim() !== "") {
-      currentTag = String(rawTag).trim();
+    const rawTag = desanitizeExcelCell(row[colTag]);
+    if (rawTag) {
+      currentTag = rawTag.slice(0, 100);
     }
 
-    const rawId = row[colId];
-    const rawName = row[colName];
-    const rawDesc = row[colDesc];
-    const rawCond = row[colCond];
-    const rawLoc = row[colLoc];
+    const rawId = desanitizeExcelCell(row[colId]);
+    const rawName = desanitizeExcelCell(row[colName]);
+    const rawDesc = desanitizeExcelCell(row[colDesc]);
+    const rawCond = desanitizeExcelCell(row[colCond]);
+    const rawLoc = desanitizeExcelCell(row[colLoc]);
 
-    const serialNumber = rawId !== undefined && rawId !== null ? String(rawId).trim() : "";
-    const name = rawName !== undefined && rawName !== null ? String(rawName).trim() : "";
+    const serialNumber = rawId ? rawId.slice(0, 100) : "";
+    const name = rawName ? rawName.slice(0, 200) : "";
 
     // If both name and serialNumber are empty, skip row
     if (!name && !serialNumber) continue;
 
     const tags = currentTag
-      ? currentTag.split(",").map((t) => t.trim()).filter(Boolean)
+      ? currentTag.split(",").map((t) => t.trim().slice(0, 50)).filter(Boolean).slice(0, 20)
       : [];
 
     const condition = normalizeCondition(rawCond);
-    const location = rawLoc !== undefined && rawLoc !== null && String(rawLoc).trim() !== ""
-      ? String(rawLoc).trim()
-      : "Media Room";
+    const location = rawLoc ? rawLoc.slice(0, 200) : "Media Room";
 
     parsedItems.push({
       name: name || serialNumber,
       serial_number: serialNumber || null,
       tags,
-      description: rawDesc !== undefined && rawDesc !== null && String(rawDesc).trim() !== "" ? String(rawDesc).trim() : null,
+      description: rawDesc ? rawDesc.slice(0, 2000) : null,
       condition,
       location,
     });
