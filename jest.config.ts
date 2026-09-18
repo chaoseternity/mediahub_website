@@ -1,6 +1,7 @@
 import type { Config } from "jest";
 
 const config: Config = {
+  modulePathIgnorePatterns: ["<rootDir>/.next/", "<rootDir>/.open-next/"],
   projects: [
     {
       displayName: "smoke",

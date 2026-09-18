@@ -4,10 +4,10 @@ import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 
 const CheckoutSchema = z.object({
-  checked_out_by_name: z.string().min(1),
-  expected_return_at: z.string().optional(),
-  notes: z.string().min(1),
-  checkout_location: z.string().optional(),
+  checked_out_by_name: z.string().trim().min(1).max(100),
+  expected_return_at: z.string().max(100).optional(),
+  notes: z.string().trim().min(1).max(500),
+  checkout_location: z.string().trim().max(200).optional(),
 });
 
 export async function POST(
@@ -21,7 +21,12 @@ export async function POST(
   }
 
   const { id } = await params;
-  const equipment = await getEquipmentById(Number(id));
+  const eqId = Number(id);
+  if (!Number.isInteger(eqId) || eqId <= 0) {
+    return NextResponse.json({ error: "Invalid equipment ID" }, { status: 400 });
+  }
+
+  const equipment = await getEquipmentById(eqId);
   if (!equipment) return NextResponse.json({ error: "Not found" }, { status: 404 });
 
   if (equipment.status !== "Available") {
@@ -39,10 +44,16 @@ export async function POST(
 
   try {
     const dbUser = session.user.email ? await getUserByEmail(session.user.email) : null;
+    const isAdmin = session.user.role === "admin" || dbUser?.role === "admin";
+    const finalCheckedOutByName =
+      isAdmin && parsed.data.checked_out_by_name?.trim()
+        ? parsed.data.checked_out_by_name.trim()
+        : session.user.name || dbUser?.name || "Member";
+
     const checkout = await createCheckout({
       equipment_id: Number(id),
       checked_out_by: dbUser?.id ?? null,
-      checked_out_by_name: parsed.data.checked_out_by_name,
+      checked_out_by_name: finalCheckedOutByName,
       expected_return_at: parsed.data.expected_return_at,
       notes: parsed.data.notes,
       checkout_location: parsed.data.checkout_location,

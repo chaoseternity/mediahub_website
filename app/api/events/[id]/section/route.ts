@@ -25,13 +25,13 @@ const SectionEquipmentSchema = z.object({
     "resend_deployment_email",
   ]),
   section: z.enum(["photo", "video", "av"]),
-  equipment_id: z.number().int().optional(),
-  user_id: z.number().int().optional(),
+  equipment_id: z.number().int().positive().optional(),
+  user_id: z.number().int().positive().optional(),
   used_for_rehearsal: z.boolean().optional(),
   attending_rehearsal: z.boolean().optional(),
   participating: z.boolean().optional(),
-  rehearsal_equipment_ids: z.array(z.number().int()).optional(),
-  rehearsal_user_ids: z.array(z.number().int()).optional(),
+  rehearsal_equipment_ids: z.array(z.number().int().positive()).max(50).optional(),
+  rehearsal_user_ids: z.array(z.number().int().positive()).max(50).optional(),
 });
 
 async function verifySectionPermission(eventId: number, section: EventSection, userEmail: string, role: string): Promise<boolean> {
@@ -59,6 +59,9 @@ export async function POST(
 
   const { id } = await params;
   const eventId = Number(id);
+  if (!Number.isInteger(eventId) || eventId <= 0) {
+    return NextResponse.json({ error: "Invalid event ID" }, { status: 400 });
+  }
 
   const body = await req.json();
   const parsed = SectionEquipmentSchema.safeParse(body);

@@ -15,14 +15,20 @@ const API_LIMIT = 60;
 const WINDOW_MS = 60_000; // 1 minute
 
 function getClientIp(req: Request): string {
-  // cf-connecting-ip is set by Cloudflare's CDN in production.
-  // Fall back to x-forwarded-for for local dev / other proxies.
   const headers = req.headers as Headers;
-  return (
-    headers.get("cf-connecting-ip") ??
-    headers.get("x-forwarded-for")?.split(",")[0].trim() ??
-    "unknown"
-  );
+  const cfIp = headers.get("cf-connecting-ip");
+  if (cfIp) return cfIp.trim();
+
+  const forwarded = headers.get("x-forwarded-for");
+  if (forwarded) {
+    const parts = forwarded.split(",").map((p) => p.trim()).filter(Boolean);
+    if (parts.length > 0) return parts[0];
+  }
+
+  const realIp = headers.get("x-real-ip");
+  if (realIp) return realIp.trim();
+
+  return "unknown";
 }
 
 export default auth((req) => {
@@ -45,14 +51,13 @@ export default auth((req) => {
 
   // --- Auth checks ---
   const isAuthenticated = !!req.auth;
+  const isPublicApiRoute = pathname.startsWith("/api/auth/") || pathname.startsWith("/api/rsvp");
 
-  if (!isAuthenticated) {
+  if (!isAuthenticated && !isPublicApiRoute) {
     if (pathname.startsWith("/api/")) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
-    const host = req.headers.get("x-forwarded-host") || req.headers.get("host") || req.nextUrl.host;
-    const proto = req.headers.get("x-forwarded-proto") || (host.includes("localhost") ? "http" : "https");
-    const loginUrl = new URL(`/login?callbackUrl=${encodeURIComponent(pathname)}`, `${proto}://${host}`);
+    const loginUrl = new URL(`/login?callbackUrl=${encodeURIComponent(pathname)}`, req.nextUrl.origin);
     return NextResponse.redirect(loginUrl);
   }
 
@@ -60,5 +65,8 @@ export default auth((req) => {
 });
 
 export const config = {
-  matcher: ["/dashboard/:path*", "/api/equipment/:path*", "/api/users/:path*"],
+  matcher: [
+    "/dashboard/:path*",
+    "/api/:path*",
+  ],
 };

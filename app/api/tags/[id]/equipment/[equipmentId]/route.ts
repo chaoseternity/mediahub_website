@@ -12,7 +12,13 @@ export async function DELETE(
     return NextResponse.json({ error: "Forbidden" }, { status: 403 });
 
   const { id, equipmentId } = await params;
-  const result = await removeTagFromEquipment(Number(equipmentId), Number(id));
+  const tagId = Number(id);
+  const eqId = Number(equipmentId);
+  if (!Number.isInteger(tagId) || tagId <= 0 || !Number.isInteger(eqId) || eqId <= 0) {
+    return NextResponse.json({ error: "Invalid parameters" }, { status: 400 });
+  }
+
+  const result = await removeTagFromEquipment(eqId, tagId);
   if (!result.success)
     return NextResponse.json({ error: result.error }, { status: 409 });
   return NextResponse.json({ success: true });

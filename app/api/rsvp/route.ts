@@ -3,17 +3,18 @@ import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 
 const RSVPPostSchema = z.object({
-  token: z.string().min(1, "Token required"),
+  token: z.string().trim().min(1, "Token required").max(100, "Invalid token length"),
   status: z.enum(["confirmed", "declined"]),
 });
 
 export async function GET(req: NextRequest) {
   try {
     const { searchParams } = new URL(req.url);
-    const token = searchParams.get("token");
+    const rawToken = searchParams.get("token");
+    const token = rawToken?.trim();
 
-    if (!token) {
-      return NextResponse.json({ error: "Token is required" }, { status: 400 });
+    if (!token || token.length > 100) {
+      return NextResponse.json({ error: "Token is required and must be valid" }, { status: 400 });
     }
 
     const details = await getDeploymentByToken(token);

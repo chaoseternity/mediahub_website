@@ -19,6 +19,11 @@ export async function PUT(
   }
 
   const { id } = await params;
+  const userId = Number(id);
+  if (!Number.isInteger(userId) || userId <= 0) {
+    return NextResponse.json({ error: "Invalid user ID" }, { status: 400 });
+  }
+
   const body = await req.json();
   const parsed = UpdateUserSchema.safeParse(body);
   if (!parsed.success) {
@@ -27,9 +32,12 @@ export async function PUT(
 
   try {
     if ("role" in parsed.data) {
-      await updateUserRole(Number(id), parsed.data.role);
+      if (Number(session.user.id) === userId && parsed.data.role !== "admin") {
+        return NextResponse.json({ error: "Cannot demote your own admin account" }, { status: 400 });
+      }
+      await updateUserRole(userId, parsed.data.role);
     } else if ("username" in parsed.data) {
-      await updateUsername(Number(id), parsed.data.username);
+      await updateUsername(userId, parsed.data.username);
     }
     return NextResponse.json({ success: true });
   } catch (err: unknown) {
@@ -49,10 +57,15 @@ export async function DELETE(
   }
 
   const { id } = await params;
-  if (String(session.user.id) === id) {
+  const userId = Number(id);
+  if (!Number.isInteger(userId) || userId <= 0) {
+    return NextResponse.json({ error: "Invalid user ID" }, { status: 400 });
+  }
+
+  if (Number(session.user.id) === userId) {
     return NextResponse.json({ error: "Cannot delete your own account" }, { status: 400 });
   }
 
-  await deleteUser(Number(id));
+  await deleteUser(userId);
   return NextResponse.json({ success: true });
 }

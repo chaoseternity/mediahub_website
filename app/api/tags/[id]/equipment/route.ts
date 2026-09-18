@@ -7,8 +7,15 @@ export async function GET(
   _req: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
+  const session = await auth();
+  if (!session) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+
   const { id } = await params;
-  const equipment = await getEquipmentByTagId(Number(id));
+  const tagId = Number(id);
+  if (!Number.isInteger(tagId) || tagId <= 0) {
+    return NextResponse.json({ error: "Invalid tag ID" }, { status: 400 });
+  }
+  const equipment = await getEquipmentByTagId(tagId);
   return NextResponse.json(equipment);
 }
 
@@ -24,12 +31,16 @@ export async function POST(
     return NextResponse.json({ error: "Forbidden" }, { status: 403 });
 
   const { id } = await params;
+  const tagId = Number(id);
+  if (!Number.isInteger(tagId) || tagId <= 0) {
+    return NextResponse.json({ error: "Invalid tag ID" }, { status: 400 });
+  }
   const body = await req.json();
   const parsed = AddEquipmentSchema.safeParse(body);
   if (!parsed.success)
     return NextResponse.json({ error: parsed.error.flatten() }, { status: 400 });
 
-  const result = await addTagToEquipment(parsed.data.equipmentId, Number(id));
+  const result = await addTagToEquipment(parsed.data.equipmentId, tagId);
   if (!result.success)
     return NextResponse.json({ error: result.error }, { status: 409 });
   return NextResponse.json({ success: true });

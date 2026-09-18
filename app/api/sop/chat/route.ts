@@ -6,15 +6,16 @@ import { z } from "zod";
 
 const ChatRequestSchema = z
   .object({
-    question: z.string().optional(),
-    message: z.string().optional(),
+    question: z.string().max(4000, "Question must be 4000 characters or less").optional(),
+    message: z.string().max(4000, "Message must be 4000 characters or less").optional(),
     history: z
       .array(
         z.object({
           role: z.enum(["user", "assistant"]),
-          content: z.string(),
+          content: z.string().max(4000, "History message must be 4000 characters or less"),
         })
       )
+      .max(50, "History cannot exceed 50 messages")
       .optional(),
   })
   .refine(

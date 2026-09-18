@@ -4,26 +4,33 @@ import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 
 const UpdateEventSchema = z.object({
-  name: z.string().min(1).optional(),
-  description: z.string().optional(),
-  start_time: z.string().min(1).optional(),
-  end_time: z.string().min(1).optional(),
-  location: z.string().min(1).optional(),
+  name: z.string().trim().min(1).max(200).optional(),
+  description: z.string().trim().max(2000).optional(),
+  start_time: z.string().min(1).max(100).optional(),
+  end_time: z.string().min(1).max(100).optional(),
+  location: z.string().trim().min(1).max(200).optional(),
   has_rehearsal: z.boolean().optional(),
-  rehearsal_start_time: z.string().nullable().optional(),
-  rehearsal_end_time: z.string().nullable().optional(),
-  oic_user_ids: z.array(z.number().int()).optional(),
-  photo_ic_ids: z.array(z.number().int()).optional(),
-  video_ic_ids: z.array(z.number().int()).optional(),
-  av_ic_ids: z.array(z.number().int()).optional(),
+  rehearsal_start_time: z.string().max(100).nullable().optional(),
+  rehearsal_end_time: z.string().max(100).nullable().optional(),
+  oic_user_ids: z.array(z.number().int().positive()).max(20).optional(),
+  photo_ic_ids: z.array(z.number().int().positive()).max(20).optional(),
+  video_ic_ids: z.array(z.number().int().positive()).max(20).optional(),
+  av_ic_ids: z.array(z.number().int().positive()).max(20).optional(),
 });
 
 export async function GET(
   _req: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
+  const session = await auth();
+  if (!session) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+
   const { id } = await params;
-  const event = await getEventById(Number(id));
+  const eventId = Number(id);
+  if (!Number.isInteger(eventId) || eventId <= 0) {
+    return NextResponse.json({ error: "Invalid event ID" }, { status: 400 });
+  }
+  const event = await getEventById(eventId);
   if (!event) return NextResponse.json({ error: "Not found" }, { status: 404 });
   return NextResponse.json(event);
 }
@@ -37,6 +44,9 @@ export async function PUT(
 
   const { id } = await params;
   const eventId = Number(id);
+  if (!Number.isInteger(eventId) || eventId <= 0) {
+    return NextResponse.json({ error: "Invalid event ID" }, { status: 400 });
+  }
   const event = await getEventById(eventId);
   if (!event) return NextResponse.json({ error: "Event not found" }, { status: 404 });
 
@@ -59,6 +69,11 @@ export async function PUT(
     return NextResponse.json({ error: "Event name can only be changed by Admin accounts" }, { status: 403 });
   }
 
+  // Non-admin OICs cannot modify who the OICs are
+  if (!isAdmin && parsed.data.oic_user_ids !== undefined) {
+    return NextResponse.json({ error: "OICs can only be assigned by Admin accounts" }, { status: 403 });
+  }
+
   const updated = await updateEvent(eventId, parsed.data);
   return NextResponse.json(updated);
 }
@@ -75,7 +90,12 @@ export async function DELETE(
   }
 
   const { id } = await params;
-  const result = await deleteEvent(Number(id));
+  const eventId = Number(id);
+  if (!Number.isInteger(eventId) || eventId <= 0) {
+    return NextResponse.json({ error: "Invalid event ID" }, { status: 400 });
+  }
+
+  const result = await deleteEvent(eventId);
   if (!result.success) {
     return NextResponse.json({ error: result.error }, { status: 409 });
   }

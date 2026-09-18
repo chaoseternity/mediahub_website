@@ -13,10 +13,15 @@ const CreateSOPManualSchema = z.object({
   file_name: z.string().nullable().optional(),
   file_type: z.string().nullable().optional(),
   file_size: z.number().nullable().optional(),
-  overwrite_id: z.number().nullable().optional(),
+  overwrite_id: z.number().int().positive().nullable().optional(),
 });
 
 export async function GET() {
+  const session = await auth();
+  if (!session) {
+    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  }
+
   try {
     const documents = await getAllSOPDocuments();
     return NextResponse.json(documents);
@@ -121,6 +126,13 @@ export async function POST(req: NextRequest) {
 
       if (!file && !clientExtractedContent) {
         return NextResponse.json({ error: "No file or text content provided in upload." }, { status: 400 });
+      }
+
+      if (file && file.size > 10 * 1024 * 1024) {
+        return NextResponse.json(
+          { error: "File size exceeds the 10MB upload limit." },
+          { status: 413 }
+        );
       }
 
       const fileName = file?.name || "document.txt";

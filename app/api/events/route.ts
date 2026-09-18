@@ -4,21 +4,24 @@ import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 
 const CreateEventSchema = z.object({
-  name: z.string().min(1, "Name is required"),
-  description: z.string().optional(),
-  start_time: z.string().min(1, "Start time is required"),
-  end_time: z.string().min(1, "End time is required"),
-  location: z.string().min(1, "Location is required"),
+  name: z.string().trim().min(1, "Name is required").max(200),
+  description: z.string().trim().max(2000).optional(),
+  start_time: z.string().min(1, "Start time is required").max(100),
+  end_time: z.string().min(1, "End time is required").max(100),
+  location: z.string().trim().min(1, "Location is required").max(200),
   has_rehearsal: z.boolean().optional().default(false),
-  rehearsal_start_time: z.string().optional(),
-  rehearsal_end_time: z.string().optional(),
-  oic_user_ids: z.array(z.number().int()).optional().default([]),
-  photo_ic_ids: z.array(z.number().int()).optional().default([]),
-  video_ic_ids: z.array(z.number().int()).optional().default([]),
-  av_ic_ids: z.array(z.number().int()).optional().default([]),
+  rehearsal_start_time: z.string().max(100).optional(),
+  rehearsal_end_time: z.string().max(100).optional(),
+  oic_user_ids: z.array(z.number().int().positive()).max(20).optional().default([]),
+  photo_ic_ids: z.array(z.number().int().positive()).max(20).optional().default([]),
+  video_ic_ids: z.array(z.number().int().positive()).max(20).optional().default([]),
+  av_ic_ids: z.array(z.number().int().positive()).max(20).optional().default([]),
 });
 
 export async function GET() {
+  const session = await auth();
+  if (!session) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+
   const events = await getAllEvents();
   return NextResponse.json(events);
 }

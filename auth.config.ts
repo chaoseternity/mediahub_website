@@ -41,7 +41,7 @@ export const authConfig = {
   callbacks: {
     async redirect({ url, baseUrl }) {
       const effectiveBaseUrl = getBaseUrl(baseUrl);
-      if (url.startsWith("/")) {
+      if (url.startsWith("/") && !url.startsWith("//")) {
         return `${effectiveBaseUrl}${url}`;
       }
       try {
@@ -62,6 +62,10 @@ export const authConfig = {
       const isProtected =
         pathname.startsWith("/dashboard") ||
         pathname.startsWith("/api/equipment") ||
+        pathname.startsWith("/api/events") ||
+        pathname.startsWith("/api/nfc") ||
+        pathname.startsWith("/api/sop") ||
+        pathname.startsWith("/api/tags") ||
         pathname.startsWith("/api/users");
 
       if (isProtected && !isLoggedIn) return false;

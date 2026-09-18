@@ -49,6 +49,15 @@ const SECTION_COLORS: Record<EventSection, string> = {
   av: "#10b981",    // Emerald
 };
 
+function escapeHtml(str: string): string {
+  return str
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#039;");
+}
+
 export async function sendDeploymentInvitationEmail({
   toEmail,
   recipientName,
@@ -67,9 +76,9 @@ export async function sendDeploymentInvitationEmail({
 }: SendDeploymentInvitationParams): Promise<{ success: boolean; previewUrl?: string; error?: string }> {
   try {
     const baseUrl =
-      origin ||
       process.env.NEXTAUTH_URL ||
-      (process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : "http://localhost:3000");
+      (process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : origin) ||
+      "http://localhost:3000";
 
     const rsvpUrl = `${baseUrl}/rsvp/${token}`;
     const confirmUrl = `${baseUrl}/rsvp/${token}?action=confirm`;
@@ -77,6 +86,12 @@ export async function sendDeploymentInvitationEmail({
 
     const sectionName = SECTION_NAMES[section] || section;
     const sectionColor = SECTION_COLORS[section] || "#7c3aed";
+
+    const safeRecipient = escapeHtml(recipientName);
+    const safeEventName = escapeHtml(eventName);
+    const safeEventDesc = eventDescription ? escapeHtml(eventDescription) : null;
+    const safeLocation = escapeHtml(location);
+    const safeSectionName = escapeHtml(sectionName);
 
     const formattedStart = new Date(startTime).toLocaleString("en-US", {
       weekday: "short",
@@ -147,26 +162,26 @@ export async function sendDeploymentInvitationEmail({
           <!-- Body Container -->
           <div style="padding: 24px;">
             <p style="margin: 0 0 16px 0; font-size: 15px; line-height: 1.5;">
-              Hi <strong>${recipientName}</strong>,
+              Hi <strong>${safeRecipient}</strong>,
             </p>
             <p style="margin: 0 0 20px 0; font-size: 14px; line-height: 1.5; color: #3f3f46;">
-              You have been selected for the <strong>${sectionName}</strong> team for the upcoming event:
+              You have been selected for the <strong>${safeSectionName}</strong> team for the upcoming event:
             </p>
 
             <!-- Event Card Details -->
             <div style="background-color: #fafafa; border: 1px solid #e4e4e7; border-radius: 10px; padding: 18px; margin-bottom: 24px;">
               <div style="display: inline-block; padding: 4px 10px; background-color: ${sectionColor}; color: #ffffff; font-size: 11px; font-weight: 700; text-transform: uppercase; border-radius: 9999px; margin-bottom: 10px;">
-                ${sectionName} Deployment
+                ${safeSectionName} Deployment
               </div>
               <h2 style="margin: 0 0 10px 0; font-size: 18px; color: #09090b; font-weight: 700;">
-                ${eventName}
+                ${safeEventName}
               </h2>
               
-              ${eventDescription ? `<p style="margin: 0 0 12px 0; font-size: 13px; color: #52525b; line-height: 1.4;">${eventDescription}</p>` : ""}
+              ${safeEventDesc ? `<p style="margin: 0 0 12px 0; font-size: 13px; color: #52525b; line-height: 1.4;">${safeEventDesc}</p>` : ""}
 
               <div style="font-size: 13px; color: #27272a; line-height: 1.6;">
                 <p style="margin: 4px 0;">📅 <strong>Date & Time:</strong> ${formattedStart} – ${formattedEnd}</p>
-                <p style="margin: 4px 0;">📍 <strong>Location:</strong> ${location}</p>
+                <p style="margin: 4px 0;">📍 <strong>Location:</strong> ${safeLocation}</p>
               </div>
 
               ${rehearsalHtml}

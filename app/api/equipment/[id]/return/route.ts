@@ -13,11 +13,36 @@ export async function POST(
   }
 
   const { id } = await params;
-  const equipment = await getEquipmentById(Number(id));
+  const eqId = Number(id);
+  if (!Number.isInteger(eqId) || eqId <= 0) {
+    return NextResponse.json({ error: "Invalid equipment ID" }, { status: 400 });
+  }
+
+  const equipment = await getEquipmentById(eqId);
   if (!equipment) return NextResponse.json({ error: "Not found" }, { status: 404 });
 
+  const isAdmin = session.user.role === "admin";
+  const activeCheckout = equipment.active_checkout;
+  if (!isAdmin && activeCheckout) {
+    const callerName = (session.user.name || "").trim().toLowerCase();
+    const checkedOutName = (activeCheckout.checked_out_by_name || "").trim().toLowerCase();
+    const callerId = Number(session.user.id);
+    const checkedOutById = activeCheckout.checked_out_by;
+
+    const isBorrower =
+      (checkedOutById !== null && callerId === checkedOutById) ||
+      (callerName.length > 0 && callerName === checkedOutName);
+
+    if (!isBorrower) {
+      return NextResponse.json(
+        { error: "Forbidden: You can only return equipment checked out to you, or ask an Admin to assist." },
+        { status: 403 }
+      );
+    }
+  }
+
   try {
-    const checkout = await returnCheckout(Number(id));
+    const checkout = await returnCheckout(eqId);
     return NextResponse.json(checkout);
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : "Return failed";

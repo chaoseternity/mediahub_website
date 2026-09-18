@@ -5,7 +5,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 
 const EquipmentEventSchema = z.object({
-  equipment_id: z.number().int(),
+  equipment_id: z.number().int().positive(),
   section: z.enum(["photo", "video", "av"]).optional().default("photo"),
 });
 
@@ -29,6 +29,9 @@ export async function POST(
 
   const { id } = await params;
   const eventId = Number(id);
+  if (!Number.isInteger(eventId) || eventId <= 0) {
+    return NextResponse.json({ error: "Invalid event ID" }, { status: 400 });
+  }
 
   const body = await req.json();
   const parsed = EquipmentEventSchema.safeParse(body);
@@ -59,6 +62,9 @@ export async function DELETE(
 
   const { id } = await params;
   const eventId = Number(id);
+  if (!Number.isInteger(eventId) || eventId <= 0) {
+    return NextResponse.json({ error: "Invalid event ID" }, { status: 400 });
+  }
 
   const body = await req.json();
   const parsed = EquipmentEventSchema.safeParse(body);

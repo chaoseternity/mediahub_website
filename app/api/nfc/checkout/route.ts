@@ -7,10 +7,10 @@ const NfcCheckoutSchema = z.object({
   nfc_value: z.string().min(1).optional(),
   nfc_id: z.string().min(1).optional(),
   equipment_id: z.number().int().positive().optional(),
-  equipment_ids: z.array(z.number().int().positive()).optional(),
-  barcode: z.string().trim().optional(),
-  notes: z.string().optional(),
-  checkout_location: z.string().optional(),
+  equipment_ids: z.array(z.number().int().positive()).max(50, "Batch checkout is limited to 50 items").optional(),
+  barcode: z.string().trim().max(200).optional(),
+  notes: z.string().max(500).optional(),
+  checkout_location: z.string().max(200).optional(),
 });
 
 function findEquipmentByBarcode(equipmentList: Awaited<ReturnType<typeof getAllEquipment>>, rawCode: string) {

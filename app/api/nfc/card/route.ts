@@ -4,9 +4,9 @@ import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 
 const CreateCardSchema = z.object({
-  nfc_value: z.string().trim().min(1),
-  member_name: z.string().trim().min(1),
-  notes: z.string().trim().optional(),
+  nfc_value: z.string().trim().min(1).max(100),
+  member_name: z.string().trim().min(1).max(100),
+  notes: z.string().trim().max(500).optional(),
 });
 
 export async function POST(req: NextRequest) {

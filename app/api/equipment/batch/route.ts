@@ -4,17 +4,17 @@ import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 
 const BatchItemSchema = z.object({
-  name: z.string().min(1),
-  serial_number: z.string().nullable().optional(),
-  tags: z.array(z.string()).default([]),
-  description: z.string().nullable().optional(),
+  name: z.string().trim().min(1).max(200),
+  serial_number: z.string().trim().max(100).nullable().optional(),
+  tags: z.array(z.string().trim().max(50)).max(20).default([]),
+  description: z.string().trim().max(2000).nullable().optional(),
   condition: z.enum(["Working", "Impaired", "Broken", "Missing", "Retired"]).default("Working"),
-  location: z.string().default("Media Room"),
+  location: z.string().trim().max(200).default("Media Room"),
 });
 
 const BatchPayloadSchema = z.object({
-  items: z.array(BatchItemSchema).min(1, "At least one item is required"),
-  deleteMissingIds: z.array(z.number()).optional(),
+  items: z.array(BatchItemSchema).min(1, "At least one item is required").max(500, "Batch limit is 500 items"),
+  deleteMissingIds: z.array(z.number().int().positive()).max(500).optional(),
 });
 
 export async function POST(req: NextRequest) {

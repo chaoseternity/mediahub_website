@@ -4,18 +4,21 @@ import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 
 const CreateEquipmentSchema = z.object({
-  name: z.string().min(1),
-  tags: z.array(z.string().min(1)).min(1, "At least one tag is required"),
-  description: z.string().optional(),
-  serial_number: z.string().optional(),
+  name: z.string().trim().min(1).max(200),
+  tags: z.array(z.string().trim().min(1).max(50)).min(1, "At least one tag is required").max(20),
+  description: z.string().trim().max(2000).optional(),
+  serial_number: z.string().trim().max(100).optional(),
   condition: z.enum(["Working", "Impaired", "Broken", "Missing", "Retired"]).default("Working"),
-  location: z.string().min(1),
+  location: z.string().trim().min(1).max(200),
   status: z
     .enum(["Available", "Checked Out", "Unavailable (In Repairs)", "Unavailable (Broken)", "Unavailable (Missing)", "Unavailable (Retired)"])
     .default("Available"),
 });
 
 export async function GET() {
+  const session = await auth();
+  if (!session) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+
   const equipment = await getAllEquipment();
   return NextResponse.json(equipment);
 }

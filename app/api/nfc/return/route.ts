@@ -5,10 +5,10 @@ import { z } from "zod";
 
 const NfcReturnSchema = z.object({
   equipment_id: z.number().int().positive().optional(),
-  equipment_ids: z.array(z.number().int().positive()).optional(),
-  barcode: z.string().trim().optional(),
-  nfc_value: z.string().trim().optional(),
-  nfc_id: z.string().trim().optional(),
+  equipment_ids: z.array(z.number().int().positive()).max(50, "Batch return is limited to 50 items").optional(),
+  barcode: z.string().trim().max(100).optional(),
+  nfc_value: z.string().trim().max(100).optional(),
+  nfc_id: z.string().trim().max(100).optional(),
 });
 
 function findEquipmentByBarcode(equipmentList: Awaited<ReturnType<typeof getAllEquipment>>, rawCode: string) {
@@ -47,9 +47,51 @@ export async function POST(req: NextRequest) {
 
   const { barcode, equipment_ids } = parsed.data;
   const cardValue = (parsed.data.nfc_value || parsed.data.nfc_id || "").trim();
+  const isAdmin = session.user.role === "admin";
+  const callerName = (session.user.name || "").trim().toLowerCase();
+  const callerId = Number(session.user.id);
+
+  let card: Awaited<ReturnType<typeof getNfcCardByValue>> = undefined;
+  if (cardValue) {
+    card = await getNfcCardByValue(cardValue);
+    if (!card) {
+      return NextResponse.json({ error: `NFC card "${cardValue}" not found in database` }, { status: 404 });
+    }
+  }
 
   // Handle batch return
   if (equipment_ids && equipment_ids.length > 0) {
+    for (const eqId of equipment_ids) {
+      const eq = await getEquipmentById(eqId);
+      if (eq && eq.active_checkout) {
+        if (card) {
+          const isSameCard =
+            (eq.active_checkout.nfc_value && eq.active_checkout.nfc_value.toLowerCase() === cardValue.toLowerCase()) ||
+            (eq.active_checkout.nfc_id && eq.active_checkout.nfc_id.toLowerCase() === cardValue.toLowerCase());
+
+          if (!isSameCard && eq.active_checkout.checked_out_by_name !== card.member_name) {
+            return NextResponse.json(
+              { error: `"${eq.name}" is checked out to ${eq.active_checkout.checked_out_by_name}, not this NFC card.` },
+              { status: 409 }
+            );
+          }
+        } else if (!isAdmin) {
+          const checkedOutName = (eq.active_checkout.checked_out_by_name || "").trim().toLowerCase();
+          const checkedOutById = eq.active_checkout.checked_out_by;
+          const isBorrower =
+            (checkedOutById !== null && callerId === checkedOutById) ||
+            (callerName.length > 0 && callerName === checkedOutName);
+
+          if (!isBorrower) {
+            return NextResponse.json(
+              { error: `Forbidden: "${eq.name}" is checked out to ${eq.active_checkout.checked_out_by_name}. Only the borrower or an Admin can return it.` },
+              { status: 403 }
+            );
+          }
+        }
+      }
+    }
+
     const checkouts = [];
     for (const eqId of equipment_ids) {
       const c = await nfcReturn(eqId);
@@ -82,19 +124,28 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "This equipment is not currently checked out." }, { status: 409 });
   }
 
-  // If nfc_value was provided, verify ownership or log warning
-  if (cardValue) {
-    const card = await getNfcCardByValue(cardValue);
-    if (card) {
-      const isSameCard =
-        (equipment.active_checkout.nfc_value && equipment.active_checkout.nfc_value.toLowerCase() === cardValue.toLowerCase()) ||
-        (equipment.active_checkout.nfc_id && equipment.active_checkout.nfc_id.toLowerCase() === cardValue.toLowerCase());
+  // Verify authorization for single item return
+  if (card) {
+    const isSameCard =
+      (equipment.active_checkout.nfc_value && equipment.active_checkout.nfc_value.toLowerCase() === cardValue.toLowerCase()) ||
+      (equipment.active_checkout.nfc_id && equipment.active_checkout.nfc_id.toLowerCase() === cardValue.toLowerCase());
 
-      if (!isSameCard && equipment.active_checkout.checked_out_by_name !== card.member_name) {
-        return NextResponse.json({
-          error: `This equipment is checked out to ${equipment.active_checkout.checked_out_by_name}, not this NFC card.`,
-        }, { status: 409 });
-      }
+    if (!isSameCard && equipment.active_checkout.checked_out_by_name !== card.member_name) {
+      return NextResponse.json({
+        error: `This equipment is checked out to ${equipment.active_checkout.checked_out_by_name}, not this NFC card.`,
+      }, { status: 409 });
+    }
+  } else if (!isAdmin) {
+    const checkedOutName = (equipment.active_checkout.checked_out_by_name || "").trim().toLowerCase();
+    const checkedOutById = equipment.active_checkout.checked_out_by;
+    const isBorrower =
+      (checkedOutById !== null && callerId === checkedOutById) ||
+      (callerName.length > 0 && callerName === checkedOutName);
+
+    if (!isBorrower) {
+      return NextResponse.json({
+        error: `Forbidden: This equipment is checked out to ${equipment.active_checkout.checked_out_by_name}. Only the borrower or an Admin can return it.`,
+      }, { status: 403 });
     }
   }
 

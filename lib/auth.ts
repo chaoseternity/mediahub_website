@@ -27,7 +27,8 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
     async jwt({ token, account }) {
       // Re-read role from DB on every token evaluation so that admin-changed
       // roles take effect on the user's next page navigation without re-login.
-      const dbUser = await getUserByEmail(token.email!);
+      if (!token.email) return token;
+      const dbUser = await getUserByEmail(token.email);
       token.role = dbUser?.role ?? "viewer";
       token.userId = String(dbUser?.id ?? "");
       token.username = dbUser?.username ?? null;

@@ -1538,7 +1538,8 @@ export async function deleteSOPDocument(id: number): Promise<{ success: boolean;
 
 export async function searchSOPDocuments(query: string): Promise<SOPDocument[]> {
   await ensureSOPTable();
-  const pattern = `%${query}%`;
+  const escaped = query.replace(/[%_\\]/g, "\\$&");
+  const pattern = `%${escaped}%`;
   const { rows } = await sql<SOPDocument>`
     SELECT 
       s.id,

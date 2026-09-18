@@ -16,7 +16,7 @@ const store = new Map<string, number[]>();
 // processes (local dev). In Cloudflare Workers, isolates are short-lived anyway.
 const SWEEP_INTERVAL_MS = 5 * 60 * 1000;
 if (typeof setInterval !== "undefined") {
-  setInterval(() => {
+  const timer = setInterval(() => {
     const cutoff = Date.now() - SWEEP_INTERVAL_MS;
     for (const [ip, timestamps] of store) {
       if (timestamps.length === 0 || timestamps[timestamps.length - 1] < cutoff) {
@@ -24,6 +24,9 @@ if (typeof setInterval !== "undefined") {
       }
     }
   }, SWEEP_INTERVAL_MS);
+  if (timer && typeof (timer as any).unref === "function") {
+    (timer as any).unref();
+  }
 }
 
 /**
@@ -33,6 +36,8 @@ if (typeof setInterval !== "undefined") {
  * @param limit    - Maximum number of requests allowed in the window
  * @param windowMs - Rolling window duration in milliseconds
  */
+const MAX_ENTRIES = 10_000;
+
 export function checkRateLimit(ip: string, limit: number, windowMs: number): boolean {
   const now = Date.now();
   const windowStart = now - windowMs;
@@ -43,6 +48,12 @@ export function checkRateLimit(ip: string, limit: number, windowMs: number): boo
     // Still store the pruned list so the next sweep can clean it up correctly
     store.set(ip, timestamps);
     return false;
+  }
+
+  // Evict oldest entry if maximum capacity is reached
+  if (!store.has(ip) && store.size >= MAX_ENTRIES) {
+    const firstKey = store.keys().next().value;
+    if (firstKey) store.delete(firstKey);
   }
 
   timestamps.push(now);
