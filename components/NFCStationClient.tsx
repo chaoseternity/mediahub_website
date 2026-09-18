@@ -24,12 +24,32 @@ import {
   Download,
   Maximize,
   Minimize,
+  Wifi,
+  WifiOff,
+  RefreshCw,
+  CloudUpload,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { Logo } from "@/components/Logo";
 import { MediaClubLogo } from "@/components/MediaClubLogo";
+import {
+  isOnline,
+  getOfflineQueue,
+  enqueueOfflineAction,
+  processSyncQueue,
+  getCachedCards,
+  setCachedCards,
+  getCachedEquipment,
+  setCachedEquipment,
+  getCachedMemberData,
+  setCachedMemberData,
+  applyOptimisticCheckout,
+  applyOptimisticReturn,
+  applyOptimisticCardRegistration,
+  type QueuedAction,
+} from "@/lib/offlineSync";
 import {
   Card,
   CardHeader,
@@ -195,7 +215,33 @@ export function NFCStationClient({
   const [showInstallHelp, setShowInstallHelp] = useState(false);
   const [isFullscreen, setIsFullscreen] = useState(false);
 
+  // Offline Sync States
+  const [isOnlineState, setIsOnlineState] = useState(true);
+  const [pendingOfflineCount, setPendingOfflineCount] = useState(0);
+  const [isSyncing, setIsSyncing] = useState(false);
+  const [isOfflineQueueOpen, setIsOfflineQueueOpen] = useState(false);
+  const [offlineQueueList, setOfflineQueueList] = useState<QueuedAction[]>([]);
+
   useEffect(() => {
+    // 1. Hydrate offline cache with initial server data
+    if (initialEquipment && initialEquipment.length > 0) {
+      setCachedEquipment(initialEquipment);
+    }
+    if (initialCards && initialCards.length > 0) {
+      setCachedCards(initialCards);
+    }
+
+    // 2. Initialize offline queue count
+    const updateQueue = () => {
+      const q = getOfflineQueue();
+      setOfflineQueueList(q);
+      setPendingOfflineCount(q.length);
+    };
+    updateQueue();
+
+    // 3. Online/offline detection
+    setIsOnlineState(isOnline());
+
     const checkStandalone = () => {
       const isStandaloneMode =
         window.matchMedia("(display-mode: standalone)").matches ||
@@ -210,15 +256,34 @@ export function NFCStationClient({
       setDeferredPrompt(e);
     };
 
+    const handleOnline = () => {
+      setIsOnlineState(true);
+      void runAutoSync();
+    };
+
+    const handleOffline = () => {
+      setIsOnlineState(false);
+      setStatusMessage({
+        text: "WiFi / Network disconnected. Station is now in Offline Mode. All changes will be saved locally and synced once reconnected.",
+        type: "warning",
+      });
+    };
+
     window.addEventListener("beforeinstallprompt", handleBeforeInstall);
     const onFullscreenChange = () => setIsFullscreen(Boolean(document.fullscreenElement));
     document.addEventListener("fullscreenchange", onFullscreenChange);
+    window.addEventListener("online", handleOnline);
+    window.addEventListener("offline", handleOffline);
+    window.addEventListener("mediahub-offline-queue-changed", updateQueue);
 
     return () => {
       window.removeEventListener("beforeinstallprompt", handleBeforeInstall);
       document.removeEventListener("fullscreenchange", onFullscreenChange);
+      window.removeEventListener("online", handleOnline);
+      window.removeEventListener("offline", handleOffline);
+      window.removeEventListener("mediahub-offline-queue-changed", updateQueue);
     };
-  }, []);
+  }, [initialEquipment, initialCards]);
 
   async function handleInstallApp() {
     if (deferredPrompt) {
@@ -291,11 +356,13 @@ export function NFCStationClient({
       if (res.ok) {
         const data = await res.json();
         if (data.found) {
-          setCardData({
+          const memberObj = {
             card: data.card,
             activeCheckouts: data.activeCheckouts || [],
             history: data.history || [],
-          });
+          };
+          setCardData(memberObj);
+          setCachedMemberData(nfcValue, memberObj);
         }
       }
     } catch (err) {
@@ -310,6 +377,7 @@ export function NFCStationClient({
       if (res.ok) {
         const data = await res.json();
         setEquipmentList(data);
+        setCachedEquipment(data);
       }
     } catch (err) {
       console.error("Failed to refresh equipment list:", err);
@@ -323,13 +391,47 @@ export function NFCStationClient({
       if (res.ok) {
         const data = await res.json();
         setCardsList(data);
+        setCachedCards(data);
       }
     } catch (err) {
       console.error("Failed to refresh cards list:", err);
     }
   }, []);
 
-  // 1. NFC CARD RECOGNITION HANDLER
+  // Background auto-sync for pending offline transactions
+  const runAutoSync = useCallback(async () => {
+    const q = getOfflineQueue();
+    if (q.length === 0) return;
+
+    setIsSyncing(true);
+    try {
+      const result = await processSyncQueue();
+      if (result.success > 0) {
+        playSound("success");
+        setStatusMessage({
+          text: `[Reconnected] Synchronized ${result.success} offline transaction(s) to the database!`,
+          type: "success",
+        });
+        await refreshEquipmentList();
+        await refreshCardsList();
+        if (cardDataRef.current) {
+          await refreshCardData(cardDataRef.current.card.nfc_value);
+        }
+      } else if (result.failed > 0) {
+        setStatusMessage({
+          text: `Could not sync ${result.failed} offline item(s). Network may still be unstable. Will retry automatically.`,
+          type: "warning",
+        });
+      }
+    } finally {
+      setIsSyncing(false);
+      const updated = getOfflineQueue();
+      setOfflineQueueList(updated);
+      setPendingOfflineCount(updated.length);
+    }
+  }, [refreshEquipmentList, refreshCardsList, refreshCardData]);
+
+  // 1. NFC CARD RECOGNITION HANDLER (WITH OFFLINE CACHE FALLBACK)
   const handleNfcScanned = useCallback(
     async (rawCardValue: string) => {
       const val = rawCardValue.trim();
@@ -339,16 +441,68 @@ export function NFCStationClient({
       setStatusMessage({ text: `Recognizing NFC card: ${val}...`, type: "info" });
       playSound("scan");
 
+      // Direct offline mode check
+      if (typeof navigator !== "undefined" && !navigator.onLine) {
+        const cachedMember = getCachedMemberData(val);
+        if (cachedMember) {
+          setCardData(cachedMember);
+          setStationMode("card_active");
+          setNfcInput("");
+          setStatusMessage({
+            text: `[Offline Mode] Recognized Card: ${cachedMember.card.member_name} (${cachedMember.card.nfc_value})`,
+            type: "info",
+          });
+          playSound("success");
+          setIsProcessing(false);
+          return;
+        }
+
+        const cachedCards = getCachedCards();
+        const foundCard = cachedCards.find((c) => c.nfc_value.toLowerCase() === val.toLowerCase());
+        if (foundCard) {
+          const memberObj: NFCMemberData = {
+            card: foundCard,
+            activeCheckouts: [],
+            history: [],
+          };
+          setCardData(memberObj);
+          setCachedMemberData(val, memberObj);
+          setStationMode("card_active");
+          setNfcInput("");
+          setStatusMessage({
+            text: `[Offline Mode] Recognized Card: ${foundCard.member_name} (${foundCard.nfc_value})`,
+            type: "info",
+          });
+          playSound("success");
+          setIsProcessing(false);
+          return;
+        }
+
+        // Unregistered card offline
+        playSound("error");
+        setUnregisteredCard(val);
+        setNewMemberName("");
+        setNewCardNotes("");
+        setStatusMessage({
+          text: `[Offline Mode] NFC Card "${val}" not recognized. Register it below.`,
+          type: "warning",
+        });
+        setIsProcessing(false);
+        return;
+      }
+
       try {
         const res = await fetch(`/api/nfc?nfc_value=${encodeURIComponent(val)}`);
         const json = await res.json();
 
         if (json.found) {
-          setCardData({
+          const memberObj: NFCMemberData = {
             card: json.card,
             activeCheckouts: json.activeCheckouts || [],
             history: json.history || [],
-          });
+          };
+          setCardData(memberObj);
+          setCachedMemberData(val, memberObj);
           setStationMode("card_active");
           setNfcInput("");
           setStatusMessage({
@@ -367,11 +521,46 @@ export function NFCStationClient({
           });
         }
       } catch {
-        playSound("error");
-        setStatusMessage({
-          text: "Network error reading NFC card. Please try again.",
-          type: "error",
-        });
+        // Network drop during request -> fallback to local offline cache
+        const cachedMember = getCachedMemberData(val);
+        if (cachedMember) {
+          setCardData(cachedMember);
+          setStationMode("card_active");
+          setNfcInput("");
+          setStatusMessage({
+            text: `[Offline Mode] Recognized Card: ${cachedMember.card.member_name} (${cachedMember.card.nfc_value})`,
+            type: "info",
+          });
+          playSound("success");
+        } else {
+          const cachedCards = getCachedCards();
+          const foundCard = cachedCards.find((c) => c.nfc_value.toLowerCase() === val.toLowerCase());
+          if (foundCard) {
+            const memberObj: NFCMemberData = {
+              card: foundCard,
+              activeCheckouts: [],
+              history: [],
+            };
+            setCardData(memberObj);
+            setCachedMemberData(val, memberObj);
+            setStationMode("card_active");
+            setNfcInput("");
+            setStatusMessage({
+              text: `[Offline Mode] Recognized Card: ${foundCard.member_name}`,
+              type: "info",
+            });
+            playSound("success");
+          } else {
+            playSound("error");
+            setUnregisteredCard(val);
+            setNewMemberName("");
+            setNewCardNotes("");
+            setStatusMessage({
+              text: `[Offline Mode] NFC Card "${val}" not recognized. Register it below.`,
+              type: "warning",
+            });
+          }
+        }
       } finally {
         setIsProcessing(false);
       }
@@ -491,15 +680,84 @@ export function NFCStationClient({
     if (!cardData || stagedItems.length === 0 || !popupMode) return;
     setIsProcessing(true);
 
+    const equipmentIds = stagedItems.map((e) => e.id);
+    const nfcVal = cardData.card.nfc_value;
+    const memberName = cardData.card.member_name;
+    const count = stagedItems.length;
+
+    // Helper: Execute offline fallback for batch checkout
+    const applyOfflineCheckout = () => {
+      enqueueOfflineAction({
+        type: "checkout",
+        payload: {
+          nfc_value: nfcVal,
+          equipment_ids: equipmentIds,
+        },
+        description: `Checkout ${count} item(s) to ${memberName}`,
+      });
+
+      const { updatedEquipment, updatedCardData } = applyOptimisticCheckout(
+        equipmentList,
+        cardData,
+        equipmentIds
+      );
+      setEquipmentList(updatedEquipment);
+      setCardData(updatedCardData);
+      setPendingOfflineCount(getOfflineQueue().length);
+
+      playSound("success");
+      setStatusMessage({
+        text: `[Offline Mode] Checked out ${count} item(s) to ${memberName}. Stored locally — will sync automatically when WiFi reconnects.`,
+        type: "success",
+      });
+      closePopup();
+    };
+
+    // Helper: Execute offline fallback for batch return
+    const applyOfflineReturn = () => {
+      enqueueOfflineAction({
+        type: "return",
+        payload: {
+          nfc_value: nfcVal,
+          equipment_ids: equipmentIds,
+        },
+        description: `Return ${count} item(s) from ${memberName}`,
+      });
+
+      const { updatedEquipment, updatedCardData } = applyOptimisticReturn(
+        equipmentList,
+        cardData,
+        equipmentIds
+      );
+      setEquipmentList(updatedEquipment);
+      setCardData(updatedCardData);
+      setPendingOfflineCount(getOfflineQueue().length);
+
+      playSound("return");
+      setStatusMessage({
+        text: `[Offline Mode] Returned ${count} item(s) from ${memberName}. Stored locally — will sync automatically when WiFi reconnects.`,
+        type: "success",
+      });
+      closePopup();
+    };
+
     try {
-      const equipmentIds = stagedItems.map((e) => e.id);
+      // If client is already offline, save locally without waiting for fetch timeout
+      if (!isOnline()) {
+        if (popupMode === "checkout") {
+          applyOfflineCheckout();
+        } else {
+          applyOfflineReturn();
+        }
+        return;
+      }
 
       if (popupMode === "checkout") {
         const res = await fetch("/api/nfc/checkout", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
-            nfc_value: cardData.card.nfc_value,
+            nfc_value: nfcVal,
             equipment_ids: equipmentIds,
           }),
         });
@@ -508,11 +766,11 @@ export function NFCStationClient({
         if (res.ok) {
           playSound("success");
           setStatusMessage({
-            text: `Successfully checked out ${stagedItems.length} item(s) to ${cardData.card.member_name}!`,
+            text: `Successfully checked out ${count} item(s) to ${memberName}!`,
             type: "success",
           });
           closePopup();
-          await refreshCardData(cardData.card.nfc_value);
+          await refreshCardData(nfcVal);
           await refreshEquipmentList();
         } else {
           playSound("error");
@@ -523,7 +781,7 @@ export function NFCStationClient({
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
-            nfc_value: cardData.card.nfc_value,
+            nfc_value: nfcVal,
             equipment_ids: equipmentIds,
           }),
         });
@@ -532,11 +790,11 @@ export function NFCStationClient({
         if (res.ok) {
           playSound("return");
           setStatusMessage({
-            text: `Successfully returned ${stagedItems.length} item(s) from ${cardData.card.member_name}!`,
+            text: `Successfully returned ${count} item(s) from ${memberName}!`,
             type: "success",
           });
           closePopup();
-          await refreshCardData(cardData.card.nfc_value);
+          await refreshCardData(nfcVal);
           await refreshEquipmentList();
         } else {
           playSound("error");
@@ -544,8 +802,12 @@ export function NFCStationClient({
         }
       }
     } catch {
-      playSound("error");
-      setPopupMessage({ text: "Network error processing batch.", type: "error" });
+      // Network cut out mid-request — seamlessly store locally
+      if (popupMode === "checkout") {
+        applyOfflineCheckout();
+      } else {
+        applyOfflineReturn();
+      }
     } finally {
       setIsProcessing(false);
     }
@@ -591,14 +853,57 @@ export function NFCStationClient({
     if (!unregisteredCard || !newMemberName.trim()) return;
     setIsProcessing(true);
 
+    const rawNfc = unregisteredCard.trim();
+    const rawName = newMemberName.trim();
+    const rawNotes = newCardNotes.trim() || undefined;
+
+    const applyOfflineRegistration = async () => {
+      const newCard: NFCCard = {
+        id: Date.now(),
+        nfc_value: rawNfc,
+        member_name: rawName,
+        notes: rawNotes || null,
+        created_at: new Date().toISOString(),
+      };
+
+      enqueueOfflineAction({
+        type: "register_card",
+        payload: {
+          nfc_value: rawNfc,
+          member_name: rawName,
+          notes: rawNotes,
+        },
+        description: `Register card "${rawName}" (${rawNfc})`,
+      });
+
+      const updated = applyOptimisticCardRegistration(cardsList, newCard);
+      setCardsList(updated);
+      setPendingOfflineCount(getOfflineQueue().length);
+
+      playSound("success");
+      setUnregisteredCard(null);
+      setNewMemberName("");
+      setNewCardNotes("");
+      setStatusMessage({
+        text: `[Offline Mode] Card registered locally for ${rawName}. Will sync when WiFi reconnects.`,
+        type: "success",
+      });
+      await handleNfcScanned(rawNfc);
+    };
+
     try {
+      if (!isOnline()) {
+        await applyOfflineRegistration();
+        return;
+      }
+
       const res = await fetch("/api/nfc/card", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          nfc_value: unregisteredCard.trim(),
-          member_name: newMemberName.trim(),
-          notes: newCardNotes.trim() || undefined,
+          nfc_value: rawNfc,
+          member_name: rawName,
+          notes: rawNotes,
         }),
       });
 
@@ -606,18 +911,16 @@ export function NFCStationClient({
       if (res.ok) {
         playSound("success");
         await refreshCardsList();
-        const registeredVal = unregisteredCard.trim();
         setUnregisteredCard(null);
         setNewMemberName("");
         setNewCardNotes("");
-        await handleNfcScanned(registeredVal);
+        await handleNfcScanned(rawNfc);
       } else {
         playSound("error");
         setStatusMessage({ text: json.error || "Failed to register card.", type: "error" });
       }
     } catch {
-      playSound("error");
-      setStatusMessage({ text: "Error registering NFC card.", type: "error" });
+      await applyOfflineRegistration();
     } finally {
       setIsProcessing(false);
     }
@@ -705,6 +1008,60 @@ export function NFCStationClient({
             >
               <RotateCcw className="h-4 w-4" />
               Finish / Switch Card
+            </Button>
+          )}
+
+          {/* Connection Status & Offline Queue badge */}
+          <button
+            type="button"
+            onClick={() => {
+              setOfflineQueueList(getOfflineQueue());
+              setIsOfflineQueueOpen(true);
+            }}
+            className={cn(
+              "flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs font-semibold border transition-all cursor-pointer",
+              !isOnlineState
+                ? "bg-amber-500/10 text-amber-600 dark:text-amber-400 border-amber-500/30 hover:bg-amber-500/20"
+                : pendingOfflineCount > 0
+                ? "bg-blue-500/10 text-blue-600 dark:text-blue-400 border-blue-500/30 hover:bg-blue-500/20"
+                : "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border-emerald-500/30 hover:bg-emerald-500/20"
+            )}
+            title={!isOnlineState ? "Offline: scans & actions saved locally" : "Online"}
+          >
+            {!isOnlineState ? (
+              <>
+                <WifiOff className="h-3.5 w-3.5 text-amber-500 animate-pulse" />
+                <span>Offline</span>
+              </>
+            ) : isSyncing ? (
+              <>
+                <RefreshCw className="h-3.5 w-3.5 animate-spin text-blue-500" />
+                <span>Syncing...</span>
+              </>
+            ) : (
+              <>
+                <Wifi className="h-3.5 w-3.5 text-emerald-500" />
+                <span>Online</span>
+              </>
+            )}
+            {pendingOfflineCount > 0 && (
+              <span className="ml-1 px-1.5 py-0.2 rounded-full text-[10px] font-bold bg-amber-500 text-white dark:bg-amber-400 dark:text-black">
+                {pendingOfflineCount} queued
+              </span>
+            )}
+          </button>
+
+          {isOnlineState && pendingOfflineCount > 0 && (
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => void runAutoSync()}
+              disabled={isSyncing}
+              className="gap-1.5 text-xs font-semibold border-amber-500/40 text-amber-600 dark:text-amber-400 hover:bg-amber-500/10"
+              title="Upload queued offline actions to database now"
+            >
+              <CloudUpload className={cn("h-3.5 w-3.5", isSyncing && "animate-spin")} />
+              {isSyncing ? "Syncing..." : "Sync Now"}
             </Button>
           )}
 
@@ -1370,14 +1727,47 @@ export function NFCStationClient({
               onClick={async () => {
                 if (collisionPrompt && cardData) {
                   const eq = collisionPrompt.equipment;
+                  const nfcVal = cardData.card.nfc_value;
+                  const memberName = cardData.card.member_name;
                   setCollisionPrompt(null);
+
+                  const applyOfflineReturnSingle = () => {
+                    enqueueOfflineAction({
+                      type: "return",
+                      payload: {
+                        equipment_id: eq.id,
+                        nfc_value: nfcVal,
+                      },
+                      description: `Return single item "${eq.name}" from ${memberName}`,
+                    });
+                    const { updatedEquipment, updatedCardData } = applyOptimisticReturn(
+                      equipmentList,
+                      cardData,
+                      [eq.id]
+                    );
+                    setEquipmentList(updatedEquipment);
+                    setCardData(updatedCardData);
+                    setPendingOfflineCount(getOfflineQueue().length);
+                    playSound("return");
+                    setPopupMessage({
+                      text: `[Offline Mode] Returned "${eq.name}" locally. Will sync when WiFi reconnects.`,
+                      type: "success",
+                    });
+                  };
+
+                  if (!isOnline()) {
+                    applyOfflineReturnSingle();
+                    popupInputRef.current?.focus();
+                    return;
+                  }
+
                   try {
                     const res = await fetch("/api/nfc/return", {
                       method: "POST",
                       headers: { "Content-Type": "application/json" },
                       body: JSON.stringify({
                         equipment_id: eq.id,
-                        nfc_value: cardData.card.nfc_value,
+                        nfc_value: nfcVal,
                       }),
                     });
                     if (res.ok) {
@@ -1386,11 +1776,13 @@ export function NFCStationClient({
                         text: `Successfully returned "${eq.name}"!`,
                         type: "success",
                       });
-                      await refreshCardData(cardData.card.nfc_value);
+                      await refreshCardData(nfcVal);
                       await refreshEquipmentList();
+                    } else {
+                      playSound("error");
                     }
                   } catch {
-                    playSound("error");
+                    applyOfflineReturnSingle();
                   }
                   popupInputRef.current?.focus();
                 }
@@ -1572,6 +1964,117 @@ export function NFCStationClient({
 
           <DialogFooter>
             <Button onClick={() => setShowInstallHelp(false)}>Got It</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* DIALOG: OFFLINE QUEUE MANAGER */}
+      <Dialog open={isOfflineQueueOpen} onOpenChange={setIsOfflineQueueOpen}>
+        <DialogContent className="sm:max-w-md rounded-2xl max-h-[85vh] flex flex-col">
+          <DialogHeader>
+            <div className="flex items-center gap-2 mb-1">
+              <div
+                className={cn(
+                  "p-2 rounded-lg",
+                  !isOnlineState ? "bg-amber-500/10 text-amber-500" : "bg-emerald-500/10 text-emerald-500"
+                )}
+              >
+                {!isOnlineState ? <WifiOff className="h-5 w-5" /> : <Wifi className="h-5 w-5" />}
+              </div>
+              <div>
+                <DialogTitle className="text-base font-bold">
+                  {!isOnlineState ? "Offline Storage Status" : "Network & Sync Center"}
+                </DialogTitle>
+                <DialogDescription className="text-xs">
+                  {!isOnlineState
+                    ? "Device is disconnected from WiFi. Changes are stored locally."
+                    : "Device is online and connected to the server."}
+                </DialogDescription>
+              </div>
+            </div>
+          </DialogHeader>
+
+          <div className="flex-1 overflow-y-auto space-y-3 py-2 pr-1 text-xs">
+            <div className="rounded-xl border p-3 bg-muted/40 space-y-1.5">
+              <div className="flex items-center justify-between font-semibold">
+                <span>Pending Sync Queue:</span>
+                <Badge variant="outline" className="text-xs">
+                  {offlineQueueList.length} action(s)
+                </Badge>
+              </div>
+              <p className="text-[11px] text-muted-foreground leading-relaxed">
+                When you tap NFC cards or scan barcodes while WiFi is cut out, operations are safely preserved on this device. As soon as connectivity returns, they will be uploaded automatically.
+              </p>
+            </div>
+
+            <div className="space-y-2">
+              <span className="font-semibold text-xs text-foreground block">Queue Items (FIFO Order):</span>
+              {offlineQueueList.length === 0 ? (
+                <div className="text-center py-6 border border-dashed rounded-xl text-muted-foreground text-xs">
+                  <CheckCircle2 className="h-5 w-5 text-emerald-500 mx-auto mb-1 opacity-80" />
+                  All changes are in sync with the database.
+                </div>
+              ) : (
+                offlineQueueList.map((item, idx) => (
+                  <div
+                    key={item.id}
+                    className="p-2.5 rounded-xl border bg-background flex items-start justify-between gap-2"
+                  >
+                    <div className="space-y-0.5">
+                      <div className="flex items-center gap-1.5">
+                        <span className="font-mono text-[10px] font-bold text-muted-foreground">
+                          #{idx + 1}
+                        </span>
+                        <Badge
+                          variant="outline"
+                          className={cn(
+                            "text-[10px] uppercase font-bold py-0 px-1.5",
+                            item.type === "checkout"
+                              ? "text-emerald-600 dark:text-emerald-400 border-emerald-500/30 bg-emerald-500/5"
+                              : item.type === "return"
+                              ? "text-blue-600 dark:text-blue-400 border-blue-500/30 bg-blue-500/5"
+                              : "text-purple-600 dark:text-purple-400 border-purple-500/30 bg-purple-500/5"
+                          )}
+                        >
+                          {item.type}
+                        </Badge>
+                      </div>
+                      <p className="font-medium text-foreground text-xs">{item.description}</p>
+                      <p className="text-[10px] text-muted-foreground">
+                        {new Date(item.timestamp).toLocaleTimeString()}
+                      </p>
+                    </div>
+                  </div>
+                ))
+              )}
+            </div>
+          </div>
+
+          <DialogFooter className="flex flex-col-reverse sm:flex-row gap-2 pt-2 border-t">
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={() => setIsOfflineQueueOpen(false)}
+              className="rounded-xl text-xs"
+            >
+              Close
+            </Button>
+            {isOnlineState && offlineQueueList.length > 0 && (
+              <Button
+                type="button"
+                size="sm"
+                disabled={isSyncing}
+                onClick={async () => {
+                  await runAutoSync();
+                  setOfflineQueueList(getOfflineQueue());
+                }}
+                className="rounded-xl text-xs font-semibold gap-1.5 bg-primary text-primary-foreground"
+              >
+                <CloudUpload className={cn("h-3.5 w-3.5", isSyncing && "animate-spin")} />
+                {isSyncing ? "Syncing..." : "Sync To Database Now"}
+              </Button>
+            )}
           </DialogFooter>
         </DialogContent>
       </Dialog>
