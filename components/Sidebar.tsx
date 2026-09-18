@@ -24,6 +24,7 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { cn, roleBadgeClass } from "@/lib/utils";
 import type { Role } from "@/lib/types";
+import { Logo } from "@/components/Logo";
 
 interface SidebarProps {
   userName: string;
@@ -101,7 +102,7 @@ export function Sidebar({ userName, role }: SidebarProps) {
   return (
     <aside
       className={cn(
-        "hidden md:flex flex-col border-r bg-background h-full shrink-0 transition-[width] duration-200 overflow-hidden relative",
+        "hidden md:flex flex-col border-r bg-sidebar text-sidebar-foreground transition-all duration-300 relative shrink-0 select-none",
         collapsed ? "w-16" : "w-60"
       )}
     >
@@ -116,8 +117,10 @@ export function Sidebar({ userName, role }: SidebarProps) {
       </Button>
 
       {/* Logo */}
-      <div className="flex items-center px-4 py-4 border-b min-w-0">
-        {!collapsed && <h1 className="font-bold text-lg tracking-tight truncate">MediaHub</h1>}
+      <div className="flex items-center px-3.5 py-3.5 border-b min-w-0">
+        <Link href="/dashboard" className="flex items-center min-w-0">
+          <Logo size="md" showText={!collapsed} iconOnly={collapsed} showSubtitle={!collapsed} />
+        </Link>
       </div>
 
       {/* Grouped Nav */}

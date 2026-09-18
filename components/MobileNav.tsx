@@ -24,6 +24,7 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { cn, roleBadgeClass } from "@/lib/utils";
 import type { Role } from "@/lib/types";
+import { Logo } from "@/components/Logo";
 
 interface MobileNavProps {
   userName: string;
@@ -94,7 +95,9 @@ export function MobileNav({ userName, role }: MobileNavProps) {
         >
           <Menu className="h-5 w-5" />
         </Button>
-        <h1 className="font-bold text-base tracking-tight flex-1">MediaHub</h1>
+        <div className="flex-1 min-w-0">
+          <Logo size="sm" showSubtitle={true} />
+        </div>
         {mounted && (
           <Button
             variant="ghost"
@@ -126,8 +129,8 @@ export function MobileNav({ userName, role }: MobileNavProps) {
           open ? "translate-x-0" : "-translate-x-full"
         )}
       >
-        <div className="flex items-center justify-between px-4 py-4 border-b">
-          <h1 className="font-bold text-lg tracking-tight">MediaHub</h1>
+        <div className="flex items-center justify-between px-4 py-3.5 border-b">
+          <Logo size="md" showSubtitle={true} />
           <Button variant="ghost" size="icon" aria-label="Close menu" onClick={() => setOpen(false)}>
             <X className="h-5 w-5" />
           </Button>

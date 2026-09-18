@@ -28,6 +28,7 @@ import {
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
+import { Logo } from "@/components/Logo";
 import {
   Card,
   CardHeader,
@@ -641,9 +642,7 @@ export function NFCStationClient({
       {/* Header bar */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b pb-4">
         <div className="flex items-center gap-3">
-          <div className="p-2.5 rounded-2xl bg-primary/10 text-primary border border-primary/20 shadow-xs">
-            <Nfc className="h-6 w-6" />
-          </div>
+          <Logo size="lg" iconOnly={true} />
           <div>
             <h1 className="text-2xl font-bold tracking-tight">NFC Equipment Station</h1>
             <p className="text-xs text-muted-foreground">

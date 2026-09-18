@@ -9,6 +9,7 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
+import { Logo } from "@/components/Logo";
 
 function MicrosoftIcon() {
   return (
@@ -32,13 +33,27 @@ function GoogleIcon() {
   );
 }
 
+
 export default function LoginPage() {
   return (
     <main className="min-h-screen flex items-center justify-center bg-muted/40 p-4">
       <Card className="w-full max-w-sm shadow-md">
-        <CardHeader className="text-center pb-4">
-          <CardTitle className="text-2xl font-bold">MediaHub</CardTitle>
-          <CardDescription className="text-xs">Sign in to manage your equipment & events</CardDescription>
+        <CardHeader className="text-center pb-4 flex flex-col items-center">
+          <div className="mb-3">
+            <Logo size="xl" iconOnly={true} />
+          </div>
+          <CardTitle className="text-2xl font-extrabold tracking-tight">
+            <span>Media</span>
+            <span className="bg-gradient-to-r from-blue-500 to-indigo-600 bg-clip-text text-transparent">
+              Hub
+            </span>
+          </CardTitle>
+          <span className="text-[11px] font-bold uppercase tracking-wider text-muted-foreground mt-0.5">
+            Media Club Equipment Portal
+          </span>
+          <CardDescription className="text-xs mt-1">
+            Sign in to manage your equipment & events
+          </CardDescription>
         </CardHeader>
         <CardContent className="flex flex-col gap-3">
           {/* Option 1: Google */}
