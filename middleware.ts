@@ -9,9 +9,9 @@ import { checkRateLimit } from "@/lib/rate-limit";
 
 const { auth } = NextAuth(authConfig);
 
-// Stricter limit for auth endpoints to prevent brute-force attacks.
-const AUTH_LIMIT = 10;
-const API_LIMIT = 60;
+// Rate limits per minute to prevent abuse while accommodating NextAuth session checks and shared school NAT.
+const AUTH_LIMIT = 60;
+const API_LIMIT = 120;
 const WINDOW_MS = 60_000; // 1 minute
 
 function getClientIp(req: Request): string {
@@ -36,7 +36,8 @@ export default auth((req) => {
 
   // --- Rate limiting (applied before auth checks) ---
   const ip = getClientIp(req);
-  const isAuthRoute = pathname.startsWith("/api/auth/");
+  const isAuthRead = pathname === "/api/auth/session" || pathname === "/api/auth/csrf" || pathname === "/api/auth/providers";
+  const isAuthRoute = pathname.startsWith("/api/auth/") && !isAuthRead;
   const limit = isAuthRoute ? AUTH_LIMIT : API_LIMIT;
 
   if (!checkRateLimit(ip, limit, WINDOW_MS)) {
