@@ -1,5 +1,4 @@
-import { sql } from "@vercel/postgres";
-import { ensureSchema } from "./postgres";
+import { sql, ensureSchema } from "./d1";
 import type {
   Equipment,
   EquipmentDetail,
@@ -63,8 +62,8 @@ export async function getAllUsers(): Promise<User[]> {
 
 export async function countUsers(): Promise<number> {
   await ensureSchema();
-  const { rows } = await sql<{ c: string }>`SELECT COUNT(*)::text as c FROM users`;
-  return parseInt(rows[0]?.c ?? "0", 10);
+  const { rows } = await sql<{ c: number | string }>`SELECT COUNT(*) as c FROM users`;
+  return parseInt(String(rows[0]?.c ?? "0"), 10);
 }
 
 export async function upsertUser(params: {
@@ -106,8 +105,8 @@ export async function upsertUser(params: {
 
 export async function countAdmins(): Promise<number> {
   await ensureSchema();
-  const { rows } = await sql<{ c: string }>`SELECT COUNT(*)::text as c FROM users WHERE role = 'admin'`;
-  return parseInt(rows[0]?.c ?? "0", 10);
+  const { rows } = await sql<{ c: number | string }>`SELECT COUNT(*) as c FROM users WHERE role = 'admin'`;
+  return parseInt(String(rows[0]?.c ?? "0"), 10);
 }
 
 export async function updateUserRole(id: number, role: Role): Promise<{ success: boolean; error?: string }> {
@@ -237,12 +236,19 @@ export async function deleteNfcCard(id: number): Promise<void> {
 // Equipment helpers
 // ---------------------------------------------------------------------------
 
-type EquipmentRawRow = Omit<Equipment, "tags"> & { tags: string[] | null };
+type EquipmentRawRow = Omit<Equipment, "tags"> & { tags: string[] | string | null };
 
 function formatEquipmentRow(row: EquipmentRawRow): Equipment {
+  let tags: string[] = [];
+  if (Array.isArray(row.tags)) {
+    tags = row.tags.filter(Boolean);
+  } else if (typeof row.tags === "string") {
+    tags = row.tags.split(",").map((t) => t.trim()).filter(Boolean);
+  }
+
   const formatted: Equipment = {
     ...row,
-    tags: Array.isArray(row.tags) ? row.tags.filter(Boolean) : [],
+    tags,
   };
 
   if (formatted.active_event_id && (formatted.status === "Available" || formatted.status === "Checked Out")) {
@@ -258,10 +264,7 @@ export async function getAllEquipment(): Promise<Equipment[]> {
     SELECT 
       e.id, e.name, e.description, e.serial_number,
       e.condition, e.location, e.status, e.created_at, e.updated_at,
-      COALESCE(
-        ARRAY_AGG(DISTINCT t.name) FILTER (WHERE t.name IS NOT NULL),
-        '{}'
-      ) AS tags,
+      GROUP_CONCAT(DISTINCT t.name) AS tags,
       c.id AS active_checkout_id,
       c.checked_out_by_name,
       c.checked_out_at,
@@ -301,10 +304,7 @@ export async function getEquipmentById(id: number): Promise<EquipmentDetail | un
     SELECT 
       e.id, e.name, e.description, e.serial_number,
       e.condition, e.location, e.status, e.created_at, e.updated_at,
-      COALESCE(
-        ARRAY_AGG(DISTINCT t.name) FILTER (WHERE t.name IS NOT NULL),
-        '{}'
-      ) AS tags,
+      GROUP_CONCAT(DISTINCT t.name) AS tags,
       c.id AS active_checkout_id,
       c.checked_out_by_name,
       c.checked_out_at,
@@ -741,10 +741,7 @@ export async function getEquipmentByTagId(tagId: number): Promise<Equipment[]> {
     SELECT 
       e.id, e.name, e.description, e.serial_number,
       e.condition, e.location, e.status, e.created_at, e.updated_at,
-      COALESCE(
-        ARRAY_AGG(DISTINCT t.name) FILTER (WHERE t.name IS NOT NULL),
-        '{}'
-      ) AS tags,
+      GROUP_CONCAT(DISTINCT t.name) AS tags,
       c.id AS active_checkout_id,
       c.checked_out_by_name,
       c.checked_out_at,
@@ -1075,10 +1072,7 @@ export async function getEventById(id: number): Promise<AppEvent | undefined> {
       e.id, e.name, e.description, e.serial_number,
       e.condition, e.location, e.status, e.created_at, e.updated_at,
       ee.section, ee.used_for_rehearsal,
-      COALESCE(
-        ARRAY_AGG(DISTINCT t.name) FILTER (WHERE t.name IS NOT NULL),
-        '{}'
-      ) AS tags
+      GROUP_CONCAT(DISTINCT t.name) AS tags
     FROM equipment e
     JOIN event_equipment ee ON ee.equipment_id = e.id
     LEFT JOIN equipment_tags et ON et.equipment_id = e.id
@@ -1485,34 +1479,7 @@ export async function updateSectionRehearsalConfig(
 // ---------------------------------------------------------------------------
 
 async function ensureSOPTable(): Promise<void> {
-  try {
-    await ensureSchema();
-    await sql`
-      CREATE TABLE IF NOT EXISTS sop_documents (
-        id SERIAL PRIMARY KEY,
-        title TEXT NOT NULL,
-        category TEXT NOT NULL DEFAULT 'General',
-        content TEXT NOT NULL,
-        file_name TEXT,
-        file_type TEXT,
-        file_size INT,
-        uploaded_by INT,
-        created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
-        updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
-      );
-    `;
-    try {
-      await sql`ALTER TABLE sop_documents ADD COLUMN IF NOT EXISTS file_name TEXT;`;
-      await sql`ALTER TABLE sop_documents ADD COLUMN IF NOT EXISTS file_type TEXT;`;
-      await sql`ALTER TABLE sop_documents ADD COLUMN IF NOT EXISTS file_size INT;`;
-      await sql`ALTER TABLE sop_documents ADD COLUMN IF NOT EXISTS uploaded_by INT;`;
-      await sql`ALTER TABLE sop_documents ADD COLUMN IF NOT EXISTS category TEXT DEFAULT 'General';`;
-    } catch {
-      // Columns may already exist
-    }
-  } catch (e) {
-    console.warn("ensureSOPTable notice:", e);
-  }
+  await ensureSchema();
 }
 
 export async function getAllSOPDocuments(): Promise<SOPDocument[]> {
@@ -1679,7 +1646,7 @@ export async function searchSOPDocuments(rawQuery: string): Promise<SOPDocument[
       s.updated_at
     FROM sop_documents s
     LEFT JOIN users u ON u.id = s.uploaded_by
-    WHERE s.title ILIKE ${pattern} OR s.content ILIKE ${pattern} OR s.category ILIKE ${pattern}
+    WHERE s.title LIKE ${pattern} OR s.content LIKE ${pattern} OR s.category LIKE ${pattern}
     ORDER BY s.updated_at DESC
   `;
   return rows;
