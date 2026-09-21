@@ -81,6 +81,43 @@ export default auth((req) => {
     return NextResponse.redirect(loginUrl);
   }
 
+  // --- Role-Based Access Control (RBAC) ---
+  if (isAuthenticated) {
+    const role = req.auth?.user?.role;
+
+    // Admin-only pages: /dashboard/users and /dashboard/tags
+    if (pathname.startsWith("/dashboard/users") || pathname.startsWith("/dashboard/tags")) {
+      if (role !== "admin") {
+        return NextResponse.redirect(new URL("/dashboard", req.nextUrl.origin));
+      }
+    }
+
+    // Admin & Verified pages: /dashboard/scan and /dashboard/nfc (viewers blocked)
+    if (pathname.startsWith("/dashboard/scan") || pathname.startsWith("/dashboard/nfc")) {
+      if (role === "viewer") {
+        return NextResponse.redirect(new URL("/dashboard", req.nextUrl.origin));
+      }
+    }
+
+    // Admin-only APIs
+    if (
+      (pathname.startsWith("/api/users") && !pathname.startsWith("/api/users/me")) ||
+      (pathname.startsWith("/api/tags") && req.method !== "GET") ||
+      pathname.startsWith("/api/equipment/batch")
+    ) {
+      if (role !== "admin") {
+        return NextResponse.json({ error: "Forbidden: Admin access required" }, { status: 403 });
+      }
+    }
+
+    // NFC APIs: Block viewers
+    if (pathname.startsWith("/api/nfc")) {
+      if (role === "viewer") {
+        return NextResponse.json({ error: "Forbidden: Viewers cannot access NFC operations" }, { status: 403 });
+      }
+    }
+  }
+
   return NextResponse.next();
 });
 

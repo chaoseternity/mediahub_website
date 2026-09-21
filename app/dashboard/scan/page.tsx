@@ -1,9 +1,14 @@
 import { auth } from "@/lib/auth";
 import { getAllEquipment } from "@/lib/db";
+import { redirect } from "next/navigation";
 import { QRScannerClient } from "@/components/QRScannerClient";
 
 export default async function ScanPage() {
-  const [session, equipment] = await Promise.all([auth(), getAllEquipment()]);
+  const session = await auth();
+  if (!session) redirect("/login");
+  if (session.user.role === "viewer") redirect("/dashboard");
+
+  const equipment = await getAllEquipment();
 
   return (
     <div className="px-4 py-4 md:px-6 md:py-8 w-full">

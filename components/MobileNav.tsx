@@ -60,7 +60,7 @@ const navGroups: NavGroup[] = [
   {
     title: "Admin & Settings",
     items: [
-      { href: "/dashboard/tags", label: "Tags", icon: Tag, roles: ["admin", "verified", "viewer"] },
+      { href: "/dashboard/tags", label: "Tags", icon: Tag, roles: ["admin"] },
       { href: "/dashboard/users", label: "Users", icon: UsersIcon, roles: ["admin"] },
     ],
   },

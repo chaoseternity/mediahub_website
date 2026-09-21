@@ -1,5 +1,6 @@
 import { auth } from "@/lib/auth";
 import { getAllEquipment, getAllNfcCards } from "@/lib/db";
+import { redirect } from "next/navigation";
 import { NFCStationClient } from "@/components/NFCStationClient";
 
 export const metadata = {
@@ -8,8 +9,11 @@ export const metadata = {
 };
 
 export default async function NFCPage() {
-  const [session, equipment, nfcCards] = await Promise.all([
-    auth(),
+  const session = await auth();
+  if (!session) redirect("/login");
+  if (session.user.role === "viewer") redirect("/dashboard");
+
+  const [equipment, nfcCards] = await Promise.all([
     getAllEquipment(),
     getAllNfcCards(),
   ]);

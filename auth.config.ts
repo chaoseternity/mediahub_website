@@ -55,6 +55,17 @@ export const authConfig = {
       }
       return effectiveBaseUrl;
     },
+    async jwt({ token }) {
+      return token;
+    },
+    async session({ session, token }) {
+      if (session.user && token) {
+        session.user.role = (token.role as import("./lib/types").Role) ?? "viewer";
+        session.user.id = (token.userId as string) ?? "";
+        session.user.username = (token.username as string | null) ?? null;
+      }
+      return session;
+    },
     authorized({ auth, request: { nextUrl } }) {
       const isLoggedIn = !!auth?.user;
       const { pathname } = nextUrl;

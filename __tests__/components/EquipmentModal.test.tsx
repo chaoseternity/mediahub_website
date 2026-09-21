@@ -177,7 +177,7 @@ describe("EquipmentModal — Viewer role", () => {
     expect(screen.queryByText("Delete")).not.toBeInTheDocument();
   });
 
-  test("still shows checkout form for viewer when status is Available", async () => {
+  test("hides checkout button for viewer even when status is Available", async () => {
     mockFetch(mockAvailable);
     render(
       <EquipmentModal
@@ -189,7 +189,6 @@ describe("EquipmentModal — Viewer role", () => {
       />
     );
     await waitFor(() => expect(screen.queryByText("Loading…")).not.toBeInTheDocument());
-    await userEvent.click(screen.getByTestId("checkout-button"));
-    expect(screen.getByTestId("checkout-section-header")).toBeInTheDocument();
+    expect(screen.queryByTestId("checkout-button")).not.toBeInTheDocument();
   });
 });
