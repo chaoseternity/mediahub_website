@@ -6,7 +6,7 @@ assets = { directory = ".open-next/assets" }
 [[d1_databases]]
 binding = "DB"
 database_name = "inventory-tracker-db"
-database_id = "inventory-tracker-db-id"
+database_id = "4187eaff-020c-4e8d-af9f-ff13aea305cd"
 migrations_dir = "migrations"
 
 [vars]
