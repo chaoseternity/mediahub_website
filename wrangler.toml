@@ -10,6 +10,7 @@ database_id = "4187eaff-020c-4e8d-af9f-ff13aea305cd"
 migrations_dir = "migrations"
 
 [vars]
+AUTH_URL = "https://mediahub-website.media-club.workers.dev"
 ADMIN_EMAILS = "zhangbohan0429@gmail.com"
 GEMINI_BACKUP_MODEL = "gemini-3.1-flash-lite"
 GEMINI_MODEL = "gemini-3.5-flash-lite"
