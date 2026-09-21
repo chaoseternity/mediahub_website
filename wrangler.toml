@@ -10,20 +10,13 @@ database_id = "4187eaff-020c-4e8d-af9f-ff13aea305cd"
 migrations_dir = "migrations"
 
 [vars]
-# Public/non-secret env vars go here.
-
-"vars": {
-    "ADMIN_EMAILS": "zhangbohan0429@gmail.com",
-    "GEMINI_BACKUP_MODEL": "gemini-3.1-flash-lite",
-    "GEMINI_MODEL": "gemini-3.5-flash-lite",
-    "SMTP_HOST": "smtp.gmail.com",
-    "SMTP_PORT": "587",
-    "SMTP_SECURE": "false"
-},
-
-# Secret vars (AUTH_SECRET, GOOGLE_CLIENT_SECRET, etc.) go in:
-#   - .dev.vars for local wrangler dev
-#   - `wrangler secret put <KEY>` for production
+ADMIN_EMAILS = "zhangbohan0429@gmail.com"
+GEMINI_BACKUP_MODEL = "gemini-3.1-flash-lite"
+GEMINI_MODEL = "gemini-3.5-flash-lite"
+SMTP_HOST = "smtp.gmail.com"
+SMTP_PORT = "587"
+SMTP_SECURE = "false"
+SMTP_FROM = '"MediaHub Operations" <zhangbohan0429@gmail.com>'
 
 [observability.logs]
 enabled = true
