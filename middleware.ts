@@ -9,9 +9,10 @@ import { checkRateLimit } from "@/lib/rate-limit";
 
 const { auth } = NextAuth(authConfig);
 
-// Stricter limit for auth endpoints to prevent brute-force attacks.
-const AUTH_LIMIT = 10;
-const API_LIMIT = 60;
+// Stricter limit for sensitive auth endpoints to prevent brute-force attacks.
+// Read-only session/csrf/providers and signout routes are exempted from strict limits.
+const AUTH_LIMIT = 60;
+const API_LIMIT = 120;
 const WINDOW_MS = 60_000; // 1 minute
 
 function getClientIp(req: Request): string {
@@ -36,10 +37,16 @@ export default auth((req) => {
 
   // --- Rate limiting (applied before auth checks) ---
   const ip = getClientIp(req);
-  const isAuthRoute = pathname.startsWith("/api/auth/");
+  const isAuthRead =
+    pathname === "/api/auth/session" ||
+    pathname === "/api/auth/csrf" ||
+    pathname === "/api/auth/providers";
+  const isSignOut = pathname.startsWith("/api/auth/signout");
+  const isAuthRoute = pathname.startsWith("/api/auth/") && !isAuthRead && !isSignOut;
   const limit = isAuthRoute ? AUTH_LIMIT : API_LIMIT;
 
-  if (!checkRateLimit(ip, limit, WINDOW_MS)) {
+  // Sign out should never fail due to rate limits so users are never trapped
+  if (!isSignOut && !checkRateLimit(ip, limit, WINDOW_MS)) {
     return NextResponse.json(
       { error: "Too many requests" },
       {
