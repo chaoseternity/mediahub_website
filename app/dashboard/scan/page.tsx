@@ -6,7 +6,6 @@ import { QRScannerClient } from "@/components/QRScannerClient";
 export default async function ScanPage() {
   const session = await auth();
   if (!session) redirect("/login");
-  if (session.user.role === "viewer") redirect("/dashboard");
 
   const equipment = await getAllEquipment();
 

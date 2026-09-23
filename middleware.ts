@@ -76,8 +76,8 @@ const authMiddleware = auth((req) => {
       }
     }
 
-    // Admin & Verified pages: /dashboard/scan and /dashboard/nfc (viewers blocked)
-    if (pathname.startsWith("/dashboard/scan") || pathname.startsWith("/dashboard/nfc")) {
+    // Admin & Verified pages: /dashboard/nfc (viewers blocked)
+    if (pathname.startsWith("/dashboard/nfc")) {
       if (role === "viewer") {
         return NextResponse.redirect(new URL("/dashboard", req.nextUrl.origin));
       }
