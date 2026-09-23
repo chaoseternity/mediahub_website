@@ -74,17 +74,19 @@ export async function upsertUser(params: {
   provider: string;
 }): Promise<User> {
   await ensureSchema();
-  const existing = await getUserByEmail(params.email);
+  const normalizedEmail = params.email.trim().toLowerCase();
+  const existing = await getUserByEmail(normalizedEmail);
   const adminEmails = getAdminEmails();
-  const isAdminEmail = adminEmails.has(params.email.toLowerCase());
+  const isAdminEmail = adminEmails.has(normalizedEmail);
 
   if (existing) {
     const newRole = isAdminEmail && existing.role !== "admin" ? "admin" : existing.role;
+    const newImage = params.image ?? existing.image;
     await sql`
       UPDATE users
       SET name = ${params.name},
           google_id = ${params.google_id},
-          image = ${params.image},
+          image = ${newImage},
           provider = ${params.provider},
           role = ${newRole}
       WHERE id = ${existing.id}
@@ -97,7 +99,7 @@ export async function upsertUser(params: {
 
   const { rows } = await sql<User>`
     INSERT INTO users (name, email, google_id, image, role, provider)
-    VALUES (${params.name}, ${params.email}, ${params.google_id}, ${params.image}, ${role}, ${params.provider})
+    VALUES (${params.name}, ${normalizedEmail}, ${params.google_id}, ${params.image}, ${role}, ${params.provider})
     RETURNING *
   `;
   return rows[0];

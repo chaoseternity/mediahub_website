@@ -4,7 +4,7 @@
  */
 import NextAuth from "next-auth";
 import { authConfig } from "@/auth.config";
-import { NextResponse } from "next/server";
+import { NextResponse, type NextRequest } from "next/server";
 import { checkRateLimit } from "@/lib/rate-limit";
 
 const { auth } = NextAuth(authConfig);
@@ -31,28 +31,12 @@ function getClientIp(req: Request): string {
   return "unknown";
 }
 
-export default auth((req) => {
+const authMiddleware = auth((req) => {
   const { pathname } = req.nextUrl;
-
-  // --- Rate limiting (applied before auth checks) ---
-  const ip = getClientIp(req);
-  const isAuthRead = pathname === "/api/auth/session" || pathname === "/api/auth/csrf" || pathname === "/api/auth/providers";
-  const isAuthRoute = pathname.startsWith("/api/auth/") && !isAuthRead;
-  const limit = isAuthRoute ? AUTH_LIMIT : API_LIMIT;
-
-  if (!checkRateLimit(ip, limit, WINDOW_MS)) {
-    return NextResponse.json(
-      { error: "Too many requests" },
-      {
-        status: 429,
-        headers: { "Retry-After": String(WINDOW_MS / 1000) },
-      }
-    );
-  }
 
   // --- CSRF Protection for state-modifying requests ---
   const isMutation = ["POST", "PUT", "PATCH", "DELETE"].includes(req.method);
-  if (isMutation && pathname.startsWith("/api/") && !pathname.startsWith("/api/auth/")) {
+  if (isMutation && pathname.startsWith("/api/")) {
     const origin = req.headers.get("origin");
     if (origin && (origin === "null" || origin !== req.nextUrl.origin)) {
       return NextResponse.json(
@@ -71,7 +55,7 @@ export default auth((req) => {
 
   // --- Auth checks ---
   const isAuthenticated = !!req.auth;
-  const isPublicApiRoute = pathname.startsWith("/api/auth/") || pathname.startsWith("/api/rsvp");
+  const isPublicApiRoute = pathname.startsWith("/api/rsvp");
 
   if (!isAuthenticated && !isPublicApiRoute) {
     if (pathname.startsWith("/api/")) {
@@ -120,6 +104,40 @@ export default auth((req) => {
 
   return NextResponse.next();
 });
+
+export default async function middleware(req: NextRequest, ctx: any) {
+  const { pathname } = req.nextUrl;
+
+  // --- Rate limiting (applied before auth checks) ---
+  const ip = getClientIp(req);
+  const isAuthRead =
+    pathname === "/api/auth/session" ||
+    pathname === "/api/auth/csrf" ||
+    pathname === "/api/auth/providers";
+  const isSignOut = pathname.startsWith("/api/auth/signout");
+  const isAuthRoute = pathname.startsWith("/api/auth/") && !isAuthRead && !isSignOut;
+  const limit = isAuthRoute ? AUTH_LIMIT : API_LIMIT;
+
+  // Sign out should never fail due to rate limits so users are never trapped
+  if (!isSignOut && !checkRateLimit(ip, limit, WINDOW_MS)) {
+    return NextResponse.json(
+      { error: "Too many requests" },
+      {
+        status: 429,
+        headers: { "Retry-After": String(WINDOW_MS / 1000) },
+      }
+    );
+  }
+
+  // CRITICAL: NextAuth routes (/api/auth/*) must BYPASS the NextAuth auth() session-rolling wrapper.
+  // When auth() wraps /api/auth/signout, it automatically injects a renewed session token cookie
+  // that clashes with and overrides the route handler's Max-Age=0 deletion cookie, resurrecting the session.
+  if (pathname.startsWith("/api/auth/")) {
+    return NextResponse.next();
+  }
+
+  return (authMiddleware as any)(req, ctx);
+}
 
 export const config = {
   matcher: [
