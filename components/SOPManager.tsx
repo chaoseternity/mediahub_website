@@ -112,6 +112,7 @@ export function SOPManager({ initialDocuments, role, userName }: SOPManagerProps
   const [inputQuery, setInputQuery] = useState("");
   const [chatLoading, setChatLoading] = useState(false);
   const chatBottomRef = useRef<HTMLDivElement>(null);
+  const chatInputRef = useRef<HTMLTextAreaElement>(null);
 
   // Document Library & Upload State
   const [searchQuery, setSearchQuery] = useState("");
@@ -678,6 +679,9 @@ export function SOPManager({ initialDocuments, role, userName }: SOPManagerProps
 
     setMessages((prev) => [...prev, userMsg]);
     setInputQuery("");
+    if (chatInputRef.current) {
+      chatInputRef.current.style.height = "auto";
+    }
     setChatLoading(true);
 
     try {
@@ -990,11 +994,16 @@ export function SOPManager({ initialDocuments, role, userName }: SOPManagerProps
             </div>
 
             {/* Input Bar */}
-            <div className="p-3 border-t bg-background flex gap-2 items-center">
-              <Input
-                placeholder="Ask about SOP rules, camera specs, or live gear availability..."
+            <div className="p-3 border-t bg-background flex gap-2 items-end">
+              <textarea
+                ref={chatInputRef}
+                placeholder="Ask about SOP rules, camera specs, or live gear availability... (Shift + Enter for new line)"
                 value={inputQuery}
-                onChange={(e) => setInputQuery(e.target.value)}
+                onChange={(e) => {
+                  setInputQuery(e.target.value);
+                  e.target.style.height = "auto";
+                  e.target.style.height = `${Math.min(e.target.scrollHeight, 160)}px`;
+                }}
                 onKeyDown={(e) => {
                   if (e.key === "Enter" && !e.shiftKey) {
                     e.preventDefault();
@@ -1002,12 +1011,13 @@ export function SOPManager({ initialDocuments, role, userName }: SOPManagerProps
                   }
                 }}
                 disabled={chatLoading}
-                className="text-xs md:text-sm h-10"
+                rows={1}
+                className="flex-1 min-h-[40px] max-h-[160px] resize-none rounded-md border border-input bg-background px-3 py-2 text-xs md:text-sm shadow-xs focus:outline-none focus:ring-1 focus:ring-ring disabled:cursor-not-allowed disabled:opacity-50 leading-relaxed font-sans"
               />
               <Button
                 onClick={() => handleSendMessage()}
                 disabled={chatLoading || !inputQuery.trim()}
-                className="bg-purple-600 hover:bg-purple-700 text-white h-10 px-4 shrink-0 gap-1.5"
+                className="bg-purple-600 hover:bg-purple-700 text-white h-10 px-4 shrink-0 gap-1.5 self-end"
               >
                 <Send className="h-4 w-4" />
                 <span className="hidden sm:inline">Ask</span>
