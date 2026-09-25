@@ -23,41 +23,26 @@ jest.mock("next/navigation", () => ({
 }));
 
 describe("UserLink Component", () => {
-  afterEach(() => {
-    mockSessionData = null;
-  });
-
-  test("renders plain non-clickable text for viewer viewing another user", () => {
-    mockSessionData = {
-      user: { id: "10", name: "Viewer User", username: "viewer_u", role: "viewer" },
-    };
-
+  test("renders link with userId when userId is provided", () => {
     render(<UserLink name="Alice Smith" username="alice_s" userId={1} />);
-    const link = screen.queryByRole("link");
-    expect(link).toBeNull();
+    const link = screen.getByRole("link");
+    expect(link).toBeInTheDocument();
+    expect(link).toHaveAttribute("href", "/dashboard/profile?id=1");
     expect(screen.getByText("Alice Smith")).toBeInTheDocument();
   });
 
-  test("renders clickable link to /dashboard/profile for viewer viewing themselves", () => {
-    mockSessionData = {
-      user: { id: "10", name: "Viewer User", username: "viewer_u", role: "viewer" },
-    };
-
-    render(<UserLink name="Viewer User" username="viewer_u" userId={10} />);
+  test("renders link with username when userId is missing", () => {
+    render(<UserLink name="Bob Viewer" username="bob_v" />);
     const link = screen.getByRole("link");
     expect(link).toBeInTheDocument();
-    expect(link).toHaveAttribute("href", "/dashboard/profile");
+    expect(link).toHaveAttribute("href", "/dashboard/profile?username=bob_v");
   });
 
-  test("renders clickable link to target profile for admin viewing any user", () => {
-    mockSessionData = {
-      user: { id: "99", name: "Super Admin", username: "super_admin", role: "admin" },
-    };
-
-    render(<UserLink name="Bob Viewer" username="bob_v" userId={2} />);
+  test("renders link with encoded name when username and userId are missing", () => {
+    render(<UserLink name="Charlie Brown" />);
     const link = screen.getByRole("link");
     expect(link).toBeInTheDocument();
-    expect(link).toHaveAttribute("href", "/dashboard/profile?id=2");
+    expect(link).toHaveAttribute("href", "/dashboard/profile?username=Charlie%20Brown");
   });
 });
 

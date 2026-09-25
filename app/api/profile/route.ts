@@ -1,15 +1,21 @@
 import { auth } from "@/lib/auth";
-import { getUserByUsername, getUserProfileData } from "@/lib/db";
+import { getUserByEmail, getUserByUsername, getUserProfileData } from "@/lib/db";
 import { NextRequest, NextResponse } from "next/server";
 
 export async function GET(req: NextRequest) {
   const session = await auth();
-  if (!session) {
+  if (!session?.user?.email) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
-  const currentUserId = Number(session.user?.id);
-  const currentUserRole = session.user?.role;
+  const currentUser = await getUserByEmail(session.user.email);
+  if (!currentUser) {
+    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  }
+
+  const currentUserId = currentUser.id;
+  const currentUserRole = currentUser.role;
+  const isAdmin = currentUserRole === "admin";
 
   const { searchParams } = new URL(req.url);
   const targetIdParam = searchParams.get("id");
@@ -33,7 +39,7 @@ export async function GET(req: NextRequest) {
 
   // Access control:
   // Non-admins can only access their own profile.
-  if (currentUserRole !== "admin" && targetUserId !== currentUserId) {
+  if (!isAdmin && targetUserId !== currentUserId) {
     return NextResponse.json(
       { error: "Forbidden: You are only permitted to view your own profile." },
       { status: 403 }

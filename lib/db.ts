@@ -572,6 +572,7 @@ export async function getAllEquipment(): Promise<Equipment[]> {
         '{}'
       ) AS tags,
       c.id AS active_checkout_id,
+      c.checked_out_by,
       c.checked_out_by_name,
       c.checked_out_at,
       c.expected_return_at,
@@ -597,7 +598,7 @@ export async function getAllEquipment(): Promise<Equipment[]> {
       (CURRENT_TIMESTAMP >= ev.start_time AND CURRENT_TIMESTAMP <= ev.end_time) OR
       (ev.has_rehearsal AND CURRENT_TIMESTAMP >= ev.rehearsal_start_time AND CURRENT_TIMESTAMP <= ev.rehearsal_end_time AND ee.used_for_rehearsal)
     )
-    GROUP BY e.id, c.id, c.checked_out_by_name, c.checked_out_at, c.expected_return_at, c.checkout_location, ev.id, ev.name, ev.location, ev.start_time, ev.end_time, ev.has_rehearsal, ev.rehearsal_start_time, ev.rehearsal_end_time, ee.used_for_rehearsal
+    GROUP BY e.id, c.id, c.checked_out_by, c.checked_out_by_name, c.checked_out_at, c.expected_return_at, c.checkout_location, ev.id, ev.name, ev.location, ev.start_time, ev.end_time, ev.has_rehearsal, ev.rehearsal_start_time, ev.rehearsal_end_time, ee.used_for_rehearsal
     ORDER BY e.updated_at DESC
   `;
   return rows.map(formatEquipmentRow);
@@ -615,6 +616,7 @@ export async function getEquipmentById(id: number): Promise<EquipmentDetail | un
         '{}'
       ) AS tags,
       c.id AS active_checkout_id,
+      c.checked_out_by,
       c.checked_out_by_name,
       c.checked_out_at,
       c.expected_return_at,
@@ -641,7 +643,7 @@ export async function getEquipmentById(id: number): Promise<EquipmentDetail | un
       (ev.has_rehearsal AND CURRENT_TIMESTAMP >= ev.rehearsal_start_time AND CURRENT_TIMESTAMP <= ev.rehearsal_end_time AND ee.used_for_rehearsal)
     )
     WHERE e.id = ${id}
-    GROUP BY e.id, c.id, c.checked_out_by_name, c.checked_out_at, c.expected_return_at, c.checkout_location, ev.id, ev.name, ev.location, ev.start_time, ev.end_time, ev.has_rehearsal, ev.rehearsal_start_time, ev.rehearsal_end_time, ee.used_for_rehearsal
+    GROUP BY e.id, c.id, c.checked_out_by, c.checked_out_by_name, c.checked_out_at, c.expected_return_at, c.checkout_location, ev.id, ev.name, ev.location, ev.start_time, ev.end_time, ev.has_rehearsal, ev.rehearsal_start_time, ev.rehearsal_end_time, ee.used_for_rehearsal
   `;
 
   if (eqRows.length === 0) return undefined;

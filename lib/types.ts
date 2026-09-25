@@ -50,6 +50,7 @@ export interface Equipment {
   updated_at: string;
   // joined from active checkout
   active_checkout_id: number | null;
+  checked_out_by?: number | null;
   checked_out_by_name: string | null;
   checked_out_at: string | null;
   expected_return_at: string | null;

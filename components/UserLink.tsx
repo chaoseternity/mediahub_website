@@ -1,16 +1,16 @@
 "use client";
 
 import Link from "next/link";
-import { useSession } from "next-auth/react";
 import { cn } from "@/lib/utils";
 
 interface UserLinkProps {
-  name: string;
+  name?: string | null;
   username?: string | null;
   userId?: number | null;
   className?: string;
   showIcon?: boolean;
   children?: React.ReactNode;
+  onClick?: () => void;
 }
 
 export function UserLink({
@@ -20,56 +20,38 @@ export function UserLink({
   className,
   showIcon = false,
   children,
+  onClick,
 }: UserLinkProps) {
-  const { data: session } = useSession();
+  const targetName = (name || username || "").trim();
+  const content = children ?? (targetName || "Unknown");
 
-  const currentRole = session?.user?.role;
-  const currentUserId = session?.user?.id;
-  const currentUsername = session?.user?.username?.toLowerCase();
-  const currentName = session?.user?.name?.toLowerCase();
-
-  const targetName = name?.trim() || "Unknown";
-  const targetLower = targetName.toLowerCase();
-  const targetUsernameLower = username?.trim().toLowerCase();
-
-  const isSelf =
-    (userId && String(userId) === currentUserId) ||
-    (targetUsernameLower && targetUsernameLower === currentUsername) ||
-    targetLower === currentUsername ||
-    targetLower === currentName;
-
-  const isAdmin = currentRole === "admin";
-  const canAccess = isAdmin || isSelf;
-
-  const content = children ?? targetName;
-
-  if (!canAccess) {
+  if (!targetName && !userId) {
     return (
-      <span
-        className={cn("truncate inline-flex items-center gap-1", className)}
-        title={targetName}
-      >
+      <span className={cn("truncate inline-flex items-center gap-1", className)}>
         {content}
       </span>
     );
   }
 
-  // Construct target link
-  const href = isSelf
-    ? "/dashboard/profile"
-    : userId
+  // Construct target link: prefer explicit userId, then username, then name
+  const href = userId
     ? `/dashboard/profile?id=${userId}`
     : `/dashboard/profile?username=${encodeURIComponent(username || targetName)}`;
+
+  const handleClick = (e: React.MouseEvent<HTMLAnchorElement>) => {
+    e.stopPropagation();
+    onClick?.();
+  };
 
   return (
     <Link
       href={href}
-      onClick={(e) => e.stopPropagation()}
+      onClick={handleClick}
       className={cn(
         "inline-flex items-center gap-1 text-primary hover:underline font-medium transition-colors cursor-pointer",
         className
       )}
-      title={isSelf ? "View your profile" : `View ${targetName}'s profile (Admin)`}
+      title={`View ${targetName}'s profile`}
     >
       {showIcon && (
         <svg
