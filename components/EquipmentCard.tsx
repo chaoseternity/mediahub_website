@@ -113,7 +113,10 @@ export function EquipmentCard({ equipment, onClick }: EquipmentCardProps) {
             <div className="flex gap-1">
               <dt className="text-muted-foreground shrink-0">With:</dt>
               <dd className="truncate">
-                <UserLink name={equipment.checked_out_by_name} />
+                <UserLink
+                  name={equipment.checked_out_by_name}
+                  userId={equipment.checked_out_by}
+                />
               </dd>
             </div>
           )}

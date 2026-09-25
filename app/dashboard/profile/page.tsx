@@ -1,5 +1,5 @@
 import { auth } from "@/lib/auth";
-import { getUserByUsername, getUserProfileData } from "@/lib/db";
+import { getUserByEmail, getUserByUsername, getUserProfileData } from "@/lib/db";
 import { redirect } from "next/navigation";
 import { ProfileClient } from "@/components/ProfileClient";
 import { Card, CardContent } from "@/components/ui/card";
@@ -13,10 +13,13 @@ interface ProfilePageProps {
 
 export default async function ProfilePage({ searchParams }: ProfilePageProps) {
   const session = await auth();
-  if (!session) redirect("/login");
+  if (!session?.user?.email) redirect("/login");
 
-  const currentUserId = Number(session.user.id);
-  const currentUserRole = session.user.role;
+  const currentUser = await getUserByEmail(session.user.email);
+  if (!currentUser) redirect("/login");
+
+  const currentUserId = currentUser.id;
+  const currentUserRole = currentUser.role;
   const isAdmin = currentUserRole === "admin";
 
   const params = await searchParams;
@@ -105,8 +108,8 @@ export default async function ProfilePage({ searchParams }: ProfilePageProps) {
   return (
     <ProfileClient
       initialData={profileData}
-      viewerRole={session.user.role}
-      viewerId={session.user.id}
+      viewerRole={currentUserRole}
+      viewerId={String(currentUserId)}
       isSelf={isSelf}
     />
   );
