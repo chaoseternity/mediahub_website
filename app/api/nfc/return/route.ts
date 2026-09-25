@@ -1,5 +1,5 @@
 import { auth } from "@/lib/auth";
-import { nfcReturn, getAllEquipment, getEquipmentById, getNfcCardByValue } from "@/lib/db";
+import { nfcReturn, getAllEquipment, getEquipmentById, getNfcCardByValue, getUserByEmail } from "@/lib/db";
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 
@@ -48,8 +48,9 @@ export async function POST(req: NextRequest) {
 
     const { barcode, equipment_ids } = parsed.data;
     const cardValue = (parsed.data.nfc_value || parsed.data.nfc_id || "").trim();
-    const isAdmin = session.user.role === "admin";
-    const callerId = Number(session.user.id);
+    const dbUser = session.user?.email ? await getUserByEmail(session.user.email) : null;
+    const isAdmin = session.user.role === "admin" || dbUser?.role === "admin";
+    const callerId = dbUser?.id ?? Number(session.user.id);
 
     let card: Awaited<ReturnType<typeof getNfcCardByValue>> = undefined;
     if (cardValue) {

@@ -1,5 +1,5 @@
 import { auth } from "@/lib/auth";
-import { returnCheckout, getEquipmentById } from "@/lib/db";
+import { returnCheckout, getEquipmentById, getUserByEmail } from "@/lib/db";
 import { NextRequest, NextResponse } from "next/server";
 
 export async function POST(
@@ -7,7 +7,7 @@ export async function POST(
   { params }: { params: Promise<{ id: string }> }
 ) {
   const session = await auth();
-  if (!session) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  if (!session?.user?.email) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   if (session.user.role === "viewer") {
     return NextResponse.json({ error: "Forbidden" }, { status: 403 });
   }
@@ -24,7 +24,8 @@ export async function POST(
   const isAdmin = session.user.role === "admin";
   const activeCheckout = equipment.active_checkout;
   if (!isAdmin && activeCheckout) {
-    const callerId = Number(session.user.id);
+    const dbUser = await getUserByEmail(session.user.email);
+    const callerId = dbUser?.id ?? Number(session.user.id);
     const checkedOutById = activeCheckout.checked_out_by;
 
     const isBorrower =

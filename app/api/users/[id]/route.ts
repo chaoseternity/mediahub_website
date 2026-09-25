@@ -43,13 +43,17 @@ export async function PUT(
     return NextResponse.json({ error: parsed.error.flatten() }, { status: 400 });
   }
 
-  if ("role" in parsed.data && Number(session.user.id) === userId && parsed.data.role !== "admin") {
-    return NextResponse.json({ error: "Cannot demote your own admin account" }, { status: 400 });
-  }
-
   const user = await getUserById(userId);
   if (!user) {
     return NextResponse.json({ error: "User not found" }, { status: 404 });
+  }
+
+  const isSelf =
+    Number(session.user.id) === userId ||
+    Boolean(session.user.email && user.email.toLowerCase() === session.user.email.toLowerCase());
+
+  if ("role" in parsed.data && isSelf && parsed.data.role !== "admin") {
+    return NextResponse.json({ error: "Cannot demote your own admin account" }, { status: 400 });
   }
 
   try {
@@ -84,13 +88,17 @@ export async function DELETE(
     return NextResponse.json({ error: "Invalid user ID" }, { status: 400 });
   }
 
-  if (Number(session.user.id) === userId) {
-    return NextResponse.json({ error: "Cannot delete your own account" }, { status: 400 });
-  }
-
   const user = await getUserById(userId);
   if (!user) {
     return NextResponse.json({ error: "User not found" }, { status: 404 });
+  }
+
+  const isSelf =
+    Number(session.user.id) === userId ||
+    Boolean(session.user.email && user.email.toLowerCase() === session.user.email.toLowerCase());
+
+  if (isSelf) {
+    return NextResponse.json({ error: "Cannot delete your own account" }, { status: 400 });
   }
 
   const result = await deleteUser(userId);

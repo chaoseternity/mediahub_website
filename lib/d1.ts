@@ -50,6 +50,7 @@ function getNodeSqlite() {
   if (testDbInstance) return testDbInstance;
   if (!nodeSqliteInstance) {
     try {
+      // eslint-disable-next-line @typescript-eslint/no-require-imports
       const Database = require("better-sqlite3");
       // Use local wrangler D1 state if available, otherwise in-memory
       nodeSqliteInstance = new Database(":memory:");

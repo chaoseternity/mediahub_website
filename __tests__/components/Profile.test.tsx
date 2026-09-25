@@ -5,7 +5,7 @@ import { ProfileClient } from "@/components/ProfileClient";
 import type { UserProfileData } from "@/lib/types";
 
 // Mock useSession from next-auth/react
-let mockSessionData: any = null;
+const mockSessionData: any = null;
 
 jest.mock("next-auth/react", () => ({
   useSession: () => ({ data: mockSessionData, status: mockSessionData ? "authenticated" : "unauthenticated" }),

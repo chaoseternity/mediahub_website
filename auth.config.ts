@@ -106,6 +106,7 @@ export const authConfig = {
         pathname.startsWith("/api/equipment") ||
         pathname.startsWith("/api/events") ||
         pathname.startsWith("/api/nfc") ||
+        pathname.startsWith("/api/profile") ||
         pathname.startsWith("/api/sop") ||
         pathname.startsWith("/api/tags") ||
         pathname.startsWith("/api/users");
