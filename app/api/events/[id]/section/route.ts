@@ -95,6 +95,12 @@ export async function POST(
       if (!parsed.data.equipment_id) return NextResponse.json({ error: "equipment_id required" }, { status: 400 });
       const equipment = await getEquipmentById(parsed.data.equipment_id);
       if (!equipment) return NextResponse.json({ error: "Equipment not found" }, { status: 404 });
+      if (equipment.condition === "Retired" || equipment.condition === "Missing") {
+        return NextResponse.json(
+          { error: `Cannot attach equipment with condition "${equipment.condition}" to an event.` },
+          { status: 400 }
+        );
+      }
       await attachEquipmentToEventSection(eventId, parsed.data.equipment_id, section, parsed.data.used_for_rehearsal ?? false, currentUser?.id ?? null);
     } else if (action === "remove_equipment") {
       if (!parsed.data.equipment_id) return NextResponse.json({ error: "equipment_id required" }, { status: 400 });

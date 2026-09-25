@@ -41,12 +41,19 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "Forbidden" }, { status: 403 });
   }
 
+  let body: unknown;
   try {
-    const body = await req.json();
-    const parsed = NfcCheckoutSchema.safeParse(body);
-    if (!parsed.success) {
-      return NextResponse.json({ error: parsed.error.flatten() }, { status: 400 });
-    }
+    body = await req.json();
+  } catch {
+    return NextResponse.json({ error: "Invalid JSON body" }, { status: 400 });
+  }
+
+  const parsed = NfcCheckoutSchema.safeParse(body);
+  if (!parsed.success) {
+    return NextResponse.json({ error: parsed.error.flatten() }, { status: 400 });
+  }
+
+  try {
 
     const cardValue = (parsed.data.nfc_value || parsed.data.nfc_id || "").trim();
     if (!cardValue) {

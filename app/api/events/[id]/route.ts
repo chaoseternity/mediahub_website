@@ -3,40 +3,61 @@ import { getEventById, updateEvent, deleteEvent, getUserByEmail } from "@/lib/db
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 
-const UpdateEventSchema = z.object({
-  name: z.string().trim().min(1).max(200).optional(),
-  description: z.string().trim().max(2000).optional(),
-  start_time: z
-    .string()
-    .min(1)
-    .max(100)
-    .optional()
-    .refine((v) => !v || !isNaN(Date.parse(v)), "Start time must be a valid date"),
-  end_time: z
-    .string()
-    .min(1)
-    .max(100)
-    .optional()
-    .refine((v) => !v || !isNaN(Date.parse(v)), "End time must be a valid date"),
-  location: z.string().trim().min(1).max(200).optional(),
-  has_rehearsal: z.boolean().optional(),
-  rehearsal_start_time: z
-    .string()
-    .max(100)
-    .nullable()
-    .optional()
-    .refine((v) => !v || !isNaN(Date.parse(v)), "Rehearsal start time must be a valid date"),
-  rehearsal_end_time: z
-    .string()
-    .max(100)
-    .nullable()
-    .optional()
-    .refine((v) => !v || !isNaN(Date.parse(v)), "Rehearsal end time must be a valid date"),
-  oic_user_ids: z.array(z.number().int().positive()).max(20).optional(),
-  photo_ic_ids: z.array(z.number().int().positive()).max(20).optional(),
-  video_ic_ids: z.array(z.number().int().positive()).max(20).optional(),
-  av_ic_ids: z.array(z.number().int().positive()).max(20).optional(),
-});
+const UpdateEventSchema = z
+  .object({
+    name: z.string().trim().min(1).max(200).optional(),
+    description: z.string().trim().max(2000).optional(),
+    start_time: z
+      .string()
+      .min(1)
+      .max(100)
+      .optional()
+      .refine((v) => !v || !isNaN(Date.parse(v)), "Start time must be a valid date"),
+    end_time: z
+      .string()
+      .min(1)
+      .max(100)
+      .optional()
+      .refine((v) => !v || !isNaN(Date.parse(v)), "End time must be a valid date"),
+    location: z.string().trim().min(1).max(200).optional(),
+    has_rehearsal: z.boolean().optional(),
+    rehearsal_start_time: z
+      .string()
+      .max(100)
+      .nullable()
+      .optional()
+      .refine((v) => !v || !isNaN(Date.parse(v)), "Rehearsal start time must be a valid date"),
+    rehearsal_end_time: z
+      .string()
+      .max(100)
+      .nullable()
+      .optional()
+      .refine((v) => !v || !isNaN(Date.parse(v)), "Rehearsal end time must be a valid date"),
+    oic_user_ids: z.array(z.number().int().positive()).max(20).optional(),
+    photo_ic_ids: z.array(z.number().int().positive()).max(20).optional(),
+    video_ic_ids: z.array(z.number().int().positive()).max(20).optional(),
+    av_ic_ids: z.array(z.number().int().positive()).max(20).optional(),
+  })
+  .refine(
+    (data) => {
+      if (!data.start_time || !data.end_time) return true;
+      return new Date(data.end_time).getTime() >= new Date(data.start_time).getTime();
+    },
+    {
+      message: "Event end time cannot be earlier than start time",
+      path: ["end_time"],
+    }
+  )
+  .refine(
+    (data) => {
+      if (!data.rehearsal_start_time || !data.rehearsal_end_time) return true;
+      return new Date(data.rehearsal_end_time).getTime() >= new Date(data.rehearsal_start_time).getTime();
+    },
+    {
+      message: "Rehearsal end time cannot be earlier than rehearsal start time",
+      path: ["rehearsal_end_time"],
+    }
+  );
 
 export async function GET(
   _req: NextRequest,
@@ -78,12 +99,19 @@ export async function PUT(
     return NextResponse.json({ error: "Only Admins and OICs can edit event details" }, { status: 403 });
   }
 
+  let body: unknown;
   try {
-    const body = await req.json();
-    const parsed = UpdateEventSchema.safeParse(body);
-    if (!parsed.success) {
-      return NextResponse.json({ error: parsed.error.flatten() }, { status: 400 });
-    }
+    body = await req.json();
+  } catch {
+    return NextResponse.json({ error: "Invalid JSON body" }, { status: 400 });
+  }
+
+  const parsed = UpdateEventSchema.safeParse(body);
+  if (!parsed.success) {
+    return NextResponse.json({ error: parsed.error.flatten() }, { status: 400 });
+  }
+
+  try {
 
     // Non-admin OICs cannot rename event title
     if (!isAdmin && parsed.data.name && parsed.data.name !== event.name) {

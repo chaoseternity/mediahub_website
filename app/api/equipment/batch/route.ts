@@ -24,13 +24,20 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "Forbidden. Admin role required." }, { status: 403 });
   }
 
+  let body: unknown;
   try {
-    const body = await req.json();
-    const parsed = BatchPayloadSchema.safeParse(body);
-    if (!parsed.success) {
-      const issues = parsed.error.issues.map((i) => `${i.path.join(".")}: ${i.message}`).join("; ");
-      return NextResponse.json({ error: `Validation error: ${issues}` }, { status: 400 });
-    }
+    body = await req.json();
+  } catch {
+    return NextResponse.json({ error: "Invalid JSON body" }, { status: 400 });
+  }
+
+  const parsed = BatchPayloadSchema.safeParse(body);
+  if (!parsed.success) {
+    const issues = parsed.error.issues.map((i) => `${i.path.join(".")}: ${i.message}`).join("; ");
+    return NextResponse.json({ error: `Validation error: ${issues}` }, { status: 400 });
+  }
+
+  try {
 
     const result = await batchUpsertEquipment(parsed.data.items, parsed.data.deleteMissingIds);
     return NextResponse.json({
