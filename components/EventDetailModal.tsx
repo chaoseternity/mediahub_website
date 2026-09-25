@@ -25,6 +25,7 @@ import {
   Loader2,
 } from "lucide-react";
 import type { AppEvent, EventSection } from "@/lib/types";
+import { UserLink } from "@/components/UserLink";
 
 interface EventDetailModalProps {
   eventId: number | null;
@@ -201,7 +202,7 @@ export function EventDetailModal({ eventId, open, onClose }: EventDetailModalPro
                   ) : (
                     event.oics.map((u) => (
                       <Badge key={u.id} variant="secondary" className="text-xs py-0.5 px-2 bg-purple-100 text-purple-900 dark:bg-purple-900/30 dark:text-purple-200">
-                        {u.name}
+                        <UserLink name={u.name} username={u.username} userId={u.id} className="text-inherit hover:underline" />
                       </Badge>
                     ))
                   )}
@@ -218,7 +219,11 @@ export function EventDetailModal({ eventId, open, onClose }: EventDetailModalPro
                     {event.section_ics.photo.length === 0 ? (
                       <span className="text-muted-foreground text-[11px]">None</span>
                     ) : (
-                      event.section_ics.photo.map((u) => <div key={u.id} className="font-medium">{u.name}</div>)
+                      event.section_ics.photo.map((u) => (
+                        <div key={u.id} className="font-medium">
+                          <UserLink name={u.name} username={u.username} userId={u.id} />
+                        </div>
+                      ))
                     )}
                   </div>
                 </div>
@@ -231,7 +236,11 @@ export function EventDetailModal({ eventId, open, onClose }: EventDetailModalPro
                     {event.section_ics.video.length === 0 ? (
                       <span className="text-muted-foreground text-[11px]">None</span>
                     ) : (
-                      event.section_ics.video.map((u) => <div key={u.id} className="font-medium">{u.name}</div>)
+                      event.section_ics.video.map((u) => (
+                        <div key={u.id} className="font-medium">
+                          <UserLink name={u.name} username={u.username} userId={u.id} />
+                        </div>
+                      ))
                     )}
                   </div>
                 </div>
@@ -244,7 +253,11 @@ export function EventDetailModal({ eventId, open, onClose }: EventDetailModalPro
                     {event.section_ics.av.length === 0 ? (
                       <span className="text-muted-foreground text-[11px]">None</span>
                     ) : (
-                      event.section_ics.av.map((u) => <div key={u.id} className="font-medium">{u.name}</div>)
+                      event.section_ics.av.map((u) => (
+                        <div key={u.id} className="font-medium">
+                          <UserLink name={u.name} username={u.username} userId={u.id} />
+                        </div>
+                      ))
                     )}
                   </div>
                 </div>
@@ -310,7 +323,9 @@ export function EventDetailModal({ eventId, open, onClose }: EventDetailModalPro
                                   className="text-xs bg-muted/40 border border-border/50 p-1.5 rounded flex flex-col gap-1"
                                 >
                                   <div className="flex items-center justify-between gap-1">
-                                    <span className="font-medium truncate text-foreground">{m.name}</span>
+                                    <span className="font-medium truncate text-foreground">
+                                      <UserLink name={m.name} username={m.username} userId={m.id} />
+                                    </span>
                                     
                                     <div className="flex items-center gap-1 shrink-0">
                                       {isConfirmed && (

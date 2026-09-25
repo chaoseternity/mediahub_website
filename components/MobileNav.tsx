@@ -18,6 +18,7 @@ import {
   Menu,
   X,
   Bot,
+  User as UserIcon,
   type LucideIcon,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -55,6 +56,12 @@ const navGroups: NavGroup[] = [
     title: "SOP & AI Assistant",
     items: [
       { href: "/dashboard/sop", label: "SOP & AI", icon: Bot, roles: ["admin", "verified", "viewer"] },
+    ],
+  },
+  {
+    title: "Account",
+    items: [
+      { href: "/dashboard/profile", label: "Profile", icon: UserIcon, roles: ["admin", "verified", "viewer"] },
     ],
   },
   {
@@ -166,12 +173,19 @@ export function MobileNav({ userName, role }: MobileNavProps) {
         </nav>
 
         <div className="px-3.5 py-3.5 border-t space-y-2.5">
-          <div className="flex items-center gap-2 px-1">
-            <span className="text-sm font-semibold truncate flex-1 min-w-0">{userName}</span>
+          <Link
+            href="/dashboard/profile"
+            onClick={() => setOpen(false)}
+            className="flex items-center gap-2 px-1 hover:bg-accent/60 p-1 rounded-md transition-colors group cursor-pointer"
+            title="View your profile"
+          >
+            <span className="text-sm font-semibold truncate flex-1 min-w-0 group-hover:text-primary transition-colors">
+              {userName}
+            </span>
             <Badge className={cn(roleBadgeClass[role], "shrink-0")}>
               {role}
             </Badge>
-          </div>
+          </Link>
           <Button
             variant="outline"
             size="sm"

@@ -11,6 +11,7 @@ import {
 } from "@/components/ui/card";
 import { parseEquipmentId } from "@/lib/utils";
 import type { Equipment } from "@/lib/types";
+import { UserLink } from "@/components/UserLink";
 
 interface EquipmentCardProps {
   equipment: Equipment;
@@ -111,7 +112,9 @@ export function EquipmentCard({ equipment, onClick }: EquipmentCardProps) {
           {equipment.status === "Checked Out" && equipment.checked_out_by_name && (
             <div className="flex gap-1">
               <dt className="text-muted-foreground shrink-0">With:</dt>
-              <dd className="truncate">{equipment.checked_out_by_name}</dd>
+              <dd className="truncate">
+                <UserLink name={equipment.checked_out_by_name} />
+              </dd>
             </div>
           )}
           {equipment.status === "In Event" && equipment.active_event_name && (
