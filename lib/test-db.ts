@@ -144,6 +144,16 @@ export const SCHEMA_SQL = `
   );
 `;
 
+let testDbInstance: Database.Database | null = null;
+
+export function setTestDb(db: any): void {
+  testDbInstance = db;
+}
+
+export function getTestDb(): any {
+  return testDbInstance;
+}
+
 export function makeTestDb(): Database.Database {
   const db = new Database(":memory:");
   db.pragma("journal_mode = WAL");

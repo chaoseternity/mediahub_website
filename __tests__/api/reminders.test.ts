@@ -1,5 +1,4 @@
-import { makeTestDb } from "@/lib/test-db";
-import { setTestDb } from "@/lib/d1";
+import { makeTestDb, setTestDb } from "@/lib/test-db";
 
 jest.mock("@/lib/auth", () => ({
   auth: jest.fn().mockResolvedValue(null),

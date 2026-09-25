@@ -5,24 +5,16 @@
  *   2. Local development & Jest test suites via `better-sqlite3`.
  */
 import type { D1Database } from "@cloudflare/workers-types";
-import { SCHEMA_SQL } from "./test-db";
+import { SCHEMA_SQL, setTestDb, getTestDb } from "./test-db";
+export { setTestDb, getTestDb };
 
-let testDbInstance: any = null;
 let initialized = false;
-
-export function setTestDb(db: any): void {
-  testDbInstance = db;
-}
-
-export function getTestDb(): any {
-  return testDbInstance;
-}
 
 /**
  * Retrieves the Cloudflare D1 Database binding if running in a Cloudflare context.
  */
 export async function getD1Database(): Promise<D1Database | null> {
-  if (testDbInstance) return null;
+  if (getTestDb()) return null;
 
   // 1. Check globalThis binding (worker isolate)
   const globalEnv = (globalThis as any).env || (globalThis as any).__env__;
@@ -47,7 +39,7 @@ export async function getD1Database(): Promise<D1Database | null> {
 let nodeSqliteInstance: any = null;
 
 function getNodeSqlite() {
-  if (testDbInstance) return testDbInstance;
+  if (getTestDb()) return getTestDb();
   if (!nodeSqliteInstance) {
     try {
       // eslint-disable-next-line @typescript-eslint/no-require-imports
