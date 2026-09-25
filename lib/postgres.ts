@@ -1,4 +1,5 @@
 import { sql } from "@vercel/postgres";
+import { getTestDb } from "./test-db";
 
 let initialized = false;
 
@@ -12,6 +13,7 @@ async function runSafe(queryFn: () => Promise<unknown>, description: string): Pr
 
 export async function ensureSchema(): Promise<void> {
   if (initialized) return;
+  if (getTestDb()) return;
 
   try {
     await runSafe(
@@ -327,6 +329,19 @@ export async function ensureSchema(): Promise<void> {
     await runSafe(
       () => sql`ALTER TABLE equipment ALTER COLUMN status SET DEFAULT 'Available';`,
       "ALTER COLUMN status SET DEFAULT Available"
+    );
+
+    await runSafe(
+      () => sql`
+        CREATE TABLE IF NOT EXISTS checkout_reminders (
+          id SERIAL PRIMARY KEY,
+          checkout_id INT NOT NULL REFERENCES checkouts(id) ON DELETE CASCADE,
+          reminder_type TEXT NOT NULL CHECK(reminder_type IN ('due_soon', 'overdue')),
+          sent_to_email TEXT NOT NULL,
+          sent_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+        );
+      `,
+      "CREATE TABLE checkout_reminders"
     );
 
     initialized = true;
