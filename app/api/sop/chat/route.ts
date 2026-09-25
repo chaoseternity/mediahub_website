@@ -76,8 +76,9 @@ export async function POST(req: NextRequest) {
     });
   } catch (err: unknown) {
     console.error("SOP Chat API Error:", err);
+    const message = err instanceof Error ? err.message : "Failed to process chat query";
     return NextResponse.json(
-      { error: "Failed to process chat query" },
+      { error: message },
       { status: 500 }
     );
   }
