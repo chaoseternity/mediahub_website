@@ -1,12 +1,14 @@
 import { auth } from "@/lib/auth";
-import { getAllUsers } from "@/lib/db";
+import { getAllUsers, getUserByEmail } from "@/lib/db";
 import { redirect } from "next/navigation";
 import { UsersManager } from "@/components/UsersManager";
 
 export default async function UsersPage() {
   const session = await auth();
-  if (!session) redirect("/login");
-  if (session.user.role !== "admin") redirect("/dashboard");
+  if (!session?.user?.email) redirect("/login");
+
+  const currentUser = await getUserByEmail(session.user.email);
+  if (!currentUser || currentUser.role !== "admin") redirect("/dashboard");
 
   const users = await getAllUsers();
 
@@ -18,7 +20,7 @@ export default async function UsersPage() {
           Manage user roles. Changes take effect immediately.
         </p>
       </div>
-      <UsersManager users={users} currentUserId={session.user.id} />
+      <UsersManager users={users} currentUserId={String(currentUser.id)} />
     </div>
   );
 }

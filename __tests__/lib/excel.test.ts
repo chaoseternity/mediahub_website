@@ -1,3 +1,4 @@
+import * as XLSX from "xlsx";
 import {
   generateEquipmentExcel,
   parseEquipmentExcel,
@@ -127,7 +128,6 @@ describe("Excel utility - lib/excel.ts", () => {
 
     test("ignores any content beyond column F (column G, H, etc.)", () => {
       // Build a worksheet with columns past F (e.g. column G = Notes, column H = Extra)
-      const XLSX = require("xlsx");
       const data = [
         ["Tag", "Equipment ID", "Equipment Name", "Description", "Condition", "Location", "Notes", "Extra Column"],
         ["Laptop", "LP-NOTE-01", "Note Laptop", "Desc", "In repairs", "Media Room", "Do not import this note", "Ignore this too"],
@@ -149,7 +149,6 @@ describe("Excel utility - lib/excel.ts", () => {
     });
 
     test("ignores empty rows anywhere in the Excel sheet", () => {
-      const XLSX = require("xlsx");
       const data = [
         ["Tag", "ID", "Name", "Description", "Condition", "Location"],
         ["", "", "", "", "", ""], // empty row before items
