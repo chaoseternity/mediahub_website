@@ -54,7 +54,12 @@ export async function POST(req: NextRequest) {
 
     // 1. JSON Request (Client pre-extracted text or manual input)
     if (contentType.includes("application/json")) {
-      const body = await req.json();
+      let body: unknown;
+      try {
+        body = await req.json();
+      } catch {
+        return NextResponse.json({ error: "Invalid JSON body" }, { status: 400 });
+      }
       const parsed = CreateSOPManualSchema.safeParse(body);
       if (!parsed.success) {
         return NextResponse.json(

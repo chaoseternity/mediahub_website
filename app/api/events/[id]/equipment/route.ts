@@ -63,6 +63,13 @@ export async function POST(
     return NextResponse.json({ error: "Equipment not found" }, { status: 404 });
   }
 
+  if (equipment.condition === "Retired" || equipment.condition === "Missing") {
+    return NextResponse.json(
+      { error: `Cannot attach equipment with condition "${equipment.condition}" to an event.` },
+      { status: 400 }
+    );
+  }
+
   try {
     const result = await attachEquipmentToEventSection(eventId, parsed.data.equipment_id, parsed.data.section, false, currentUser?.id ?? null);
     if (!result.success) {

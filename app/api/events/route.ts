@@ -3,36 +3,54 @@ import { getAllEvents, createEvent, getUserByEmail } from "@/lib/db";
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 
-const CreateEventSchema = z.object({
-  name: z.string().trim().min(1, "Name is required").max(200),
-  description: z.string().trim().max(2000).optional(),
-  start_time: z
-    .string()
-    .min(1, "Start time is required")
-    .max(100)
-    .refine((v) => !isNaN(Date.parse(v)), "Start time must be a valid date"),
-  end_time: z
-    .string()
-    .min(1, "End time is required")
-    .max(100)
-    .refine((v) => !isNaN(Date.parse(v)), "End time must be a valid date"),
-  location: z.string().trim().min(1, "Location is required").max(200),
-  has_rehearsal: z.boolean().optional().default(false),
-  rehearsal_start_time: z
-    .string()
-    .max(100)
-    .optional()
-    .refine((v) => !v || !isNaN(Date.parse(v)), "Rehearsal start time must be a valid date"),
-  rehearsal_end_time: z
-    .string()
-    .max(100)
-    .optional()
-    .refine((v) => !v || !isNaN(Date.parse(v)), "Rehearsal end time must be a valid date"),
-  oic_user_ids: z.array(z.number().int().positive()).max(20).optional().default([]),
-  photo_ic_ids: z.array(z.number().int().positive()).max(20).optional().default([]),
-  video_ic_ids: z.array(z.number().int().positive()).max(20).optional().default([]),
-  av_ic_ids: z.array(z.number().int().positive()).max(20).optional().default([]),
-});
+const CreateEventSchema = z
+  .object({
+    name: z.string().trim().min(1, "Name is required").max(200),
+    description: z.string().trim().max(2000).optional(),
+    start_time: z
+      .string()
+      .min(1, "Start time is required")
+      .max(100)
+      .refine((v) => !isNaN(Date.parse(v)), "Start time must be a valid date"),
+    end_time: z
+      .string()
+      .min(1, "End time is required")
+      .max(100)
+      .refine((v) => !isNaN(Date.parse(v)), "End time must be a valid date"),
+    location: z.string().trim().min(1, "Location is required").max(200),
+    has_rehearsal: z.boolean().optional().default(false),
+    rehearsal_start_time: z
+      .string()
+      .max(100)
+      .optional()
+      .refine((v) => !v || !isNaN(Date.parse(v)), "Rehearsal start time must be a valid date"),
+    rehearsal_end_time: z
+      .string()
+      .max(100)
+      .optional()
+      .refine((v) => !v || !isNaN(Date.parse(v)), "Rehearsal end time must be a valid date"),
+    oic_user_ids: z.array(z.number().int().positive()).max(20).optional().default([]),
+    photo_ic_ids: z.array(z.number().int().positive()).max(20).optional().default([]),
+    video_ic_ids: z.array(z.number().int().positive()).max(20).optional().default([]),
+    av_ic_ids: z.array(z.number().int().positive()).max(20).optional().default([]),
+  })
+  .refine(
+    (data) => new Date(data.end_time).getTime() >= new Date(data.start_time).getTime(),
+    {
+      message: "Event end time cannot be earlier than start time",
+      path: ["end_time"],
+    }
+  )
+  .refine(
+    (data) => {
+      if (!data.has_rehearsal || !data.rehearsal_start_time || !data.rehearsal_end_time) return true;
+      return new Date(data.rehearsal_end_time).getTime() >= new Date(data.rehearsal_start_time).getTime();
+    },
+    {
+      message: "Rehearsal end time cannot be earlier than rehearsal start time",
+      path: ["rehearsal_end_time"],
+    }
+  );
 
 export async function GET() {
   const session = await auth();
@@ -50,12 +68,19 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "Only admins can create events" }, { status: 403 });
   }
 
+  let body: unknown;
   try {
-    const body = await req.json();
-    const parsed = CreateEventSchema.safeParse(body);
-    if (!parsed.success) {
-      return NextResponse.json({ error: parsed.error.flatten() }, { status: 400 });
-    }
+    body = await req.json();
+  } catch {
+    return NextResponse.json({ error: "Invalid JSON body" }, { status: 400 });
+  }
+
+  const parsed = CreateEventSchema.safeParse(body);
+  if (!parsed.success) {
+    return NextResponse.json({ error: parsed.error.flatten() }, { status: 400 });
+  }
+
+  try {
 
     const currentUser = await getUserByEmail(session.user.email!);
     const newEvent = await createEvent({

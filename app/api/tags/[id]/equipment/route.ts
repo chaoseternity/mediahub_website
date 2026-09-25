@@ -35,11 +35,18 @@ export async function POST(
   if (!Number.isInteger(tagId) || tagId <= 0) {
     return NextResponse.json({ error: "Invalid tag ID" }, { status: 400 });
   }
+  let body: unknown;
   try {
-    const body = await req.json();
-    const parsed = AddEquipmentSchema.safeParse(body);
-    if (!parsed.success)
-      return NextResponse.json({ error: parsed.error.flatten() }, { status: 400 });
+    body = await req.json();
+  } catch {
+    return NextResponse.json({ error: "Invalid JSON body" }, { status: 400 });
+  }
+
+  const parsed = AddEquipmentSchema.safeParse(body);
+  if (!parsed.success)
+    return NextResponse.json({ error: parsed.error.flatten() }, { status: 400 });
+
+  try {
 
     const result = await addTagToEquipment(parsed.data.equipmentId, tagId);
     if (!result.success) {
