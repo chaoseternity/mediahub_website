@@ -69,42 +69,43 @@ export async function POST(req: NextRequest) {
 
     // Handle batch return
     if (equipment_ids && equipment_ids.length > 0) {
-    for (const eqId of equipment_ids) {
-      const eq = await getEquipmentById(eqId);
-      if (eq && eq.active_checkout) {
-        if (card) {
-          const isSameCard =
-            (eq.active_checkout.nfc_value && eq.active_checkout.nfc_value.toLowerCase() === cardValue.toLowerCase()) ||
-            (eq.active_checkout.nfc_id && eq.active_checkout.nfc_id.toLowerCase() === cardValue.toLowerCase());
+      const uniqueEqIds = Array.from(new Set(equipment_ids));
+      for (const eqId of uniqueEqIds) {
+        const eq = await getEquipmentById(eqId);
+        if (eq && eq.active_checkout) {
+          if (card) {
+            const isSameCard =
+              (eq.active_checkout.nfc_value && eq.active_checkout.nfc_value.toLowerCase() === cardValue.toLowerCase()) ||
+              (eq.active_checkout.nfc_id && eq.active_checkout.nfc_id.toLowerCase() === cardValue.toLowerCase());
 
-          if (!isSameCard && eq.active_checkout.checked_out_by_name !== card.member_name) {
-            return NextResponse.json(
-              { error: `"${eq.name}" is checked out to ${eq.active_checkout.checked_out_by_name}, not this NFC card.` },
-              { status: 409 }
-            );
-          }
-        } else if (!isAdmin) {
-          const checkedOutById = eq.active_checkout.checked_out_by;
-          const isBorrower =
-            checkedOutById !== null && Number.isInteger(callerId) && callerId === checkedOutById;
+            if (!isSameCard && eq.active_checkout.checked_out_by_name !== card.member_name) {
+              return NextResponse.json(
+                { error: `"${eq.name}" is checked out to ${eq.active_checkout.checked_out_by_name}, not this NFC card.` },
+                { status: 409 }
+              );
+            }
+          } else if (!isAdmin) {
+            const checkedOutById = eq.active_checkout.checked_out_by;
+            const isBorrower =
+              checkedOutById !== null && Number.isInteger(callerId) && callerId === checkedOutById;
 
-          if (!isBorrower) {
-            return NextResponse.json(
-              { error: `Forbidden: "${eq.name}" is checked out to ${eq.active_checkout.checked_out_by_name}. Only the borrower or an Admin can return it.` },
-              { status: 403 }
-            );
+            if (!isBorrower) {
+              return NextResponse.json(
+                { error: `Forbidden: "${eq.name}" is checked out to ${eq.active_checkout.checked_out_by_name}. Only the borrower or an Admin can return it.` },
+                { status: 403 }
+              );
+            }
           }
         }
       }
-    }
 
-    const checkouts = [];
-    for (const eqId of equipment_ids) {
-      const c = await nfcReturn(eqId);
-      checkouts.push(c);
+      const checkouts = [];
+      for (const eqId of uniqueEqIds) {
+        const c = await nfcReturn(eqId);
+        checkouts.push(c);
+      }
+      return NextResponse.json({ success: true, count: checkouts.length, checkouts });
     }
-    return NextResponse.json({ success: true, count: checkouts.length, checkouts });
-  }
 
   let equipmentId = parsed.data.equipment_id;
 

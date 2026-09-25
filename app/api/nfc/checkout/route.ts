@@ -69,8 +69,9 @@ export async function POST(req: NextRequest) {
 
     // Handle batch checkout
     if (equipment_ids && equipment_ids.length > 0) {
-      const checkouts = [];
-      for (const eqId of equipment_ids) {
+      const uniqueEqIds = Array.from(new Set(equipment_ids));
+      const itemsToCheckout = [];
+      for (const eqId of uniqueEqIds) {
         const equipment = await getEquipmentById(eqId);
         if (!equipment) {
           return NextResponse.json({ error: `Equipment ID ${eqId} not found` }, { status: 404 });
@@ -81,8 +82,13 @@ export async function POST(req: NextRequest) {
             { status: 409 }
           );
         }
+        itemsToCheckout.push(equipment);
+      }
+
+      const checkouts = [];
+      for (const item of itemsToCheckout) {
         const c = await nfcCheckout({
-          equipmentId: eqId,
+          equipmentId: item.id,
           nfcValue: cardValue,
           notes: notes || "Checked out via NFC Station",
           checkout_location,

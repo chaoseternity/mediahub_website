@@ -237,18 +237,20 @@ export async function sendDeploymentInvitationEmail({
 
     const transporter = getTransporter();
     const fromAddress = process.env.SMTP_FROM || '"MediaHub Events" <noreply@mediahub.app>';
+    const cleanEventName = eventName.replace(/[\r\n]+/g, " ").trim();
+    const cleanToEmail = toEmail.replace(/[\r\n]+/g, "").trim();
 
     if (transporter) {
       await transporter.sendMail({
         from: fromAddress,
-        to: toEmail,
-        subject: `[Deployment Invitation] ${eventName} — ${sectionName} Team`,
+        to: cleanToEmail,
+        subject: `[Deployment Invitation] ${cleanEventName} — ${sectionName} Team`,
         html: htmlContent,
       });
-      console.log(`✓ Sent deployment email to ${toEmail} for event "${eventName}"`);
+      console.log(`✓ Sent deployment email to ${cleanToEmail} for event "${cleanEventName}"`);
       return { success: true };
     } else {
-      console.log(`[DEV MAIL] SMTP not configured. Simulated invitation to ${toEmail}:`);
+      console.log(`[DEV MAIL] SMTP not configured. Simulated invitation to ${cleanToEmail}:`);
       console.log(`   RSVP Link: ${rsvpUrl}`);
       console.log(`   Confirm Link: ${confirmUrl}`);
       console.log(`   Decline Link: ${declineUrl}`);
