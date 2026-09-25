@@ -200,24 +200,15 @@ Instructions:
 3. If and only if the requested information is NOT found (or only partially found) in the SOP documents, access web / external information to answer the question or supplement missing details.
 4. You must state clearly what is from the SOP and what is from the web, using explicit section headers (e.g., "### 📋 From Official SOPs" and "### 🌐 From Web / External Sources") and explanatory notes identifying external web content.`;
 
-  // Model fallback hierarchy
+  // Model fallback hierarchy - prioritized by currently active models
   const modelsToTry = [
-    process.env.GEMINI_MODEL || "gemini-3.5-flash-lite",
-    process.env.GEMINI_BACKUP_MODEL || "gemini-3.1-flash-lite",
-    "gemini-flash-latest",
-    "gemini-flash-lite-latest",
-    "gemini-3.8-flash",
-    "gemini-3.7-flash",
-    "gemini-3.6-flash",
+    process.env.GEMINI_MODEL || "gemini-flash-lite-latest",
+    process.env.GEMINI_BACKUP_MODEL || "gemini-3.5-flash-lite",
+    "gemini-3.1-flash-lite",
     "gemini-3.5-flash",
-    "gemini-3-flash",
-    "gemini-3.0-flash",
-    "gemini-2.5-flash-lite",
-    "gemini-2.5-flash",
-    "gemini-pro-latest",
-    "gemini-2.0-flash",
-    "gemini-1.5-flash",
-    "gemini-1.5-pro",
+    "gemini-3.8-flash",
+    "gemini-3.6-flash",
+    "gemini-3-flash-preview",
   ];
 
   const uniqueModels = Array.from(new Set(modelsToTry));
@@ -226,7 +217,7 @@ Instructions:
   for (const modelName of uniqueModels) {
     try {
       let result;
-      // Attempt generation with Google Search tool enabled for live web retrieval if supported
+      // Attempt generation with Google Search tool enabled if supported by key tier
       try {
         const modelWithSearch = genAI.getGenerativeModel({
           model: modelName,
@@ -235,22 +226,13 @@ Instructions:
         });
         result = await modelWithSearch.generateContent(prompt);
       } catch (toolErr: unknown) {
-        const errMsg = toolErr instanceof Error ? toolErr.message : String(toolErr);
-        // If the googleSearch tool is unsupported or rejected for this model/tier, fall back to standard call
-        if (
-          errMsg.includes("tool") ||
-          errMsg.includes("Search") ||
-          errMsg.includes("not supported") ||
-          errMsg.includes("400")
-        ) {
-          const modelStandard = genAI.getGenerativeModel({
-            model: modelName,
-            systemInstruction,
-          });
-          result = await modelStandard.generateContent(prompt);
-        } else {
-          throw toolErr;
-        }
+        // If the search tool fails for ANY reason (e.g. 429 quota limit: 0 on free tier, 400 unsupported, etc.),
+        // gracefully fall back to the standard model call so the assistant continues seamlessly
+        const modelStandard = genAI.getGenerativeModel({
+          model: modelName,
+          systemInstruction,
+        });
+        result = await modelStandard.generateContent(prompt);
       }
       const responseText = result.response.text();
 
