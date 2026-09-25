@@ -148,14 +148,14 @@ describe("askSOPAssistant with SOP & Web Fallback", () => {
     expect(res.citations[0].document_id).toBe(101);
   });
 
-  test("returns clearly distinguished web fallback when question is not found in SOPs", async () => {
+  test("returns clearly distinguished general knowledge fallback when question is not found in SOPs", async () => {
     const { askSOPAssistant } = await import("@/lib/gemini");
-    const fakeWebResponse = `> ⚠️ **Not in Official SOPs**: The uploaded SOP documents do not contain information regarding this topic. The following information is retrieved from the web:
+    const fakeWebResponse = `> ⚠️ **Not in Official SOPs**: The uploaded SOP documents do not contain information regarding this topic. The following information is from general web/AI knowledge:
 
-### 🌐 From Web / External Sources
+### 🌐 From Web / General AI Knowledge
 The Sony FX3 weighs approximately 715g (1 lb 9.3 oz) including battery and memory card.
 
-*Note: This information is sourced from the web and does not represent official MediaHub club policy.*
+*Note: This information is sourced from general web/AI knowledge and does not represent official MediaHub club policy.*
 
 \`\`\`json_citations
 []
@@ -173,20 +173,20 @@ The Sony FX3 weighs approximately 715g (1 lb 9.3 oz) including battery and memor
     });
 
     expect(res.answer).toContain("Not in Official SOPs");
-    expect(res.answer).toContain("From Web / External Sources");
+    expect(res.answer).toContain("From Web / General AI Knowledge");
     expect(res.answer).toContain("715g");
     expect(res.citations).toHaveLength(0);
   });
 
-  test("falls back to standard model call if googleSearch tool is unsupported", async () => {
+  test("falls back to next model in chain if primary model fails", async () => {
     const { askSOPAssistant } = await import("@/lib/gemini");
 
-    // First attempt with tool throws unsupported error
-    mockGenerateContent.mockRejectedValueOnce(new Error("Search tool is not supported for this model"));
-    // Second attempt without tool succeeds
+    // First model throws an error
+    mockGenerateContent.mockRejectedValueOnce(new Error("Model rate limit"));
+    // Second model in chain succeeds
     mockGenerateContent.mockResolvedValueOnce({
       response: {
-        text: () => "### 🌐 From Web / External Sources\nFallback answer from model knowledge.",
+        text: () => "### 🌐 From Web / General AI Knowledge\nAnswer from backup model knowledge.",
       },
     });
 
@@ -195,7 +195,7 @@ The Sony FX3 weighs approximately 715g (1 lb 9.3 oz) including battery and memor
       sopDocuments: [],
     });
 
-    expect(res.answer).toContain("Fallback answer from model knowledge");
+    expect(res.answer).toContain("Answer from backup model knowledge");
   });
 });
 
