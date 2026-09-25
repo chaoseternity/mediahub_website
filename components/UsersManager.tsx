@@ -6,6 +6,7 @@ import { Button } from "@/components/ui/button";
 import { Trash2, Pencil, Check, X } from "lucide-react";
 import type { User, Role } from "@/lib/types";
 import { roleBadgeClass } from "@/lib/utils";
+import { UserLink } from "./UserLink";
 
 const ROLE_OPTIONS: Role[] = ["admin", "verified", "viewer"];
 
@@ -141,7 +142,9 @@ export function UsersManager({ users: initialUsers, currentUserId }: UsersManage
               return (
                 <tr key={user.id} className="h-14 hover:bg-muted/30 transition-colors">
                   <td className="px-4 align-middle">
-                    <div className="font-medium whitespace-nowrap">{user.name}</div>
+                    <div className="font-medium whitespace-nowrap">
+                      <UserLink name={user.name} username={user.username} userId={user.id} />
+                    </div>
                   </td>
                   <td className="px-4 align-middle">
                     {editingUsername === user.id ? (
@@ -181,7 +184,7 @@ export function UsersManager({ users: initialUsers, currentUserId }: UsersManage
                     ) : (
                       <div className="flex items-center gap-1.5">
                         {user.username
-                          ? <span className="font-medium">{user.username}</span>
+                          ? <UserLink name={user.name} username={user.username} userId={user.id} className="font-medium" />
                           : <span className="text-muted-foreground text-xs italic">not set</span>}
                         <Button
                           variant="ghost"

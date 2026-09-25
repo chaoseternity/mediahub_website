@@ -199,6 +199,60 @@ export interface AIChatMessage {
   created_at?: string;
 }
 
+export interface UserProfileRole {
+  type: "oic" | "section_ic" | "deployment";
+  section?: EventSection;
+  label: string;
+  response_status?: DeploymentResponseStatus;
+  attending_rehearsal?: boolean;
+  responded_at?: string | null;
+}
+
+export interface UserProfileEvent {
+  event_id: number;
+  event_name: string;
+  description: string | null;
+  start_time: string;
+  end_time: string;
+  location: string;
+  has_rehearsal: boolean;
+  rehearsal_start_time: string | null;
+  rehearsal_end_time: string | null;
+  status: EventStatus;
+  roles: UserProfileRole[];
+}
+
+export interface UserProfileCheckout {
+  id: number;
+  equipment_id: number;
+  equipment_name: string;
+  equipment_serial_number: string | null;
+  equipment_location: string;
+  equipment_condition: Condition;
+  checked_out_by: number | null;
+  checked_out_by_name: string;
+  checked_out_at: string;
+  expected_return_at: string | null;
+  returned_at: string | null;
+  notes: string | null;
+  checkout_location: string | null;
+  nfc_value?: string | null;
+}
+
+export interface UserProfileData {
+  user: User;
+  activeEquipment: UserProfileCheckout[];
+  pastEquipment: UserProfileCheckout[];
+  events: UserProfileEvent[];
+  nfcCard: NFCCard | null;
+  stats: {
+    activePossessionsCount: number;
+    totalCheckoutsCount: number;
+    upcomingEventsCount: number;
+    completedEventsCount: number;
+  };
+}
+
 // Extend next-auth Session type
 declare module "next-auth" {
   interface Session {
@@ -212,3 +266,4 @@ declare module "next-auth" {
     };
   }
 }
+

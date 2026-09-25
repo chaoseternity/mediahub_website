@@ -27,6 +27,7 @@ import { CheckoutForm } from "@/components/CheckoutForm";
 import { TagMultiSelect } from "@/components/TagMultiSelect";
 import { PrintLabelModal } from "@/components/PrintLabelModal";
 import { EventDetailModal } from "@/components/EventDetailModal";
+import { UserLink } from "@/components/UserLink";
 import { cn } from "@/lib/utils";
 import type { EquipmentDetail, Role, Checkout, Tag, EventEquipmentLog } from "@/lib/types";
 
@@ -460,7 +461,9 @@ export function EquipmentModal({
                           return (
                             <div key={item.id} className="border rounded-lg p-3 space-y-1.5 bg-card">
                               <div className="flex items-center justify-between">
-                                <p className="font-medium text-sm">{ch.checked_out_by_name}</p>
+                                <p className="font-medium text-sm">
+                                  <UserLink name={ch.checked_out_by_name} userId={ch.checked_out_by} />
+                                </p>
                                 <Badge
                                   variant={ch.returned_at ? "secondary" : "default"}
                                   className="text-xs"
@@ -593,9 +596,11 @@ export function EquipmentModal({
                   {equipment.status === "Checked Out" && equipment.active_checkout && (
                     <p className="text-xs text-muted-foreground">
                       Currently checked out to{" "}
-                      <span className="font-medium text-foreground">
-                        {equipment.active_checkout.checked_out_by_name}
-                      </span>
+                      <UserLink
+                        name={equipment.active_checkout.checked_out_by_name}
+                        userId={equipment.active_checkout.checked_out_by}
+                        className="font-medium text-foreground"
+                      />
                       {" since "}
                       <span className="font-medium text-foreground">
                         {fmtDateTime(equipment.active_checkout.checked_out_at)}

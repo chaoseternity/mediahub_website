@@ -23,6 +23,10 @@ import type {
   NFCCard,
   NFCMemberData,
   NFCCheckoutItem,
+  UserProfileData,
+  UserProfileEvent,
+  UserProfileCheckout,
+  UserProfileRole,
 } from "./types";
 import { sendDeploymentInvitationEmail } from "./email";
 
@@ -48,6 +52,311 @@ export async function getUserById(id: number): Promise<User | undefined> {
   await ensureSchema();
   const { rows } = await sql<User>`SELECT * FROM users WHERE id = ${id}`;
   return rows[0];
+}
+
+export async function getUserByUsername(username: string): Promise<User | undefined> {
+  if (!username) return undefined;
+  await ensureSchema();
+  const trimmed = username.trim();
+  const { rows } = await sql<User>`
+    SELECT * FROM users 
+    WHERE LOWER(username) = LOWER(${trimmed}) OR LOWER(name) = LOWER(${trimmed})
+    LIMIT 1
+  `;
+  return rows[0];
+}
+
+export async function getUserProfileData(userId: number): Promise<UserProfileData | undefined> {
+  if (!Number.isInteger(userId) || userId <= 0) return undefined;
+  await ensureSchema();
+
+  const user = await getUserById(userId);
+  if (!user) return undefined;
+
+  // 1. Fetch checkouts associated with user (by ID or matching username/name)
+  const username = user.username ?? "";
+  const name = user.name ?? "";
+
+  const { rows: checkoutRows } = await sql<{
+    id: number;
+    equipment_id: number;
+    equipment_name: string;
+    equipment_serial_number: string | null;
+    equipment_location: string;
+    equipment_condition: Condition;
+    checked_out_by: number | null;
+    checked_out_by_name: string;
+    checked_out_at: string;
+    expected_return_at: string | null;
+    returned_at: string | null;
+    notes: string | null;
+    checkout_location: string | null;
+    nfc_value: string | null;
+  }>`
+    SELECT 
+      c.id, c.equipment_id,
+      e.name AS equipment_name,
+      e.serial_number AS equipment_serial_number,
+      e.location AS equipment_location,
+      e.condition AS equipment_condition,
+      c.checked_out_by,
+      c.checked_out_by_name,
+      c.checked_out_at,
+      c.expected_return_at,
+      c.returned_at,
+      c.notes,
+      c.checkout_location,
+      c.nfc_value
+    FROM checkouts c
+    JOIN equipment e ON e.id = c.equipment_id
+    WHERE c.checked_out_by = ${userId}
+       OR (LENGTH(${username}) > 0 AND LOWER(c.checked_out_by_name) = LOWER(${username}))
+       OR (LENGTH(${name}) > 0 AND LOWER(c.checked_out_by_name) = LOWER(${name}))
+    ORDER BY c.checked_out_at DESC
+  `;
+
+  const activeEquipment: UserProfileCheckout[] = [];
+  const pastEquipment: UserProfileCheckout[] = [];
+
+  for (const row of checkoutRows) {
+    const item: UserProfileCheckout = {
+      id: row.id,
+      equipment_id: row.equipment_id,
+      equipment_name: row.equipment_name,
+      equipment_serial_number: row.equipment_serial_number,
+      equipment_location: row.equipment_location,
+      equipment_condition: row.equipment_condition,
+      checked_out_by: row.checked_out_by,
+      checked_out_by_name: row.checked_out_by_name,
+      checked_out_at: row.checked_out_at,
+      expected_return_at: row.expected_return_at,
+      returned_at: row.returned_at,
+      notes: row.notes,
+      checkout_location: row.checkout_location,
+      nfc_value: row.nfc_value ?? undefined,
+    };
+
+    if (row.returned_at === null) {
+      activeEquipment.push(item);
+    } else {
+      pastEquipment.push(item);
+    }
+  }
+
+  // 2. Fetch events where the user is OIC, Section IC, or Deployed
+  // Query 2a: OIC events
+  const { rows: oicEvents } = await sql<{
+    event_id: number;
+    event_name: string;
+    description: string | null;
+    start_time: string;
+    end_time: string;
+    location: string;
+    has_rehearsal: number;
+    rehearsal_start_time: string | null;
+    rehearsal_end_time: string | null;
+  }>`
+    SELECT 
+      ev.id AS event_id,
+      ev.name AS event_name,
+      ev.description,
+      ev.start_time,
+      ev.end_time,
+      ev.location,
+      ev.has_rehearsal,
+      ev.rehearsal_start_time,
+      ev.rehearsal_end_time
+    FROM event_oics eo
+    JOIN events ev ON ev.id = eo.event_id
+    WHERE eo.user_id = ${userId}
+    ORDER BY ev.start_time DESC
+  `;
+
+  // Query 2b: Section IC events
+  const { rows: icEvents } = await sql<{
+    event_id: number;
+    event_name: string;
+    description: string | null;
+    start_time: string;
+    end_time: string;
+    location: string;
+    has_rehearsal: number;
+    rehearsal_start_time: string | null;
+    rehearsal_end_time: string | null;
+    section: EventSection;
+  }>`
+    SELECT 
+      ev.id AS event_id,
+      ev.name AS event_name,
+      ev.description,
+      ev.start_time,
+      ev.end_time,
+      ev.location,
+      ev.has_rehearsal,
+      ev.rehearsal_start_time,
+      ev.rehearsal_end_time,
+      ei.section
+    FROM event_ics ei
+    JOIN events ev ON ev.id = ei.event_id
+    WHERE ei.user_id = ${userId}
+    ORDER BY ev.start_time DESC
+  `;
+
+  // Query 2c: Section Deployed events
+  const { rows: depEvents } = await sql<{
+    event_id: number;
+    event_name: string;
+    description: string | null;
+    start_time: string;
+    end_time: string;
+    location: string;
+    has_rehearsal: number;
+    rehearsal_start_time: string | null;
+    rehearsal_end_time: string | null;
+    section: EventSection;
+    attending_rehearsal: number;
+    response_status: DeploymentResponseStatus;
+    responded_at: string | null;
+  }>`
+    SELECT 
+      ev.id AS event_id,
+      ev.name AS event_name,
+      ev.description,
+      ev.start_time,
+      ev.end_time,
+      ev.location,
+      ev.has_rehearsal,
+      ev.rehearsal_start_time,
+      ev.rehearsal_end_time,
+      ed.section,
+      ed.attending_rehearsal,
+      ed.response_status,
+      ed.responded_at
+    FROM event_deployments ed
+    JOIN events ev ON ev.id = ed.event_id
+    WHERE ed.user_id = ${userId}
+    ORDER BY ev.start_time DESC
+  `;
+
+  // Map & combine all events by event_id
+  const eventMap = new Map<number, UserProfileEvent>();
+
+  const getStatus = (start: string, end: string): EventStatus => {
+    const now = new Date().toISOString();
+    if (now < start) return "Upcoming";
+    if (now > end) return "Completed";
+    return "Ongoing";
+  };
+
+  for (const oic of oicEvents) {
+    if (!eventMap.has(oic.event_id)) {
+      eventMap.set(oic.event_id, {
+        event_id: oic.event_id,
+        event_name: oic.event_name,
+        description: oic.description,
+        start_time: oic.start_time,
+        end_time: oic.end_time,
+        location: oic.location,
+        has_rehearsal: Boolean(oic.has_rehearsal),
+        rehearsal_start_time: oic.rehearsal_start_time,
+        rehearsal_end_time: oic.rehearsal_end_time,
+        status: getStatus(oic.start_time, oic.end_time),
+        roles: [],
+      });
+    }
+    eventMap.get(oic.event_id)!.roles.push({
+      type: "oic",
+      label: "Overall In-Charge (OIC)",
+    });
+  }
+
+  for (const ic of icEvents) {
+    if (!eventMap.has(ic.event_id)) {
+      eventMap.set(ic.event_id, {
+        event_id: ic.event_id,
+        event_name: ic.event_name,
+        description: ic.description,
+        start_time: ic.start_time,
+        end_time: ic.end_time,
+        location: ic.location,
+        has_rehearsal: Boolean(ic.has_rehearsal),
+        rehearsal_start_time: ic.rehearsal_start_time,
+        rehearsal_end_time: ic.rehearsal_end_time,
+        status: getStatus(ic.start_time, ic.end_time),
+        roles: [],
+      });
+    }
+    const secUpper = ic.section.toUpperCase();
+    eventMap.get(ic.event_id)!.roles.push({
+      type: "section_ic",
+      section: ic.section,
+      label: `${secUpper} In-Charge (IC)`,
+    });
+  }
+
+  for (const dep of depEvents) {
+    if (!eventMap.has(dep.event_id)) {
+      eventMap.set(dep.event_id, {
+        event_id: dep.event_id,
+        event_name: dep.event_name,
+        description: dep.description,
+        start_time: dep.start_time,
+        end_time: dep.end_time,
+        location: dep.location,
+        has_rehearsal: Boolean(dep.has_rehearsal),
+        rehearsal_start_time: dep.rehearsal_start_time,
+        rehearsal_end_time: dep.rehearsal_end_time,
+        status: getStatus(dep.start_time, dep.end_time),
+        roles: [],
+      });
+    }
+    const secUpper = dep.section.toUpperCase();
+    eventMap.get(dep.event_id)!.roles.push({
+      type: "deployment",
+      section: dep.section,
+      label: `${secUpper} Crew`,
+      response_status: dep.response_status,
+      attending_rehearsal: Boolean(dep.attending_rehearsal),
+      responded_at: dep.responded_at,
+    });
+  }
+
+  // Sort events by start_time DESC
+  const events = Array.from(eventMap.values()).sort(
+    (a, b) => new Date(b.start_time).getTime() - new Date(a.start_time).getTime()
+  );
+
+  // 3. Check for linked NFC card
+  let nfcCard: NFCCard | null = null;
+  const { rows: nfcCards } = await sql<NFCCard>`
+    SELECT * FROM nfc_cards 
+    WHERE (LENGTH(${username}) > 0 AND LOWER(member_name) = LOWER(${username}))
+       OR (LENGTH(${name}) > 0 AND LOWER(member_name) = LOWER(${name}))
+    LIMIT 1
+  `;
+  if (nfcCards.length > 0) {
+    nfcCard = nfcCards[0];
+  }
+
+  // 4. Stats
+  const activePossessionsCount = activeEquipment.length;
+  const totalCheckoutsCount = activeEquipment.length + pastEquipment.length;
+  const upcomingEventsCount = events.filter((e) => e.status !== "Completed").length;
+  const completedEventsCount = events.filter((e) => e.status === "Completed").length;
+
+  return {
+    user,
+    activeEquipment,
+    pastEquipment,
+    events,
+    nfcCard,
+    stats: {
+      activePossessionsCount,
+      totalCheckoutsCount,
+      upcomingEventsCount,
+      completedEventsCount,
+    },
+  };
 }
 
 export async function getAllUsers(): Promise<User[]> {
