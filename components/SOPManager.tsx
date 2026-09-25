@@ -84,7 +84,7 @@ function getWelcomeMessage(name: string): AIChatMessage {
   return {
     id: "welcome",
     role: "assistant",
-    content: `Hello ${name}! 👋 I am your **MediaHub AI Operations Assistant**, powered by Google Gemini.\n\nI have real-time access to:\n1. 📋 **Official SOPs & Guidelines** (handling rules, safety protocols, return checklists)\n2. 📦 **Live Inventory & Availability** (equipment status, storage locations, active checkouts)\n3. 🌐 **Technical Gear Specifications & Specs** (camera mass, lens compatibility, sensor specs)\n\nAsk me anything or tap one of the suggested prompts below!`,
+    content: `Hello ${name}! 👋 I am your **MediaHub AI Operations Assistant**, powered by Google Gemini.\n\nI have real-time access to:\n1. 📋 **Official SOPs & Guidelines** (handling rules, safety protocols, return checklists)\n2. 📦 **Live Inventory & Availability** (equipment status, storage locations, active checkouts)\n3. 🌐 **Web Knowledge Fallback** (retrieves technical specs or web knowledge if not found in the SOPs, clearly distinguishing SOP vs. Web content)\n\nAsk me anything or tap one of the suggested prompts below!`,
     created_at: new Date().toISOString(),
   };
 }
@@ -787,7 +787,7 @@ export function SOPManager({ initialDocuments, role, userName }: SOPManagerProps
             SOP & AI Knowledge Assistant
           </h2>
           <p className="text-muted-foreground text-sm">
-            Trained on official MediaHub Standard Operating Procedures with grounded Google Gemini AI and source citations
+            Trained on official MediaHub Standard Operating Procedures with web search fallback and source citations
           </p>
         </div>
 
@@ -969,7 +969,7 @@ export function SOPManager({ initialDocuments, role, userName }: SOPManagerProps
                   </div>
                   <div className="rounded-2xl px-4 py-3 bg-muted/50 border text-foreground text-sm flex items-center gap-2">
                     <RefreshCw className="h-4 w-4 animate-spin text-purple-600" />
-                    <span className="text-xs text-muted-foreground">Consulting SOP database & inventory…</span>
+                    <span className="text-xs text-muted-foreground">Consulting SOP database, inventory & web knowledge…</span>
                   </div>
                 </div>
               )}
