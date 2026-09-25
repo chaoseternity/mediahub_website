@@ -254,6 +254,33 @@ export interface UserProfileData {
   };
 }
 
+export type ReminderType = "due_soon" | "overdue";
+
+export interface CheckoutReminder {
+  id: number;
+  checkout_id: number;
+  reminder_type: ReminderType;
+  sent_to_email: string;
+  sent_at: string;
+}
+
+export interface ReminderProcessResult {
+  totalChecked: number;
+  sent: number;
+  skipped: number;
+  errors: number;
+  reminders: Array<{
+    checkoutId: number;
+    equipmentId: number;
+    equipmentName: string;
+    recipientName: string;
+    recipientEmail: string;
+    type: ReminderType;
+    status: "sent" | "skipped" | "failed";
+    reason?: string;
+  }>;
+}
+
 // Extend next-auth Session type
 declare module "next-auth" {
   interface Session {

@@ -4,7 +4,7 @@ import { useState } from "react";
 import dynamic from "next/dynamic";
 import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button";
-import { Plus, Package, Download, Upload } from "lucide-react";
+import { Plus, Package, Download, Upload, Bell, Loader2 } from "lucide-react";
 import { AddEquipmentModal } from "@/components/AddEquipmentModal";
 import { UploadEquipmentModal } from "@/components/UploadEquipmentModal";
 import { generateEquipmentExcel } from "@/lib/excel";
@@ -25,8 +25,40 @@ export function DashboardClient({ initialData, role, userName }: DashboardClient
   const [addOpen, setAddOpen] = useState(false);
   const [uploadOpen, setUploadOpen] = useState(false);
   const [isDownloading, setIsDownloading] = useState(false);
+  const [isCheckingReminders, setIsCheckingReminders] = useState(false);
   const [items, setItems] = useState<Equipment[]>(initialData);
   const router = useRouter();
+
+  const overdueCount = items.filter(
+    (i) =>
+      i.status === "Checked Out" &&
+      i.expected_return_at &&
+      new Date() > new Date(i.expected_return_at)
+  ).length;
+
+  async function handleTriggerReminders() {
+    try {
+      setIsCheckingReminders(true);
+      const res = await fetch("/api/cron/reminders", { method: "POST" });
+      const data = await res.json();
+      if (res.ok) {
+        alert(
+          `Return Reminders Check Complete:\n\n` +
+            `• Total Active Loans Checked: ${data.totalChecked}\n` +
+            `• Reminders Dispatched: ${data.sent}\n` +
+            `• Skipped (Already reminded / Not due): ${data.skipped}` +
+            (data.errors ? `\n• Errors: ${data.errors}` : "")
+        );
+      } else {
+        alert(data.error || "Failed to trigger return reminders.");
+      }
+    } catch (err) {
+      console.error("Reminder check failed:", err);
+      alert("Failed to connect to reminder service.");
+    } finally {
+      setIsCheckingReminders(false);
+    }
+  }
 
   async function refresh() {
     try {
@@ -90,6 +122,25 @@ export function DashboardClient({ initialData, role, userName }: DashboardClient
 
           {role === "admin" && (
             <>
+              <Button
+                variant="outline"
+                onClick={handleTriggerReminders}
+                disabled={isCheckingReminders}
+                className="sm:w-auto gap-1.5"
+                title="Check and send return reminder emails to borrowers"
+              >
+                {isCheckingReminders ? (
+                  <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
+                ) : (
+                  <Bell className={`h-4 w-4 ${overdueCount > 0 ? "text-destructive" : "text-primary"}`} />
+                )}
+                Reminders
+                {overdueCount > 0 && (
+                  <span className="ml-1 px-1.5 py-0.5 rounded-full text-[10px] font-bold bg-destructive text-destructive-foreground">
+                    {overdueCount}
+                  </span>
+                )}
+              </Button>
               <Button
                 variant="outline"
                 onClick={() => setUploadOpen(true)}

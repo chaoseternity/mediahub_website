@@ -27,8 +27,11 @@ import type {
   UserProfileEvent,
   UserProfileCheckout,
   UserProfileRole,
+  ReminderType,
+  CheckoutReminder,
+  ReminderProcessResult,
 } from "./types";
-import { sendDeploymentInvitationEmail } from "./email";
+import { sendDeploymentInvitationEmail, sendOverdueReminderEmail } from "./email";
 
 function getAdminEmails(): Set<string> {
   const raw = process.env.ADMIN_EMAILS ?? "";
@@ -691,8 +694,8 @@ export async function createEquipment(params: {
   status: EquipmentStatus;
 }): Promise<Equipment> {
   await ensureSchema();
-  let status = params.status;
-  let condition = params.condition;
+  let status = params.status || "Available";
+  let condition = params.condition || "Working";
 
   if (condition === "Missing" || status === "Unavailable (Missing)") {
     condition = "Missing";
@@ -1964,3 +1967,264 @@ export async function searchSOPDocuments(rawQuery: string): Promise<SOPDocument[
   `;
   return rows;
 }
+
+// ---------------------------------------------------------------------------
+// Automated Overdue & Due-Soon Return Reminders
+// ---------------------------------------------------------------------------
+
+export async function ensureRemindersTable(): Promise<void> {
+  await ensureSchema();
+  try {
+    await sql`
+      CREATE TABLE IF NOT EXISTS checkout_reminders (
+        id            INTEGER PRIMARY KEY AUTOINCREMENT,
+        checkout_id   INTEGER NOT NULL REFERENCES checkouts(id) ON DELETE CASCADE,
+        reminder_type TEXT    NOT NULL CHECK(reminder_type IN ('due_soon', 'overdue')),
+        sent_to_email TEXT    NOT NULL,
+        sent_at       TEXT    NOT NULL DEFAULT (datetime('now'))
+      );
+    `;
+    await sql`
+      CREATE INDEX IF NOT EXISTS idx_reminders_checkout ON checkout_reminders(checkout_id, reminder_type);
+    `;
+  } catch {
+    // Table already exists
+  }
+}
+
+export async function recordCheckoutReminder(
+  checkoutId: number,
+  reminderType: ReminderType,
+  sentToEmail: string
+): Promise<CheckoutReminder> {
+  await ensureRemindersTable();
+  const cleanEmail = sentToEmail.trim().toLowerCase();
+  const { rows } = await sql<CheckoutReminder>`
+    INSERT INTO checkout_reminders (checkout_id, reminder_type, sent_to_email)
+    VALUES (${checkoutId}, ${reminderType}, ${cleanEmail})
+    RETURNING *
+  `;
+  return rows[0];
+}
+
+export async function getCheckoutReminders(checkoutId: number): Promise<CheckoutReminder[]> {
+  await ensureRemindersTable();
+  const { rows } = await sql<CheckoutReminder>`
+    SELECT * FROM checkout_reminders
+    WHERE checkout_id = ${checkoutId}
+    ORDER BY sent_at DESC
+  `;
+  return rows;
+}
+
+export interface PendingReturnReminderItem {
+  checkout_id: number;
+  equipment_id: number;
+  equipment_name: string;
+  equipment_serial_number: string | null;
+  equipment_location: string;
+  checked_out_at: string;
+  expected_return_at: string;
+  notes: string | null;
+  checked_out_by: number | null;
+  checked_out_by_name: string;
+  borrower_name: string;
+  borrower_email: string | null;
+  last_due_soon_sent: string | null;
+  last_overdue_sent: string | null;
+}
+
+export async function getPendingReturnReminders(): Promise<PendingReturnReminderItem[]> {
+  await ensureRemindersTable();
+  const { rows } = await sql<PendingReturnReminderItem>`
+    SELECT 
+      c.id AS checkout_id,
+      c.equipment_id,
+      e.name AS equipment_name,
+      e.serial_number AS equipment_serial_number,
+      e.location AS equipment_location,
+      c.checked_out_at,
+      c.expected_return_at,
+      c.notes,
+      c.checked_out_by,
+      c.checked_out_by_name,
+      COALESCE(u.name, u2.name, c.checked_out_by_name) AS borrower_name,
+      COALESCE(u.email, u2.email) AS borrower_email,
+      (SELECT sent_at FROM checkout_reminders WHERE checkout_id = c.id AND reminder_type = 'due_soon' ORDER BY sent_at DESC LIMIT 1) AS last_due_soon_sent,
+      (SELECT sent_at FROM checkout_reminders WHERE checkout_id = c.id AND reminder_type = 'overdue' ORDER BY sent_at DESC LIMIT 1) AS last_overdue_sent
+    FROM checkouts c
+    JOIN equipment e ON e.id = c.equipment_id
+    LEFT JOIN users u ON u.id = c.checked_out_by
+    LEFT JOIN users u2 ON (LOWER(u2.name) = LOWER(c.checked_out_by_name) OR LOWER(u2.username) = LOWER(c.checked_out_by_name))
+    WHERE c.returned_at IS NULL AND c.expected_return_at IS NOT NULL
+    ORDER BY c.expected_return_at ASC
+  `;
+  return rows;
+}
+
+export async function processReturnReminders(options?: {
+  origin?: string;
+  force?: boolean;
+}): Promise<ReminderProcessResult> {
+  const pending = await getPendingReturnReminders();
+  const now = new Date();
+  const nowTime = now.getTime();
+
+  let sentCount = 0;
+  let skippedCount = 0;
+  let errorCount = 0;
+  const remindersResult: ReminderProcessResult["reminders"] = [];
+
+  for (const item of pending) {
+    const expectedTime = new Date(item.expected_return_at).getTime();
+    if (isNaN(expectedTime)) {
+      skippedCount++;
+      remindersResult.push({
+        checkoutId: item.checkout_id,
+        equipmentId: item.equipment_id,
+        equipmentName: item.equipment_name,
+        recipientName: item.borrower_name,
+        recipientEmail: item.borrower_email || "",
+        type: "overdue",
+        status: "skipped",
+        reason: "Invalid expected_return_at timestamp",
+      });
+      continue;
+    }
+
+    const diffMs = expectedTime - nowTime;
+    let reminderType: ReminderType | null = null;
+
+    if (diffMs < 0) {
+      // Past due date => OVERDUE
+      reminderType = "overdue";
+      if (!options?.force && item.last_overdue_sent) {
+        const lastSentTime = new Date(item.last_overdue_sent).getTime();
+        // Only send overdue reminder at most once every 24 hours
+        if (!isNaN(lastSentTime) && nowTime - lastSentTime < 24 * 60 * 60 * 1000) {
+          skippedCount++;
+          remindersResult.push({
+            checkoutId: item.checkout_id,
+            equipmentId: item.equipment_id,
+            equipmentName: item.equipment_name,
+            recipientName: item.borrower_name,
+            recipientEmail: item.borrower_email || "",
+            type: "overdue",
+            status: "skipped",
+            reason: "Overdue reminder already sent in last 24 hours",
+          });
+          continue;
+        }
+      }
+    } else if (diffMs <= 24 * 60 * 60 * 1000) {
+      // Due within the next 24 hours => DUE SOON
+      reminderType = "due_soon";
+      if (!options?.force && item.last_due_soon_sent) {
+        skippedCount++;
+        remindersResult.push({
+          checkoutId: item.checkout_id,
+          equipmentId: item.equipment_id,
+          equipmentName: item.equipment_name,
+          recipientName: item.borrower_name,
+          recipientEmail: item.borrower_email || "",
+          type: "due_soon",
+          status: "skipped",
+          reason: "Due soon reminder already dispatched",
+        });
+        continue;
+      }
+    } else {
+      // More than 24 hours in the future => skip
+      skippedCount++;
+      remindersResult.push({
+        checkoutId: item.checkout_id,
+        equipmentId: item.equipment_id,
+        equipmentName: item.equipment_name,
+        recipientName: item.borrower_name,
+        recipientEmail: item.borrower_email || "",
+        type: "due_soon",
+        status: "skipped",
+        reason: "Due date is more than 24 hours away",
+      });
+      continue;
+    }
+
+    if (!item.borrower_email) {
+      skippedCount++;
+      remindersResult.push({
+        checkoutId: item.checkout_id,
+        equipmentId: item.equipment_id,
+        equipmentName: item.equipment_name,
+        recipientName: item.borrower_name,
+        recipientEmail: "",
+        type: reminderType,
+        status: "skipped",
+        reason: `No email address found for borrower "${item.borrower_name}"`,
+      });
+      continue;
+    }
+
+    try {
+      const emailRes = await sendOverdueReminderEmail({
+        toEmail: item.borrower_email,
+        recipientName: item.borrower_name,
+        equipmentId: item.equipment_id,
+        equipmentName: item.equipment_name,
+        serialNumber: item.equipment_serial_number,
+        location: item.equipment_location,
+        checkedOutAt: item.checked_out_at,
+        expectedReturnAt: item.expected_return_at,
+        notes: item.notes,
+        isOverdue: reminderType === "overdue",
+        origin: options?.origin,
+      });
+
+      if (emailRes.success) {
+        await recordCheckoutReminder(item.checkout_id, reminderType, item.borrower_email);
+        sentCount++;
+        remindersResult.push({
+          checkoutId: item.checkout_id,
+          equipmentId: item.equipment_id,
+          equipmentName: item.equipment_name,
+          recipientName: item.borrower_name,
+          recipientEmail: item.borrower_email,
+          type: reminderType,
+          status: "sent",
+        });
+      } else {
+        errorCount++;
+        remindersResult.push({
+          checkoutId: item.checkout_id,
+          equipmentId: item.equipment_id,
+          equipmentName: item.equipment_name,
+          recipientName: item.borrower_name,
+          recipientEmail: item.borrower_email,
+          type: reminderType,
+          status: "failed",
+          reason: emailRes.error || "Email transport failure",
+        });
+      }
+    } catch (err: unknown) {
+      errorCount++;
+      remindersResult.push({
+        checkoutId: item.checkout_id,
+        equipmentId: item.equipment_id,
+        equipmentName: item.equipment_name,
+        recipientName: item.borrower_name,
+        recipientEmail: item.borrower_email,
+        type: reminderType,
+        status: "failed",
+        reason: err instanceof Error ? err.message : "Unexpected reminder dispatch error",
+      });
+    }
+  }
+
+  return {
+    totalChecked: pending.length,
+    sent: sentCount,
+    skipped: skippedCount,
+    errors: errorCount,
+    reminders: remindersResult,
+  };
+}
+

@@ -134,6 +134,14 @@ export const SCHEMA_SQL = `
     created_at   TEXT    NOT NULL DEFAULT (datetime('now')),
     updated_at   TEXT    NOT NULL DEFAULT (datetime('now'))
   );
+
+  CREATE TABLE IF NOT EXISTS checkout_reminders (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    checkout_id   INTEGER NOT NULL REFERENCES checkouts(id) ON DELETE CASCADE,
+    reminder_type TEXT    NOT NULL CHECK(reminder_type IN ('due_soon', 'overdue')),
+    sent_to_email TEXT    NOT NULL,
+    sent_at       TEXT    NOT NULL DEFAULT (datetime('now'))
+  );
 `;
 
 export function makeTestDb(): Database.Database {

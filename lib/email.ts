@@ -264,3 +264,191 @@ export async function sendDeploymentInvitationEmail({
     };
   }
 }
+
+export interface SendOverdueReminderParams {
+  toEmail: string;
+  recipientName: string;
+  equipmentId: number;
+  equipmentName: string;
+  serialNumber?: string | null;
+  location: string;
+  checkedOutAt: string;
+  expectedReturnAt: string;
+  notes?: string | null;
+  isOverdue: boolean;
+  origin?: string;
+}
+
+export async function sendOverdueReminderEmail({
+  toEmail,
+  recipientName,
+  equipmentId: _equipmentId,
+  equipmentName,
+  serialNumber,
+  location,
+  checkedOutAt,
+  expectedReturnAt,
+  notes,
+  isOverdue,
+  origin,
+}: SendOverdueReminderParams): Promise<{ success: boolean; previewUrl?: string; error?: string }> {
+  try {
+    const rawBaseUrl =
+      process.env.NEXTAUTH_URL ||
+      (process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : origin) ||
+      "http://localhost:3000";
+
+    let baseUrl = "http://localhost:3000";
+    try {
+      const parsed = new URL(rawBaseUrl);
+      if (parsed.protocol === "http:" || parsed.protocol === "https:") {
+        baseUrl = parsed.origin;
+      }
+    } catch {
+      baseUrl = "http://localhost:3000";
+    }
+
+    const cleanEquipmentName = equipmentName.replace(/[\r\n]+/g, " ").trim();
+    const cleanToEmail = toEmail.replace(/[\r\n]+/g, "").trim();
+
+    const themeColor = isOverdue ? "#dc2626" : "#d97706";
+    const badgeText = isOverdue ? "OVERDUE RETURN" : "DUE SOON";
+    const subjectPrefix = isOverdue ? "[OVERDUE] Please return" : "[Return Reminder]";
+    const headerTitle = isOverdue ? "Equipment Return is Overdue" : "Equipment Due for Return Soon";
+
+    const fmtDate = (d: string) => {
+      try {
+        return new Date(d).toLocaleString("en-GB", {
+          weekday: "short",
+          day: "numeric",
+          month: "short",
+          year: "numeric",
+          hour: "2-digit",
+          minute: "2-digit",
+        });
+      } catch {
+        return d;
+      }
+    };
+
+    const dashboardUrl = `${baseUrl}/dashboard`;
+
+    const htmlContent = `
+      <!DOCTYPE html>
+      <html>
+      <head>
+        <meta charset="utf-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>${escapeHtml(headerTitle)}</title>
+      </head>
+      <body style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; background-color: #f4f4f5; margin: 0; padding: 24px; color: #18181b;">
+        <div style="max-width: 600px; margin: 0 auto; background-color: #ffffff; border-radius: 12px; overflow: hidden; border: 1px solid #e4e4e7; box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.05);">
+          <!-- Header Banner -->
+          <div style="background-color: ${themeColor}; padding: 24px 32px; color: #ffffff;">
+            <div style="display: inline-block; font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.05em; background-color: rgba(255, 255, 255, 0.2); padding: 4px 10px; border-radius: 9999px; margin-bottom: 8px;">
+              ${badgeText}
+            </div>
+            <h1 style="margin: 0; font-size: 22px; font-weight: 700; line-height: 1.3;">${escapeHtml(headerTitle)}</h1>
+            <p style="margin: 6px 0 0 0; font-size: 14px; opacity: 0.9;">MediaHub Inventory Operations</p>
+          </div>
+
+          <!-- Body Content -->
+          <div style="padding: 28px 32px;">
+            <p style="font-size: 15px; line-height: 1.5; margin: 0 0 16px 0;">
+              Hi <strong>${escapeHtml(recipientName)}</strong>,
+            </p>
+            <p style="font-size: 15px; line-height: 1.5; margin: 0 0 20px 0; color: #3f3f46;">
+              ${
+                isOverdue
+                  ? `This is an urgent reminder that the following equipment was scheduled to be returned on <strong>${fmtDate(expectedReturnAt)}</strong> and is now marked <strong>overdue</strong>. Please return it to the media room or your Section In-Charge promptly so other team members can access it.`
+                  : `This is a friendly reminder that the following equipment is scheduled to be returned on <strong>${fmtDate(expectedReturnAt)}</strong>. Please prepare to return it on time.`
+              }
+            </p>
+
+            <!-- Equipment Card -->
+            <div style="background-color: #fafafa; border-radius: 8px; border: 1px solid #e4e4e7; padding: 18px; margin-bottom: 24px;">
+              <h2 style="margin: 0 0 12px 0; font-size: 17px; font-weight: 600; color: #18181b;">
+                ${escapeHtml(cleanEquipmentName)}
+              </h2>
+              <table style="width: 100%; border-collapse: collapse; font-size: 14px;">
+                ${
+                  serialNumber
+                    ? `<tr>
+                        <td style="padding: 6px 0; color: #71717a; width: 140px;">Equipment ID:</td>
+                        <td style="padding: 6px 0; font-family: monospace; font-weight: 600; color: #18181b;">${escapeHtml(serialNumber)}</td>
+                      </tr>`
+                    : ""
+                }
+                <tr>
+                  <td style="padding: 6px 0; color: #71717a; width: 140px;">Return Location:</td>
+                  <td style="padding: 6px 0; font-weight: 500; color: #18181b;">${escapeHtml(location || "Media Room")}</td>
+                </tr>
+                <tr>
+                  <td style="padding: 6px 0; color: #71717a; width: 140px;">Checked Out:</td>
+                  <td style="padding: 6px 0; color: #3f3f46;">${fmtDate(checkedOutAt)}</td>
+                </tr>
+                <tr>
+                  <td style="padding: 6px 0; color: #71717a; width: 140px;">Scheduled Return:</td>
+                  <td style="padding: 6px 0; font-weight: 600; color: ${themeColor};">${fmtDate(expectedReturnAt)}</td>
+                </tr>
+                ${
+                  notes
+                    ? `<tr>
+                        <td style="padding: 6px 0; color: #71717a; width: 140px;">Checkout Notes:</td>
+                        <td style="padding: 6px 0; color: #52525b; font-style: italic;">"${escapeHtml(notes)}"</td>
+                      </tr>`
+                    : ""
+                }
+              </table>
+            </div>
+
+            <!-- Call to Action -->
+            <div style="text-align: center; margin: 28px 0 16px 0;">
+              <a href="${escapeHtml(dashboardUrl)}" style="display: inline-block; background-color: #18181b; color: #ffffff; text-decoration: none; padding: 12px 28px; border-radius: 8px; font-weight: 600; font-size: 14px; box-shadow: 0 1px 2px 0 rgba(0, 0, 0, 0.05);">
+                Open MediaHub Dashboard
+              </a>
+            </div>
+
+            <p style="margin: 0; font-size: 13px; text-align: center; color: #71717a;">
+              Need an extension or have questions? Contact your Section In-Charge or an Admin.
+            </p>
+          </div>
+
+          <!-- Footer -->
+          <div style="background-color: #f4f4f5; padding: 14px 24px; border-top: 1px solid #e4e4e7; text-align: center; font-size: 12px; color: #71717a;">
+            Sent automatically by <strong>MediaHub</strong> • Equipment Operations
+          </div>
+        </div>
+      </body>
+      </html>
+    `;
+
+    const transporter = getTransporter();
+    const fromAddress = process.env.SMTP_FROM || '"MediaHub Reminders" <noreply@mediahub.app>';
+
+    if (transporter) {
+      await transporter.sendMail({
+        from: fromAddress,
+        to: cleanToEmail,
+        subject: `${subjectPrefix} ${cleanEquipmentName} — MediaHub`,
+        html: htmlContent,
+      });
+      console.log(`✓ Sent ${badgeText} reminder to ${cleanToEmail} for "${cleanEquipmentName}"`);
+      return { success: true };
+    } else {
+      console.log(`[DEV MAIL] SMTP not configured. Simulated reminder to ${cleanToEmail}:`);
+      console.log(`   Type: ${badgeText}`);
+      console.log(`   Equipment: ${cleanEquipmentName} (ID: ${serialNumber || "N/A"})`);
+      console.log(`   Expected Return: ${expectedReturnAt}`);
+      console.log(`   Dashboard: ${dashboardUrl}`);
+      return { success: true, previewUrl: dashboardUrl };
+    }
+  } catch (err: unknown) {
+    console.error("Error dispatching return reminder email:", err);
+    return {
+      success: false,
+      error: err instanceof Error ? err.message : "Failed to send reminder email",
+    };
+  }
+}
+
