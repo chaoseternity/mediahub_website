@@ -77,11 +77,7 @@ export async function ensureSchema(): Promise<void> {
 
       for (const statement of statements) {
         try {
-          if (typeof (d1 as any).exec === "function") {
-            await (d1 as any).exec(statement);
-          } else {
-            await d1.prepare(statement).run();
-          }
+          await d1.prepare(statement).run();
         } catch {
           // If a table or index already exists, continue gracefully
         }
@@ -89,7 +85,14 @@ export async function ensureSchema(): Promise<void> {
     } catch (err) {
       console.warn("Notice: ensureSchema on D1 encountered error:", err);
     }
-    initialized = true;
+
+    try {
+      await d1.prepare("SELECT 1 FROM audit_sessions LIMIT 1").run();
+      await d1.prepare("SELECT 1 FROM reservations LIMIT 1").run();
+      initialized = true;
+    } catch {
+      // Don't mark initialized if tables are still being provisioned
+    }
     return;
   }
 
@@ -128,7 +131,10 @@ export async function sql<T = Record<string, unknown>>(
     const isSelectOrReturning =
       /^\s*(SELECT|WITH|PRAGMA)/i.test(query) || /RETURNING/i.test(query);
 
-    const stmt = d1.prepare(query).bind(...sanitizedValues);
+    const stmt =
+      sanitizedValues.length > 0
+        ? d1.prepare(query).bind(...sanitizedValues)
+        : d1.prepare(query);
 
     if (isSelectOrReturning) {
       const { results } = await stmt.all<T>();

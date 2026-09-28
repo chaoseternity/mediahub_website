@@ -2259,6 +2259,23 @@ export async function processReturnReminders(options?: {
 
 export async function ensureReservationsTable(): Promise<void> {
   await ensureSchema();
+  try {
+    await sql`
+      CREATE TABLE IF NOT EXISTS reservations (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        equipment_id INTEGER NOT NULL,
+        reserved_by INTEGER NOT NULL,
+        reserved_by_name TEXT NOT NULL,
+        start_time TEXT NOT NULL,
+        end_time TEXT NOT NULL,
+        status TEXT NOT NULL DEFAULT 'confirmed',
+        notes TEXT,
+        created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+      )
+    `;
+  } catch {
+    // Already created
+  }
 }
 
 export async function checkReservationConflict(
@@ -2501,6 +2518,25 @@ export async function fulfillReservation(
 
 export async function ensureHandoverTable(): Promise<void> {
   await ensureSchema();
+  try {
+    await sql`
+      CREATE TABLE IF NOT EXISTS handover_codes (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        checkout_id INTEGER NOT NULL,
+        equipment_id INTEGER NOT NULL,
+        from_user_id INTEGER NOT NULL,
+        code TEXT NOT NULL UNIQUE,
+        qr_payload TEXT NOT NULL,
+        expires_at TEXT NOT NULL,
+        status TEXT NOT NULL DEFAULT 'active',
+        claimed_by INTEGER,
+        claimed_at TEXT,
+        created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+      )
+    `;
+  } catch {
+    // Already created
+  }
 }
 
 function generateRandomHandoverCode(): string {
@@ -2669,6 +2705,36 @@ export async function claimHandoverCode(params: {
 
 export async function ensureAuditTables(): Promise<void> {
   await ensureSchema();
+  try {
+    await sql`
+      CREATE TABLE IF NOT EXISTS audit_sessions (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        name TEXT NOT NULL,
+        started_by INTEGER NOT NULL,
+        status TEXT NOT NULL DEFAULT 'in_progress',
+        started_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        completed_at TEXT,
+        total_items INTEGER DEFAULT 0,
+        found_count INTEGER DEFAULT 0,
+        missing_count INTEGER DEFAULT 0,
+        notes TEXT
+      )
+    `;
+    await sql`
+      CREATE TABLE IF NOT EXISTS audit_records (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        session_id INTEGER NOT NULL,
+        equipment_id INTEGER NOT NULL,
+        status TEXT NOT NULL DEFAULT 'missing',
+        scanned_at TEXT,
+        scanned_by INTEGER,
+        method TEXT,
+        UNIQUE(session_id, equipment_id)
+      )
+    `;
+  } catch {
+    // Already created
+  }
 }
 
 export async function startAuditSession(params: {

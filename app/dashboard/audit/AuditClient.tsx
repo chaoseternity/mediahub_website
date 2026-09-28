@@ -91,6 +91,20 @@ export function AuditClient({
     }
   }, [session?.status]);
 
+  // Fetch full records if session is active but records array is not populated
+  useEffect(() => {
+    if (session?.id && (!session.records || session.records.length === 0)) {
+      fetch(`/api/audit/session?id=${session.id}`)
+        .then((res) => res.json())
+        .then((data) => {
+          if (data?.records) {
+            setSession((prev) => (prev ? { ...prev, ...data } : prev));
+          }
+        })
+        .catch(() => {});
+    }
+  }, [session?.id]);
+
   async function handleStartSession(e: React.FormEvent) {
     e.preventDefault();
     try {
@@ -128,6 +142,8 @@ export function AuditClient({
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           sessionId: session.id,
+          session_id: session.id,
+          identifier: code,
           code,
         }),
       });
@@ -167,7 +183,9 @@ export function AuditClient({
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           sessionId: session.id,
+          session_id: session.id,
           markMissingInCatalog,
+          mark_missing_in_catalog: markMissingInCatalog,
         }),
       });
 

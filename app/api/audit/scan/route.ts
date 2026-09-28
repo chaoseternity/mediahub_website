@@ -14,16 +14,19 @@ export async function POST(req: NextRequest) {
 
   try {
     const body = await req.json();
-    const { session_id, identifier, method } = body;
+    const rawSessionId = body.session_id ?? body.sessionId;
+    const rawIdentifier = body.identifier ?? body.code;
 
-    const sId = Number(session_id);
+    const sId = Number(rawSessionId);
     if (!Number.isInteger(sId) || sId <= 0) {
       return NextResponse.json({ error: "Invalid session ID." }, { status: 400 });
     }
 
-    if (!identifier || typeof identifier !== "string" || !identifier.trim()) {
+    if (!rawIdentifier || typeof rawIdentifier !== "string" || !rawIdentifier.trim()) {
       return NextResponse.json({ error: "Equipment identifier is required." }, { status: 400 });
     }
+
+    const identifier = rawIdentifier.trim();
 
     const userId = Number(session.user.id);
     const scanMethod = method === "nfc" ? "nfc" : method === "qr" ? "qr" : "manual";
