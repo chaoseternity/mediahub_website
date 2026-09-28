@@ -20,7 +20,6 @@ import {
   User as UserIcon,
   type LucideIcon,
 } from "lucide-react";
-import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { cn, roleBadgeClass } from "@/lib/utils";
 import type { Role } from "@/lib/types";
@@ -147,17 +146,18 @@ export function Sidebar({ userName, role }: SidebarProps) {
       </button>
 
       {/* Header & Logo */}
-      <div className="flex items-center h-16 px-3.5 border-b border-border/70 min-w-0 overflow-hidden">
+      <div className="flex items-center h-16 px-4 border-b border-border/70 min-w-0 overflow-hidden">
         <Link href="/dashboard" className="flex items-center min-w-0 group">
-          <div className="shrink-0 flex items-center justify-center">
+          {/* Emblem: exactly centered at 32px from sidebar left (16px padding + 16px radius) */}
+          <div className="w-8 h-8 shrink-0 flex items-center justify-center">
             <Logo size="md" iconOnly />
           </div>
           <div
             className={cn(
-              "flex flex-col justify-center overflow-hidden whitespace-nowrap transition-all duration-300 ease-in-out",
+              "flex flex-col justify-center overflow-hidden whitespace-nowrap transition-all ease-out",
               collapsed
-                ? "max-w-0 opacity-0 -translate-x-3 pointer-events-none ml-0"
-                : "max-w-[140px] opacity-100 translate-x-0 ml-2.5"
+                ? "opacity-0 max-w-0 -translate-x-2 duration-150 pointer-events-none ml-0"
+                : "opacity-100 max-w-[140px] translate-x-0 duration-200 delay-75 ml-3"
             )}
           >
             <span className="font-extrabold tracking-tight truncate flex items-center gap-0.5 text-foreground leading-tight text-lg">
@@ -172,23 +172,28 @@ export function Sidebar({ userName, role }: SidebarProps) {
       </div>
 
       {/* Grouped Navigation */}
-      <nav className="flex-1 px-2.5 py-3.5 space-y-4 overflow-y-auto overflow-x-hidden">
+      <nav className="flex-1 px-3 py-3.5 space-y-4 overflow-y-auto overflow-x-hidden">
         {visibleGroups.map((group, groupIdx) => (
           <div key={group.title} className="space-y-1">
             {/* Section Header or Divider */}
-            <div className="relative flex items-center px-2 pt-1 pb-1 min-h-[22px] min-w-0">
+            <div className="relative flex items-center h-5 px-1 min-w-0">
               <span
                 className={cn(
-                  "text-[10px] font-bold uppercase tracking-wider text-muted-foreground/70 transition-all duration-300 ease-in-out whitespace-nowrap truncate",
+                  "text-[10px] font-bold uppercase tracking-wider text-muted-foreground/70 transition-all ease-out whitespace-nowrap truncate",
                   collapsed
-                    ? "max-w-0 opacity-0 -translate-x-2 pointer-events-none overflow-hidden"
-                    : "max-w-[160px] opacity-100 translate-x-0"
+                    ? "opacity-0 max-w-0 duration-150 pointer-events-none overflow-hidden"
+                    : "opacity-100 max-w-[160px] duration-200 delay-75 pl-2"
                 )}
               >
                 {group.title}
               </span>
-              {collapsed && groupIdx > 0 && (
-                <div className="w-8 mx-auto border-t border-border/60 transition-opacity duration-300" />
+              {groupIdx > 0 && (
+                <div
+                  className={cn(
+                    "h-px bg-border/60 transition-all duration-200 ease-out",
+                    collapsed ? "w-6 mx-auto opacity-100" : "w-0 opacity-0 pointer-events-none"
+                  )}
+                />
               )}
             </div>
 
@@ -200,29 +205,30 @@ export function Sidebar({ userName, role }: SidebarProps) {
                   key={href}
                   href={href}
                   className={cn(
-                    "group relative flex items-center h-9.5 rounded-lg text-sm font-medium transition-colors duration-150",
-                    collapsed ? "justify-center px-0 w-10 mx-auto" : "px-3 gap-3 w-full",
+                    "group relative flex items-center h-10 w-full rounded-lg text-sm font-medium transition-colors duration-150",
                     isActive
                       ? "bg-primary text-primary-foreground font-semibold shadow-xs"
                       : "text-muted-foreground hover:text-foreground hover:bg-accent/80"
                   )}
                 >
-                  <div className="w-5 h-5 shrink-0 flex items-center justify-center">
-                    <Icon className="h-4.5 w-4.5 shrink-0" />
+                  {/* Fixed Icon Container: 40px wide, centered permanently at 32px from left */}
+                  <div className="w-10 h-10 shrink-0 flex items-center justify-center">
+                    <Icon className="h-5 w-5 shrink-0" />
                   </div>
 
+                  {/* Words smoothly fade and collapse on retract without moving the icon */}
                   <span
                     className={cn(
-                      "truncate transition-all duration-300 ease-in-out whitespace-nowrap",
+                      "truncate whitespace-nowrap transition-all ease-out",
                       collapsed
-                        ? "max-w-0 opacity-0 -translate-x-2 pointer-events-none overflow-hidden"
-                        : "max-w-[150px] opacity-100 translate-x-0"
+                        ? "opacity-0 max-w-0 -translate-x-1.5 duration-150 pointer-events-none overflow-hidden"
+                        : "opacity-100 max-w-[150px] translate-x-0 duration-200 delay-75 pr-2"
                     )}
                   >
                     {label}
                   </span>
 
-                  {/* Fast Floating Tooltip in Collapsed Mode */}
+                  {/* Floating Tooltip in Collapsed Mode */}
                   {collapsed && (
                     <div
                       role="tooltip"
@@ -239,27 +245,27 @@ export function Sidebar({ userName, role }: SidebarProps) {
       </nav>
 
       {/* User profile & actions footer */}
-      <div className="p-3 border-t border-border/70 bg-sidebar/50 backdrop-blur-xs flex flex-col gap-2.5 overflow-hidden">
+      <div className="p-3 border-t border-border/70 bg-sidebar/50 backdrop-blur-xs flex flex-col gap-1.5 overflow-hidden">
         {/* User Card */}
         <Link
           href="/dashboard/profile"
-          className={cn(
-            "group relative flex items-center rounded-lg p-1.5 transition-colors hover:bg-accent/70 cursor-pointer min-w-0",
-            collapsed ? "justify-center w-10 h-10 mx-auto" : "gap-2.5 w-full"
-          )}
+          className="group relative flex items-center h-10 w-full rounded-lg transition-colors hover:bg-accent/70 cursor-pointer min-w-0"
+          title={collapsed ? `${userName} (${role})` : "View your profile"}
         >
-          {/* Avatar Icon */}
-          <div className="w-7 h-7 rounded-full bg-primary/10 text-primary border border-primary/20 flex items-center justify-center font-bold text-xs shrink-0 select-none uppercase group-hover:ring-2 group-hover:ring-primary/20 transition-all">
-            {userName ? userName.charAt(0) : "U"}
+          {/* Avatar Container: 40px wide, centered at 32px */}
+          <div className="w-10 h-10 shrink-0 flex items-center justify-center">
+            <div className="w-7 h-7 rounded-full bg-primary/10 text-primary border border-primary/20 flex items-center justify-center font-bold text-xs shrink-0 select-none uppercase group-hover:ring-2 group-hover:ring-primary/20 transition-all">
+              {userName ? userName.charAt(0) : "U"}
+            </div>
           </div>
 
           {/* User Name & Role (Expanded) */}
           <div
             className={cn(
-              "flex items-center justify-between min-w-0 flex-1 transition-all duration-300 ease-in-out overflow-hidden",
+              "flex items-center justify-between min-w-0 flex-1 transition-all ease-out overflow-hidden pr-2",
               collapsed
-                ? "max-w-0 opacity-0 -translate-x-2 pointer-events-none"
-                : "max-w-[150px] opacity-100 translate-x-0"
+                ? "opacity-0 max-w-0 -translate-x-1.5 duration-150 pointer-events-none"
+                : "opacity-100 max-w-[160px] translate-x-0 duration-200 delay-75"
             )}
           >
             <span className="text-xs font-semibold truncate group-hover:text-primary transition-colors">
@@ -282,50 +288,80 @@ export function Sidebar({ userName, role }: SidebarProps) {
           )}
         </Link>
 
-        {/* Theme Toggle & Sign Out Actions */}
-        <div className={cn("flex gap-1.5 items-center", collapsed ? "flex-col justify-center" : "w-full")}>
-          <Button
-            variant="ghost"
-            size="icon"
-            aria-label="Toggle dark mode"
-            onClick={() => setTheme(resolvedTheme === "dark" ? "light" : "dark")}
-            className="h-8.5 w-8.5 rounded-lg shrink-0 text-muted-foreground hover:text-foreground hover:bg-accent/80 transition-colors"
-            title={resolvedTheme === "dark" ? "Switch to light mode" : "Switch to dark mode"}
-          >
+        {/* Theme Toggle Button */}
+        <button
+          type="button"
+          aria-label="Toggle dark mode"
+          onClick={() => setTheme(resolvedTheme === "dark" ? "light" : "dark")}
+          className="group relative flex items-center h-10 w-full rounded-lg text-sm font-medium text-muted-foreground hover:text-foreground hover:bg-accent/80 transition-colors cursor-pointer"
+        >
+          {/* Icon Slot: exactly 40px wide, centered at 32px */}
+          <div className="w-10 h-10 shrink-0 flex items-center justify-center">
             {mounted &&
               (resolvedTheme === "dark" ? (
-                <Sun className="h-4.5 w-4.5" />
+                <Sun className="h-5 w-5 shrink-0" />
               ) : (
-                <Moon className="h-4.5 w-4.5" />
+                <Moon className="h-5 w-5 shrink-0" />
               ))}
-          </Button>
+          </div>
 
-          <Button
-            variant="outline"
-            size={collapsed ? "icon" : "sm"}
-            aria-label="Sign out"
-            title={collapsed ? "Sign Out" : undefined}
+          {/* Words smoothly fade and collapse on retract */}
+          <span
             className={cn(
-              "h-8.5 rounded-lg font-medium transition-all duration-300 ease-in-out shrink-0",
+              "truncate whitespace-nowrap transition-all ease-out text-xs font-medium",
               collapsed
-                ? "w-8.5 p-0 justify-center text-muted-foreground hover:text-destructive hover:border-destructive/40"
-                : "flex-1 justify-start gap-2 text-xs px-2.5 text-muted-foreground hover:text-destructive hover:border-destructive/40"
+                ? "opacity-0 max-w-0 -translate-x-1.5 duration-150 pointer-events-none overflow-hidden"
+                : "opacity-100 max-w-[150px] translate-x-0 duration-200 delay-75"
             )}
-            onClick={() => signOut({ callbackUrl: "/login" })}
           >
-            <LogOut className="h-4 w-4 shrink-0" />
-            <span
-              className={cn(
-                "truncate transition-all duration-300 ease-in-out whitespace-nowrap",
-                collapsed
-                  ? "max-w-0 opacity-0 -translate-x-2 pointer-events-none overflow-hidden"
-                  : "max-w-[80px] opacity-100 translate-x-0"
-              )}
+            {mounted && (resolvedTheme === "dark" ? "Light Mode" : "Dark Mode")}
+          </span>
+
+          {/* Tooltip in Collapsed Mode */}
+          {collapsed && (
+            <div
+              role="tooltip"
+              className="absolute left-full ml-3 px-2.5 py-1 bg-popover text-popover-foreground text-xs font-semibold rounded-md shadow-md border border-border whitespace-nowrap pointer-events-none opacity-0 group-hover:opacity-100 translate-x-1 group-hover:translate-x-0 transition-all duration-150 z-50 flex items-center"
+            >
+              {resolvedTheme === "dark" ? "Light Mode" : "Dark Mode"}
+            </div>
+          )}
+        </button>
+
+        {/* Sign Out Button */}
+        <button
+          type="button"
+          aria-label="Sign out"
+          onClick={() => signOut({ callbackUrl: "/login" })}
+          className="group relative flex items-center h-10 w-full rounded-lg text-sm font-medium text-muted-foreground hover:text-destructive hover:bg-destructive/10 transition-colors cursor-pointer"
+        >
+          {/* Icon Slot: exactly 40px wide, centered at 32px */}
+          <div className="w-10 h-10 shrink-0 flex items-center justify-center">
+            <LogOut className="h-5 w-5 shrink-0" />
+          </div>
+
+          {/* Words smoothly fade and collapse on retract */}
+          <span
+            className={cn(
+              "truncate whitespace-nowrap transition-all ease-out text-xs font-medium",
+              collapsed
+                ? "opacity-0 max-w-0 -translate-x-1.5 duration-150 pointer-events-none overflow-hidden"
+                : "opacity-100 max-w-[150px] translate-x-0 duration-200 delay-75"
+            )}
+          >
+            Sign Out
+          </span>
+
+          {/* Tooltip in Collapsed Mode */}
+          {collapsed && (
+            <div
+              role="tooltip"
+              className="absolute left-full ml-3 px-2.5 py-1 bg-popover text-popover-foreground text-xs font-semibold rounded-md shadow-md border border-border whitespace-nowrap pointer-events-none opacity-0 group-hover:opacity-100 translate-x-1 group-hover:translate-x-0 transition-all duration-150 z-50 flex items-center"
             >
               Sign Out
-            </span>
-          </Button>
-        </div>
+            </div>
+          )}
+        </button>
       </div>
     </aside>
   );
