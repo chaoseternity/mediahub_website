@@ -43,6 +43,7 @@ import type {
   AuditRecordStatus,
   StorageCabinet,
   StorageShelf,
+  StorageMapConfigCabinet,
 } from "./types";
 import { sendDeploymentInvitationEmail, sendOverdueReminderEmail } from "./email";
 import { sendClubWebhook } from "./webhook";
@@ -113,6 +114,7 @@ async function sql<T = Record<string, unknown>>(
         else if (/INSERT INTO events/i.test(sqliteQuery)) table = "events";
         else if (/INSERT INTO sop_documents/i.test(sqliteQuery)) table = "sop_documents";
         else if (/UPDATE sop_documents/i.test(sqliteQuery)) table = "sop_documents";
+        else if (/INSERT INTO storage_map_layout/i.test(sqliteQuery)) table = "storage_map_layout";
 
         const fetchStmt = testDb.prepare(`SELECT * FROM ${table} WHERE id = ?`);
         const row = fetchStmt.get(info.lastInsertRowid) as Record<string, unknown>;
@@ -671,7 +673,10 @@ export async function getAllEquipment(): Promise<Equipment[]> {
     SELECT 
       e.id, e.name, e.description, e.serial_number,
       e.condition, e.location, e.status, e.created_at, e.updated_at,
-      GROUP_CONCAT(DISTINCT t.name) AS tags,
+      COALESCE(
+        ARRAY_AGG(DISTINCT t.name) FILTER (WHERE t.name IS NOT NULL),
+        '{}'
+      ) AS tags,
       c.id AS active_checkout_id,
       c.checked_out_by,
       c.checked_out_by_name,
@@ -712,7 +717,10 @@ export async function getEquipmentById(id: number): Promise<EquipmentDetail | un
     SELECT 
       e.id, e.name, e.description, e.serial_number,
       e.condition, e.location, e.status, e.created_at, e.updated_at,
-      GROUP_CONCAT(DISTINCT t.name) AS tags,
+      COALESCE(
+        ARRAY_AGG(DISTINCT t.name) FILTER (WHERE t.name IS NOT NULL),
+        '{}'
+      ) AS tags,
       c.id AS active_checkout_id,
       c.checked_out_by,
       c.checked_out_by_name,
@@ -1492,7 +1500,10 @@ export async function getEventById(id: number): Promise<AppEvent | undefined> {
       e.id, e.name, e.description, e.serial_number,
       e.condition, e.location, e.status, e.created_at, e.updated_at,
       ee.section, ee.used_for_rehearsal,
-      GROUP_CONCAT(DISTINCT t.name) AS tags
+      COALESCE(
+        ARRAY_AGG(DISTINCT t.name) FILTER (WHERE t.name IS NOT NULL),
+        '{}'
+      ) AS tags
     FROM equipment e
     JOIN event_equipment ee ON ee.equipment_id = e.id
     LEFT JOIN equipment_tags et ON et.equipment_id = e.id
@@ -2971,18 +2982,81 @@ export async function getAuditSessionDetails(sessionId: number): Promise<{
 }
 
 // ---------------------------------------------------------------------------
-// Storage Map (Feature 8)
+// Storage Map (Feature 8 & Drag-and-Drop Designer)
 // ---------------------------------------------------------------------------
 
+export async function getStorageMapConfig(): Promise<StorageMapConfigCabinet[] | null> {
+  await ensureSchema();
+  try {
+    const { rows } = await sql<{ value: string }>`
+      SELECT value FROM storage_map_layout WHERE key = 'cabinets' LIMIT 1
+    `;
+    if (rows.length > 0 && rows[0].value) {
+      return JSON.parse(rows[0].value) as StorageMapConfigCabinet[];
+    }
+  } catch {
+    // Return null if table or config not yet initialized
+  }
+  return null;
+}
+
+export async function saveStorageMapConfig(cabinets: StorageMapConfigCabinet[]): Promise<void> {
+  await ensureSchema();
+  const val = JSON.stringify(cabinets);
+  await sql`
+    INSERT INTO storage_map_layout (key, value)
+    VALUES ('cabinets', ${val})
+    ON CONFLICT (key) DO UPDATE SET value = ${val}, updated_at = CURRENT_TIMESTAMP
+  `;
+}
+
 export async function getStorageMapData(): Promise<StorageCabinet[]> {
+  await ensureSchema();
   const allEquipment = await getAllEquipment();
+  const customConfig = await getStorageMapConfig();
 
   const cabinetsMap = new Map<string, { description?: string; shelvesMap: Map<string, Equipment[]> }>();
 
-  function normalizeStorage(locRaw: string): { cabinet: string; shelf: string } {
-    const loc = (locRaw || "General Storage").trim();
-    const lower = loc.toLowerCase();
+  if (customConfig && customConfig.length > 0) {
+    for (const cab of customConfig) {
+      const shelvesMap = new Map<string, Equipment[]>();
+      for (const s of cab.shelves) {
+        shelvesMap.set(s, []);
+      }
+      cabinetsMap.set(cab.name, { description: cab.description, shelvesMap });
+    }
+  } else {
+    const defaultCabinets = [
+      "Cabinet 1 (Cameras & Video)",
+      "Cabinet 2 (Lenses & Glass)",
+      "Audio Rack",
+      "Lighting & Grip Bay",
+      "Cable & Accessories Bay",
+    ];
+    for (const c of defaultCabinets) {
+      cabinetsMap.set(c, { shelvesMap: new Map([["Shelf A", []], ["Shelf B", []]]) });
+    }
+  }
 
+  function resolveCabinetAndShelf(locRaw: string): { cabinet: string; shelf: string } {
+    const loc = (locRaw || "General Storage").trim();
+
+    // 1. Direct match with "Cabinet - Shelf" format
+    if (loc.includes(" - ")) {
+      const parts = loc.split(" - ");
+      const cabName = parts[0].trim();
+      const shelfName = parts.slice(1).join(" - ").trim();
+
+      for (const existingCab of cabinetsMap.keys()) {
+        if (existingCab.toLowerCase() === cabName.toLowerCase()) {
+          return { cabinet: existingCab, shelf: shelfName || "Shelf A" };
+        }
+      }
+      return { cabinet: cabName, shelf: shelfName || "Shelf A" };
+    }
+
+    // 2. Keyword matching for known defaults
+    const lower = loc.toLowerCase();
     if (lower.includes("cabinet 1")) {
       const shelf = lower.includes("shelf b") ? "Shelf B" : lower.includes("shelf c") ? "Shelf C" : "Shelf A";
       return { cabinet: "Cabinet 1 (Cameras & Video)", shelf };
@@ -3006,23 +3080,13 @@ export async function getStorageMapData(): Promise<StorageCabinet[]> {
       return { cabinet: "Cable & Accessories Bay", shelf: "Tubs & Bins" };
     }
 
-    return { cabinet: loc || "Media Room Storage", shelf: "Main Shelf" };
-  }
-
-  const defaultCabinets = [
-    "Cabinet 1 (Cameras & Video)",
-    "Cabinet 2 (Lenses & Glass)",
-    "Audio Rack",
-    "Lighting & Grip Bay",
-    "Cable & Accessories Bay",
-  ];
-
-  for (const c of defaultCabinets) {
-    cabinetsMap.set(c, { shelvesMap: new Map([["Shelf A", []], ["Shelf B", []]]) });
+    // 3. Fallback
+    const firstCab = cabinetsMap.keys().next().value || "Media Room Storage";
+    return { cabinet: firstCab, shelf: "Main Shelf" };
   }
 
   for (const item of allEquipment) {
-    const { cabinet, shelf } = normalizeStorage(item.location);
+    const { cabinet, shelf } = resolveCabinetAndShelf(item.location);
     if (!cabinetsMap.has(cabinet)) {
       cabinetsMap.set(cabinet, { shelvesMap: new Map() });
     }
@@ -3069,5 +3133,6 @@ export async function getStorageMapData(): Promise<StorageCabinet[]> {
 
   return result;
 }
+
 
 

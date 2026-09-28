@@ -414,6 +414,42 @@ export async function ensureSchema(): Promise<void> {
       "CREATE TABLE audit_records"
     );
 
+    await runSafe(
+      () => sql`
+        CREATE TABLE IF NOT EXISTS storage_map_layout (
+          id SERIAL PRIMARY KEY,
+          key TEXT NOT NULL UNIQUE,
+          value TEXT NOT NULL,
+          updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+        );
+      `,
+      "CREATE TABLE storage_map_layout"
+    );
+
+    await runSafe(
+      () => sql`
+        CREATE OR REPLACE FUNCTION _mediahub_group_concat_step(text, text) RETURNS text AS $$
+          SELECT CASE
+            WHEN $1 IS NULL OR $1 = '' THEN $2
+            WHEN $2 IS NULL OR $2 = '' THEN $1
+            ELSE $1 || ',' || $2
+          END;
+        $$ LANGUAGE SQL IMMUTABLE;
+      `,
+      "CREATE FUNCTION _mediahub_group_concat_step"
+    );
+
+    await runSafe(
+      () => sql`
+        CREATE OR REPLACE AGGREGATE group_concat(text) (
+          SFUNC = _mediahub_group_concat_step,
+          STYPE = text,
+          INITCOND = ''
+        );
+      `,
+      "CREATE AGGREGATE group_concat"
+    );
+
     initialized = true;
   } catch (err) {
     console.error("Error ensuring Postgres schema:", err);
