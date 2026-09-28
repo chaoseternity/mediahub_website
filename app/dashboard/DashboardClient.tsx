@@ -45,16 +45,17 @@ export function DashboardClient({ initialData, role, userName }: DashboardClient
       const data = await res.json();
       if (res.ok) {
         alert(
-          `Webhook Broadcast Complete:\n\n` +
-            `• Configured Targets: ${data.channels.length > 0 ? data.channels.join(", ") : "None (Fallback logs created)"}\n` +
-            `• Summary: ${data.message}`
+          `Discord & Club Webhook Test Complete:\n\n` +
+            `• Configured Targets: ${data.channels.length > 0 ? data.channels.join(", ") : "Discord webhook URL pending (Logged to server console in dev mode)"}\n` +
+            `• Summary: ${data.message}\n\n` +
+            `Tip: Add DISCORD_WEBHOOK_URL to your environment variables to receive live gear alerts in Discord channels.`
         );
       } else {
         alert(data.error || "Failed to broadcast webhook");
       }
     } catch (err) {
       console.error("Webhook test failed:", err);
-      alert("Failed to trigger webhook broadcast.");
+      alert("Failed to trigger Discord webhook broadcast.");
     } finally {
       setIsTestingWebhook(false);
     }
@@ -151,14 +152,14 @@ export function DashboardClient({ initialData, role, userName }: DashboardClient
                 onClick={handleTestWebhook}
                 disabled={isTestingWebhook}
                 className="sm:w-auto gap-1.5"
-                title="Test broadcast webhook notification to configured club channels"
+                title="Test broadcast webhook notification to configured Discord channel"
               >
                 {isTestingWebhook ? (
                   <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
                 ) : (
-                  <Radio className="h-4 w-4 text-primary" />
+                  <Radio className="h-4 w-4 text-indigo-500" />
                 )}
-                Test Webhook
+                Discord Webhook
               </Button>
               <Button
                 variant="outline"

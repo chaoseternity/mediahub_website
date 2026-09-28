@@ -15,6 +15,10 @@ import {
   Filter,
   ArrowRight,
   ShieldAlert,
+  Calendar as CalendarIcon,
+  List,
+  ChevronLeft,
+  ChevronRight,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -68,6 +72,8 @@ export function ReservationsClient({
   const [reservations, setReservations] = useState<Reservation[]>(initialReservations);
   const [search, setSearch] = useState("");
   const [filterStatus, setFilterStatus] = useState<string>("all");
+  const [viewMode, setViewMode] = useState<"list" | "calendar">("calendar");
+  const [currentMonth, setCurrentMonth] = useState<Date>(new Date());
 
   // Create Modal State
   const [isCreateOpen, setIsCreateOpen] = useState(false);
@@ -226,36 +232,218 @@ export function ReservationsClient({
           />
         </div>
 
-        <div className="flex items-center gap-2 overflow-x-auto pb-1">
-          {["all", "confirmed", "fulfilled", "cancelled"].map((status) => (
+        <div className="flex flex-wrap items-center gap-2">
+          {/* View Mode Toggle */}
+          <div className="flex items-center rounded-lg border bg-muted/40 p-0.5">
             <Button
-              key={status}
-              variant={filterStatus === status ? "default" : "outline"}
+              variant={viewMode === "calendar" ? "default" : "ghost"}
               size="sm"
-              onClick={() => setFilterStatus(status)}
-              className="text-xs capitalize h-8"
+              onClick={() => setViewMode("calendar")}
+              className="h-7 text-xs gap-1 px-2.5"
             >
-              {status}
+              <CalendarIcon className="h-3.5 w-3.5" />
+              Calendar
             </Button>
-          ))}
+            <Button
+              variant={viewMode === "list" ? "default" : "ghost"}
+              size="sm"
+              onClick={() => setViewMode("list")}
+              className="h-7 text-xs gap-1 px-2.5"
+            >
+              <List className="h-3.5 w-3.5" />
+              List
+            </Button>
+          </div>
+
+          {/* Status Filters */}
+          <div className="flex items-center gap-1.5 overflow-x-auto pb-0.5">
+            {["all", "confirmed", "fulfilled", "cancelled"].map((status) => (
+              <Button
+                key={status}
+                variant={filterStatus === status ? "default" : "outline"}
+                size="sm"
+                onClick={() => setFilterStatus(status)}
+                className="text-xs capitalize h-8"
+              >
+                {status}
+              </Button>
+            ))}
+          </div>
         </div>
       </div>
 
-      {/* Reservation Cards List */}
-      {filtered.length === 0 ? (
-        <Card className="border-dashed bg-muted/20">
-          <CardContent className="py-12 text-center text-muted-foreground space-y-2">
-            <CalendarClock className="h-10 w-10 mx-auto opacity-30 text-muted-foreground" />
-            <p className="font-medium text-foreground">No reservations found</p>
-            <p className="text-xs">
-              {search || filterStatus !== "all"
-                ? "Try clearing your filters or search keywords."
-                : "Plan ahead and reserve cameras, lenses, and gear for upcoming productions."}
-            </p>
+      {/* Calendar View Mode */}
+      {viewMode === "calendar" && (
+        <Card className="border shadow-xs overflow-hidden">
+          <CardHeader className="p-4 border-b bg-muted/10 flex flex-row items-center justify-between space-y-0">
+            <div className="flex items-center gap-2">
+              <CalendarIcon className="h-5 w-5 text-primary" />
+              <CardTitle className="text-base sm:text-lg">
+                {currentMonth.toLocaleDateString("en-US", { month: "long", year: "numeric" })}
+              </CardTitle>
+            </div>
+            <div className="flex items-center gap-1.5">
+              <Button
+                variant="outline"
+                size="icon"
+                className="h-8 w-8"
+                onClick={() =>
+                  setCurrentMonth(
+                    new Date(currentMonth.getFullYear(), currentMonth.getMonth() - 1, 1)
+                  )
+                }
+              >
+                <ChevronLeft className="h-4 w-4" />
+              </Button>
+              <Button
+                variant="outline"
+                size="sm"
+                className="h-8 text-xs px-2.5"
+                onClick={() => setCurrentMonth(new Date())}
+              >
+                Today
+              </Button>
+              <Button
+                variant="outline"
+                size="icon"
+                className="h-8 w-8"
+                onClick={() =>
+                  setCurrentMonth(
+                    new Date(currentMonth.getFullYear(), currentMonth.getMonth() + 1, 1)
+                  )
+                }
+              >
+                <ChevronRight className="h-4 w-4" />
+              </Button>
+            </div>
+          </CardHeader>
+
+          <CardContent className="p-2 sm:p-4">
+            {/* Days of week header */}
+            <div className="grid grid-cols-7 gap-1 sm:gap-2 mb-2 text-center text-xs font-semibold text-muted-foreground">
+              {["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"].map((day) => (
+                <div key={day} className="py-1">
+                  {day}
+                </div>
+              ))}
+            </div>
+
+            {/* Monthly Calendar Grid */}
+            {(() => {
+              const year = currentMonth.getFullYear();
+              const month = currentMonth.getMonth();
+              const firstDayIndex = new Date(year, month, 1).getDay();
+              const daysInMonth = new Date(year, month + 1, 0).getDate();
+              const today = new Date();
+
+              const cells = [];
+              // Leading empty cells
+              for (let i = 0; i < firstDayIndex; i++) {
+                cells.push(
+                  <div
+                    key={`empty-${i}`}
+                    className="min-h-[90px] sm:min-h-[110px] p-1.5 bg-muted/10 rounded-lg border border-transparent opacity-40"
+                  />
+                );
+              }
+
+              // Days of month
+              for (let day = 1; day <= daysInMonth; day++) {
+                const dayDate = new Date(year, month, day);
+                const isToday =
+                  today.getDate() === day &&
+                  today.getMonth() === month &&
+                  today.getFullYear() === year;
+
+                // Find reservations active on this calendar day
+                const dayReservations = filtered.filter((r) => {
+                  const s = new Date(r.start_time);
+                  const e = new Date(r.end_time);
+                  const startOfDay = new Date(year, month, day, 0, 0, 0);
+                  const endOfDay = new Date(year, month, day, 23, 59, 59);
+                  return s <= endOfDay && e >= startOfDay;
+                });
+
+                cells.push(
+                  <div
+                    key={`day-${day}`}
+                    className={cn(
+                      "min-h-[90px] sm:min-h-[110px] p-1.5 rounded-lg border transition-all flex flex-col justify-between overflow-hidden",
+                      isToday
+                        ? "border-primary bg-primary/5 ring-1 ring-primary/30"
+                        : "border-border/60 bg-card hover:bg-muted/30"
+                    )}
+                  >
+                    <div className="flex items-center justify-between mb-1">
+                      <span
+                        className={cn(
+                          "text-xs font-semibold px-1.5 py-0.5 rounded-md",
+                          isToday ? "bg-primary text-primary-foreground" : "text-muted-foreground"
+                        )}
+                      >
+                        {day}
+                      </span>
+                      {dayReservations.length > 0 && (
+                        <span className="text-[10px] font-medium text-muted-foreground">
+                          {dayReservations.length} booked
+                        </span>
+                      )}
+                    </div>
+
+                    <div className="space-y-1 overflow-y-auto max-h-[75px] pr-0.5 scrollbar-thin">
+                      {dayReservations.map((r) => {
+                        const isConfirmed = r.status === "confirmed";
+                        return (
+                          <div
+                            key={r.id}
+                            className={cn(
+                              "text-[10px] px-1.5 py-1 rounded truncate flex items-center justify-between gap-1 shadow-2xs",
+                              isConfirmed
+                                ? "bg-blue-500/15 text-blue-700 dark:text-blue-300 border border-blue-500/30"
+                                : r.status === "fulfilled"
+                                ? "bg-green-500/15 text-green-700 dark:text-green-300 border border-green-500/30"
+                                : "bg-muted text-muted-foreground line-through"
+                            )}
+                            title={`${r.equipment_name} (${r.reserved_by_name})\n${fmtDate(r.start_time)} - ${fmtDate(r.end_time)}\nPurpose: ${r.notes || "None"}`}
+                          >
+                            <span className="font-semibold truncate">{r.equipment_name}</span>
+                            <span className="text-[9px] opacity-80 shrink-0 truncate max-w-[50px]">
+                              {r.reserved_by_name.split(" ")[0]}
+                            </span>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                );
+              }
+
+              return (
+                <div className="grid grid-cols-7 gap-1 sm:gap-2">
+                  {cells}
+                </div>
+              );
+            })()}
           </CardContent>
         </Card>
-      ) : (
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+      )}
+
+      {/* Reservation Cards List (List View Mode) */}
+      {viewMode === "list" && (
+        filtered.length === 0 ? (
+          <Card className="border-dashed bg-muted/20">
+            <CardContent className="py-12 text-center text-muted-foreground space-y-2">
+              <CalendarClock className="h-10 w-10 mx-auto opacity-30 text-muted-foreground" />
+              <p className="font-medium text-foreground">No reservations found</p>
+              <p className="text-xs">
+                {search || filterStatus !== "all"
+                  ? "Try clearing your filters or search keywords."
+                  : "Plan ahead and reserve cameras, lenses, and gear for upcoming productions."}
+              </p>
+            </CardContent>
+          </Card>
+        ) : (
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
           {filtered.map((res) => {
             const isOwner = currentUserId === res.reserved_by;
             const canManage = isAdmin || isOwner;
@@ -353,6 +541,7 @@ export function ReservationsClient({
             );
           })}
         </div>
+        )
       )}
 
       {/* New Reservation Modal */}
