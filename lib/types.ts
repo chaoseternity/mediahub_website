@@ -281,6 +281,144 @@ export interface ReminderProcessResult {
   }>;
 }
 
+// ---------------------------------------------------------------------------
+// Reservations (Feature 2)
+// ---------------------------------------------------------------------------
+
+export type ReservationStatus = "confirmed" | "cancelled" | "fulfilled";
+
+export interface Reservation {
+  id: number;
+  equipment_id: number;
+  reserved_by: number;
+  reserved_by_name: string;
+  start_time: string;
+  end_time: string;
+  status: ReservationStatus;
+  notes: string | null;
+  created_at: string;
+  equipment_name?: string;
+  equipment_serial_number?: string | null;
+  equipment_location?: string;
+  borrower_email?: string;
+}
+
+export interface ReservationConflictCheck {
+  hasConflict: boolean;
+  conflictingReservations: Reservation[];
+  activeCheckout?: {
+    id: number;
+    checked_out_by_name: string;
+    expected_return_at: string | null;
+  } | null;
+  alternatives: Equipment[];
+}
+
+// ---------------------------------------------------------------------------
+// Handover Protocol (Feature 3)
+// ---------------------------------------------------------------------------
+
+export type HandoverStatus = "active" | "claimed" | "expired" | "revoked";
+
+export interface HandoverCode {
+  id: number;
+  checkout_id: number;
+  equipment_id: number;
+  from_user_id: number;
+  code: string;
+  qr_payload: string;
+  expires_at: string;
+  status: HandoverStatus;
+  claimed_by: number | null;
+  claimed_at: string | null;
+  created_at: string;
+  equipment_name?: string;
+  equipment_serial_number?: string | null;
+  from_user_name?: string;
+  claimed_by_name?: string | null;
+}
+
+// ---------------------------------------------------------------------------
+// Inventory Audit Mode (Feature 5)
+// ---------------------------------------------------------------------------
+
+export type AuditSessionStatus = "in_progress" | "completed" | "cancelled";
+export type AuditRecordStatus = "exists" | "missing";
+
+export interface AuditSession {
+  id: number;
+  name: string;
+  started_by: number;
+  started_by_name?: string;
+  status: AuditSessionStatus;
+  started_at: string;
+  completed_at: string | null;
+  total_items: number;
+  found_count: number;
+  missing_count: number;
+  notes: string | null;
+}
+
+export interface AuditRecord {
+  id: number;
+  session_id: number;
+  equipment_id: number;
+  status: AuditRecordStatus;
+  scanned_at: string | null;
+  scanned_by: number | null;
+  scanned_by_name?: string | null;
+  method: "nfc" | "qr" | "manual" | null;
+  equipment_name?: string;
+  equipment_serial_number?: string | null;
+  equipment_location?: string;
+  equipment_condition?: Condition;
+  equipment_status?: EquipmentStatus;
+}
+
+// ---------------------------------------------------------------------------
+// Storage Map (Feature 8)
+// ---------------------------------------------------------------------------
+
+export interface StorageShelf {
+  id: string;
+  name: string;
+  items: Equipment[];
+}
+
+export interface StorageCabinet {
+  id: string;
+  name: string;
+  description?: string;
+  shelves: StorageShelf[];
+  totalItems: number;
+  availableCount: number;
+  checkedOutCount: number;
+  otherCount: number;
+}
+
+// ---------------------------------------------------------------------------
+// Webhooks (Feature 6)
+// ---------------------------------------------------------------------------
+
+export type WebhookEventType =
+  | "handover.completed"
+  | "reservation.created"
+  | "reservation.cancelled"
+  | "audit.completed"
+  | "reminder.overdue"
+  | "checkout.created"
+  | "return.completed"
+  | "webhook.test";
+
+export interface WebhookMessage {
+  event: WebhookEventType;
+  title: string;
+  description: string;
+  fields?: Array<{ name: string; value: string; inline?: boolean }>;
+  color?: number;
+  timestamp?: string;
+}
+
 // Extend next-auth Session type
 declare module "next-auth" {
   interface Session {

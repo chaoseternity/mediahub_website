@@ -48,7 +48,7 @@ const navGroups: NavGroup[] = [
     items: [
       { href: "/dashboard", label: "Equipment", icon: LayoutGrid, roles: ["admin", "verified", "viewer"] },
       { href: "/dashboard/events", label: "Events", icon: Calendar, roles: ["admin", "verified", "viewer"] },
-      { href: "/dashboard/scan", label: "Scan QR", icon: QrCode, roles: ["admin", "verified"] },
+      { href: "/dashboard/scan", label: "Scan QR", icon: QrCode, roles: ["admin", "verified", "viewer"] },
       { href: "/dashboard/nfc", label: "NFC Station", icon: Nfc, roles: ["admin", "verified"] },
     ],
   },
@@ -67,7 +67,7 @@ const navGroups: NavGroup[] = [
   {
     title: "Admin & Settings",
     items: [
-      { href: "/dashboard/tags", label: "Tags", icon: Tag, roles: ["admin", "verified", "viewer"] },
+      { href: "/dashboard/tags", label: "Tags", icon: Tag, roles: ["admin"] },
       { href: "/dashboard/users", label: "Users", icon: UsersIcon, roles: ["admin"] },
     ],
   },

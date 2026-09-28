@@ -4,7 +4,7 @@ import { useState } from "react";
 import dynamic from "next/dynamic";
 import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button";
-import { Plus, Package, Download, Upload, Bell, Loader2 } from "lucide-react";
+import { Plus, Package, Download, Upload, Bell, Loader2, Radio } from "lucide-react";
 import { AddEquipmentModal } from "@/components/AddEquipmentModal";
 import { UploadEquipmentModal } from "@/components/UploadEquipmentModal";
 import { generateEquipmentExcel } from "@/lib/excel";
@@ -35,6 +35,30 @@ export function DashboardClient({ initialData, role, userName }: DashboardClient
       i.expected_return_at &&
       new Date() > new Date(i.expected_return_at)
   ).length;
+
+  const [isTestingWebhook, setIsTestingWebhook] = useState(false);
+
+  async function handleTestWebhook() {
+    try {
+      setIsTestingWebhook(true);
+      const res = await fetch("/api/webhooks/test", { method: "POST" });
+      const data = await res.json();
+      if (res.ok) {
+        alert(
+          `Webhook Broadcast Complete:\n\n` +
+            `• Configured Targets: ${data.channels.length > 0 ? data.channels.join(", ") : "None (Fallback logs created)"}\n` +
+            `• Summary: ${data.message}`
+        );
+      } else {
+        alert(data.error || "Failed to broadcast webhook");
+      }
+    } catch (err) {
+      console.error("Webhook test failed:", err);
+      alert("Failed to trigger webhook broadcast.");
+    } finally {
+      setIsTestingWebhook(false);
+    }
+  }
 
   async function handleTriggerReminders() {
     try {
@@ -122,6 +146,20 @@ export function DashboardClient({ initialData, role, userName }: DashboardClient
 
           {role === "admin" && (
             <>
+              <Button
+                variant="outline"
+                onClick={handleTestWebhook}
+                disabled={isTestingWebhook}
+                className="sm:w-auto gap-1.5"
+                title="Test broadcast webhook notification to configured club channels"
+              >
+                {isTestingWebhook ? (
+                  <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
+                ) : (
+                  <Radio className="h-4 w-4 text-primary" />
+                )}
+                Test Webhook
+              </Button>
               <Button
                 variant="outline"
                 onClick={handleTriggerReminders}

@@ -1,7 +1,6 @@
 import type { Metadata } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
 import { SessionProvider } from "next-auth/react";
-import { SpeedInsights } from "@vercel/speed-insights/next";
 import { ThemeProvider } from "@/components/ThemeProvider";
 import { ServiceWorkerRegister } from "@/components/ServiceWorkerRegister";
 import "./globals.css";
@@ -53,7 +52,6 @@ export default function RootLayout({
         >
           <SessionProvider>{children}</SessionProvider>
           <ServiceWorkerRegister />
-          <SpeedInsights />
         </ThemeProvider>
       </body>
     </html>

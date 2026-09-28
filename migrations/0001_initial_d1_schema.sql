@@ -1,0 +1,134 @@
+-- Cloudflare D1 initial schema for MediaHub
+-- Run with: wrangler d1 migrations apply inventory-tracker-db --local (or --remote)
+
+CREATE TABLE IF NOT EXISTS users (
+  id         INTEGER PRIMARY KEY AUTOINCREMENT,
+  name       TEXT    NOT NULL,
+  email      TEXT    NOT NULL UNIQUE,
+  username   TEXT    UNIQUE,
+  google_id  TEXT,
+  image      TEXT,
+  role       TEXT    NOT NULL DEFAULT 'viewer' CHECK(role IN ('admin','verified','viewer')),
+  provider   TEXT,
+  created_at TEXT    NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE TABLE IF NOT EXISTS nfc_cards (
+  id          INTEGER PRIMARY KEY AUTOINCREMENT,
+  nfc_value   TEXT    NOT NULL UNIQUE,
+  member_name TEXT    NOT NULL,
+  notes       TEXT,
+  created_at  TEXT    NOT NULL DEFAULT (datetime('now')),
+  updated_at  TEXT    NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE TABLE IF NOT EXISTS tags (
+  id   INTEGER PRIMARY KEY AUTOINCREMENT,
+  name TEXT NOT NULL UNIQUE
+);
+
+CREATE TABLE IF NOT EXISTS equipment (
+  id            INTEGER PRIMARY KEY AUTOINCREMENT,
+  name          TEXT    NOT NULL,
+  description   TEXT,
+  serial_number TEXT,
+  condition     TEXT    NOT NULL DEFAULT 'Working'
+                CHECK(condition IN ('Working','Impaired','Broken','Missing','Retired')),
+  quantity      INTEGER NOT NULL DEFAULT 1,
+  location      TEXT    NOT NULL,
+  status        TEXT    NOT NULL DEFAULT 'Available'
+                CHECK(status IN ('Available','Checked Out','In Event','In Event (Rehearsal)','Unavailable (In Repairs)','Unavailable (Broken)','Unavailable (Missing)','Unavailable (Retired)')),
+  created_at    TEXT    NOT NULL DEFAULT (datetime('now')),
+  updated_at    TEXT    NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE TABLE IF NOT EXISTS equipment_tags (
+  equipment_id INTEGER NOT NULL REFERENCES equipment(id) ON DELETE CASCADE,
+  tag_id       INTEGER NOT NULL REFERENCES tags(id) ON DELETE CASCADE,
+  PRIMARY KEY (equipment_id, tag_id)
+);
+
+CREATE TABLE IF NOT EXISTS checkouts (
+  id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+  equipment_id        INTEGER NOT NULL REFERENCES equipment(id) ON DELETE CASCADE,
+  checked_out_by      INTEGER REFERENCES users(id),
+  checked_out_by_name TEXT    NOT NULL,
+  checked_out_at      TEXT    NOT NULL DEFAULT (datetime('now')),
+  expected_return_at  TEXT,
+  returned_at         TEXT,
+  notes               TEXT,
+  checkout_location   TEXT,
+  nfc_value           TEXT,
+  nfc_id              TEXT
+);
+
+CREATE TABLE IF NOT EXISTS events (
+  id                   INTEGER PRIMARY KEY AUTOINCREMENT,
+  name                 TEXT    NOT NULL,
+  description          TEXT,
+  start_time           TEXT    NOT NULL,
+  end_time             TEXT    NOT NULL,
+  location             TEXT    NOT NULL,
+  created_by           INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  has_rehearsal        INTEGER DEFAULT 0,
+  rehearsal_start_time TEXT,
+  rehearsal_end_time   TEXT,
+  created_at           TEXT    NOT NULL DEFAULT (datetime('now')),
+  updated_at           TEXT    NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE TABLE IF NOT EXISTS event_oics (
+  event_id INTEGER NOT NULL REFERENCES events(id) ON DELETE CASCADE,
+  user_id  INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  PRIMARY KEY (event_id, user_id)
+);
+
+CREATE TABLE IF NOT EXISTS event_ics (
+  event_id INTEGER NOT NULL REFERENCES events(id) ON DELETE CASCADE,
+  user_id  INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  section  TEXT    NOT NULL DEFAULT 'photo' CHECK(section IN ('photo','video','av')),
+  PRIMARY KEY (event_id, user_id, section)
+);
+
+CREATE TABLE IF NOT EXISTS event_equipment (
+  event_id           INTEGER NOT NULL REFERENCES events(id) ON DELETE CASCADE,
+  equipment_id       INTEGER NOT NULL REFERENCES equipment(id) ON DELETE CASCADE,
+  section            TEXT    NOT NULL DEFAULT 'photo' CHECK(section IN ('photo','video','av')),
+  used_for_rehearsal INTEGER DEFAULT 0,
+  added_by           INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  added_at           TEXT    NOT NULL DEFAULT (datetime('now')),
+  PRIMARY KEY (event_id, equipment_id, section)
+);
+
+CREATE TABLE IF NOT EXISTS event_deployments (
+  event_id            INTEGER NOT NULL REFERENCES events(id) ON DELETE CASCADE,
+  user_id             INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  section             TEXT    NOT NULL DEFAULT 'photo' CHECK(section IN ('photo','video','av')),
+  attending_rehearsal INTEGER DEFAULT 0,
+  added_by            INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  added_at            TEXT    NOT NULL DEFAULT (datetime('now')),
+  response_status     TEXT    NOT NULL DEFAULT 'pending' CHECK(response_status IN ('pending', 'confirmed', 'declined')),
+  response_token      TEXT,
+  responded_at        TEXT,
+  PRIMARY KEY (event_id, user_id, section)
+);
+
+CREATE TABLE IF NOT EXISTS event_section_rehearsals (
+  event_id      INTEGER NOT NULL REFERENCES events(id) ON DELETE CASCADE,
+  section       TEXT    NOT NULL CHECK(section IN ('photo','video','av')),
+  participating INTEGER DEFAULT 0,
+  PRIMARY KEY (event_id, section)
+);
+
+CREATE TABLE IF NOT EXISTS sop_documents (
+  id           INTEGER PRIMARY KEY AUTOINCREMENT,
+  title        TEXT    NOT NULL,
+  category     TEXT    NOT NULL DEFAULT 'General',
+  content      TEXT    NOT NULL,
+  file_name    TEXT,
+  file_type    TEXT,
+  file_size    INTEGER,
+  uploaded_by  INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  created_at   TEXT    NOT NULL DEFAULT (datetime('now')),
+  updated_at   TEXT    NOT NULL DEFAULT (datetime('now'))
+);

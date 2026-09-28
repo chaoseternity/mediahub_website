@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { AlertCircle, Camera, RefreshCcw, Barcode, QrCode, Zap, CheckCircle2 } from "lucide-react";
+import { AlertCircle, Camera, RefreshCcw, Barcode, QrCode, Zap, CheckCircle2, Handshake } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
@@ -100,9 +100,48 @@ export function QRScannerClient({ equipment, role, userName }: QRScannerClientPr
   const equipmentRef = useRef(equipment);
   equipmentRef.current = equipment;
 
-  function handleCodeRecognized(rawCode: string) {
+  async function handleCodeRecognized(rawCode: string) {
     const code = rawCode.trim();
     if (!code) return;
+
+    // Check if scanned code is a Handover QR JSON or HD- code
+    let handoverCodeToClaim: string | null = null;
+    if (code.startsWith("HD-")) {
+      handoverCodeToClaim = code;
+    } else if (code.startsWith("{") && code.includes("HANDOVER")) {
+      try {
+        const parsed = JSON.parse(code);
+        if (parsed.type === "HANDOVER" && parsed.code) {
+          handoverCodeToClaim = parsed.code;
+        }
+      } catch {
+        // ignore parse error
+      }
+    }
+
+    if (handoverCodeToClaim) {
+      playScanBeep();
+      try {
+        const res = await fetch("/api/handover/claim", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ code: handoverCodeToClaim }),
+        });
+        const data = await res.json();
+        if (res.ok) {
+          alert(`Handover Successful! 🎉\n\nYou are now in possession of: ${data.equipment.name} (${data.equipment.serial_number || "No Serial"}).`);
+          window.location.reload();
+          return;
+        } else {
+          alert(`Handover Claim Failed: ${data.error}`);
+          return;
+        }
+      } catch (err) {
+        console.error(err);
+        alert("Failed to process handover claim.");
+        return;
+      }
+    }
 
     const found = findEquipmentByCode(equipmentRef.current, code);
     if (found) {
@@ -264,6 +303,10 @@ export function QRScannerClient({ equipment, role, userName }: QRScannerClientPr
         <Badge variant="outline" className="gap-1 text-xs py-1 px-2.5 bg-background font-medium">
           <Barcode className="h-3.5 w-3.5 text-primary" />
           Barcodes (Code128 / UPC)
+        </Badge>
+        <Badge variant="outline" className="gap-1 text-xs py-1 px-2.5 bg-background font-medium">
+          <Handshake className="h-3.5 w-3.5 text-indigo-500" />
+          Peer Handover (HD-XXXX)
         </Badge>
         <Badge variant="outline" className="gap-1 text-xs py-1 px-2.5 bg-primary/10 text-primary border-primary/20 font-medium">
           <Zap className="h-3.5 w-3.5" />

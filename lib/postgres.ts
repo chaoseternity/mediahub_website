@@ -344,6 +344,76 @@ export async function ensureSchema(): Promise<void> {
       "CREATE TABLE checkout_reminders"
     );
 
+    await runSafe(
+      () => sql`
+        CREATE TABLE IF NOT EXISTS reservations (
+          id SERIAL PRIMARY KEY,
+          equipment_id INT NOT NULL REFERENCES equipment(id) ON DELETE CASCADE,
+          reserved_by INT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+          reserved_by_name TEXT NOT NULL,
+          start_time TIMESTAMP WITH TIME ZONE NOT NULL,
+          end_time TIMESTAMP WITH TIME ZONE NOT NULL,
+          status TEXT NOT NULL DEFAULT 'confirmed' CHECK(status IN ('confirmed', 'cancelled', 'fulfilled')),
+          notes TEXT,
+          created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+        );
+      `,
+      "CREATE TABLE reservations"
+    );
+
+    await runSafe(
+      () => sql`
+        CREATE TABLE IF NOT EXISTS handover_codes (
+          id SERIAL PRIMARY KEY,
+          checkout_id INT NOT NULL REFERENCES checkouts(id) ON DELETE CASCADE,
+          equipment_id INT NOT NULL REFERENCES equipment(id) ON DELETE CASCADE,
+          from_user_id INT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+          code TEXT NOT NULL UNIQUE,
+          qr_payload TEXT NOT NULL,
+          expires_at TIMESTAMP WITH TIME ZONE NOT NULL,
+          status TEXT NOT NULL DEFAULT 'active' CHECK(status IN ('active', 'claimed', 'expired', 'revoked')),
+          claimed_by INT REFERENCES users(id) ON DELETE SET NULL,
+          claimed_at TIMESTAMP WITH TIME ZONE,
+          created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+        );
+      `,
+      "CREATE TABLE handover_codes"
+    );
+
+    await runSafe(
+      () => sql`
+        CREATE TABLE IF NOT EXISTS audit_sessions (
+          id SERIAL PRIMARY KEY,
+          name TEXT NOT NULL,
+          started_by INT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+          status TEXT NOT NULL DEFAULT 'in_progress' CHECK(status IN ('in_progress', 'completed', 'cancelled')),
+          started_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+          completed_at TIMESTAMP WITH TIME ZONE,
+          total_items INT DEFAULT 0,
+          found_count INT DEFAULT 0,
+          missing_count INT DEFAULT 0,
+          notes TEXT
+        );
+      `,
+      "CREATE TABLE audit_sessions"
+    );
+
+    await runSafe(
+      () => sql`
+        CREATE TABLE IF NOT EXISTS audit_records (
+          id SERIAL PRIMARY KEY,
+          session_id INT NOT NULL REFERENCES audit_sessions(id) ON DELETE CASCADE,
+          equipment_id INT NOT NULL REFERENCES equipment(id) ON DELETE CASCADE,
+          status TEXT NOT NULL DEFAULT 'missing' CHECK(status IN ('exists', 'missing')),
+          scanned_at TIMESTAMP WITH TIME ZONE,
+          scanned_by INT REFERENCES users(id) ON DELETE SET NULL,
+          method TEXT CHECK(method IN ('nfc', 'qr', 'manual')),
+          UNIQUE(session_id, equipment_id)
+        );
+      `,
+      "CREATE TABLE audit_records"
+    );
+
     initialized = true;
   } catch (err) {
     console.error("Error ensuring Postgres schema:", err);
