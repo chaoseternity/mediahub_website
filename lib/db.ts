@@ -2494,22 +2494,27 @@ export async function getReservations(filter?: {
   status?: ReservationStatus;
 }): Promise<Reservation[]> {
   await ensureReservationsTable();
-  const { rows } = await sql<Reservation>`
-    SELECT 
-      r.*,
-      e.name AS equipment_name,
-      e.serial_number AS equipment_serial_number,
-      e.location AS equipment_location,
-      u.email AS borrower_email
-    FROM reservations r
-    JOIN equipment e ON e.id = r.equipment_id
-    JOIN users u ON u.id = r.reserved_by
-    WHERE (${filter?.equipment_id ?? null} IS NULL OR r.equipment_id = ${filter?.equipment_id})
-      AND (${filter?.reserved_by ?? null} IS NULL OR r.reserved_by = ${filter?.reserved_by})
-      AND (${filter?.status ?? null} IS NULL OR r.status = ${filter?.status})
-    ORDER BY r.start_time ASC
-  `;
-  return rows;
+  try {
+    const { rows } = await sql<Reservation>`
+      SELECT 
+        r.*,
+        e.name AS equipment_name,
+        e.serial_number AS equipment_serial_number,
+        e.location AS equipment_location,
+        u.email AS borrower_email
+      FROM reservations r
+      JOIN equipment e ON e.id = r.equipment_id
+      JOIN users u ON u.id = r.reserved_by
+      WHERE (${filter?.equipment_id ?? null} IS NULL OR r.equipment_id = ${filter?.equipment_id})
+        AND (${filter?.reserved_by ?? null} IS NULL OR r.reserved_by = ${filter?.reserved_by})
+        AND (${filter?.status ?? null} IS NULL OR r.status = ${filter?.status})
+      ORDER BY r.start_time ASC
+    `;
+    return rows;
+  } catch (err: any) {
+    console.warn("Notice: getReservations fallback catch:", err);
+    return [];
+  }
 }
 
 export async function getReservationById(id: number): Promise<Reservation | undefined> {
@@ -2803,15 +2808,20 @@ export async function startAuditSession(params: {
 
 export async function getActiveAuditSession(): Promise<AuditSession | null> {
   await ensureAuditTables();
-  const { rows } = await sql<AuditSession>`
-    SELECT a.*, u.name AS started_by_name
-    FROM audit_sessions a
-    JOIN users u ON u.id = a.started_by
-    WHERE a.status = 'in_progress'
-    ORDER BY a.started_at DESC
-    LIMIT 1
-  `;
-  return rows[0] ?? null;
+  try {
+    const { rows } = await sql<AuditSession>`
+      SELECT a.*, u.name AS started_by_name
+      FROM audit_sessions a
+      JOIN users u ON u.id = a.started_by
+      WHERE a.status = 'in_progress'
+      ORDER BY a.started_at DESC
+      LIMIT 1
+    `;
+    return rows[0] ?? null;
+  } catch (err: any) {
+    console.warn("Notice: getActiveAuditSession fallback catch:", err);
+    return null;
+  }
 }
 
 export async function recordAuditScan(params: {
