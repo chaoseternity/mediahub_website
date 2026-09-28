@@ -14,15 +14,16 @@ export async function POST(req: NextRequest) {
 
   try {
     const body = await req.json();
-    const { session_id, mark_missing_in_catalog } = body;
+    const rawSessionId = body.session_id ?? body.sessionId;
+    const markMissing = body.mark_missing_in_catalog ?? body.markMissingInCatalog;
 
-    const sId = Number(session_id);
+    const sId = Number(rawSessionId);
     if (!Number.isInteger(sId) || sId <= 0) {
       return NextResponse.json({ error: "Invalid session ID." }, { status: 400 });
     }
 
     const result = await completeAuditSession(sId, {
-      markMissingAsCatalogMissing: Boolean(mark_missing_in_catalog),
+      markMissingAsCatalogMissing: Boolean(markMissing),
     });
 
     if (!result.success) {

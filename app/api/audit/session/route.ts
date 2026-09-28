@@ -55,7 +55,9 @@ export async function POST(req: NextRequest) {
       notes,
     });
 
-    return NextResponse.json(auditSession, { status: 201 });
+    const details = await getAuditSessionDetails(auditSession.id);
+
+    return NextResponse.json({ ...auditSession, ...(details || { records: [] }) }, { status: 201 });
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : "Failed to start audit session.";
     return NextResponse.json({ error: message }, { status: 400 });
