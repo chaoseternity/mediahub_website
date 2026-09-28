@@ -62,7 +62,14 @@ export async function ensureSchema(): Promise<void> {
   const d1 = await getD1Database();
   if (d1) {
     try {
-      // Execute each statement to auto-create missing tables and indexes on D1
+      if (typeof (d1 as any).exec === "function") {
+        await (d1 as any).exec(SCHEMA_SQL);
+      }
+    } catch {
+      // If batch exec encounters an existing entity or syntax variation, proceed to individual statements
+    }
+
+    try {
       const statements = SCHEMA_SQL
         .split(";")
         .map((s) => s.trim())
@@ -70,7 +77,11 @@ export async function ensureSchema(): Promise<void> {
 
       for (const statement of statements) {
         try {
-          await d1.prepare(statement).run();
+          if (typeof (d1 as any).exec === "function") {
+            await (d1 as any).exec(statement);
+          } else {
+            await d1.prepare(statement).run();
+          }
         } catch {
           // If a table or index already exists, continue gracefully
         }
