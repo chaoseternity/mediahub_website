@@ -23,6 +23,7 @@ import {
   XCircle,
   RotateCcw,
   Sparkles,
+  Handshake,
 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -41,6 +42,7 @@ import { Label } from "@/components/ui/label";
 import { cn, roleBadgeClass } from "@/lib/utils";
 import type { Role, UserProfileData, UserProfileCheckout, UserProfileEvent } from "@/lib/types";
 import { EventDetailModal } from "@/components/EventDetailModal";
+import { HandoverModal } from "@/components/HandoverModal";
 
 interface ProfileClientProps {
   initialData: UserProfileData;
@@ -96,6 +98,7 @@ export function ProfileClient({
 
   // Edit username modal state
   const [editUsernameOpen, setEditUsernameOpen] = useState(false);
+  const [handoverEquipment, setHandoverEquipment] = useState<{ id: number; name: string } | null>(null);
   const [newUsername, setNewUsername] = useState(data.user.username ?? data.user.name ?? "");
   const [updatingUsername, setUpdatingUsername] = useState(false);
   const [usernameError, setUsernameError] = useState<string | null>(null);
@@ -427,22 +430,41 @@ export function ProfileClient({
                         )}
                       </CardContent>
 
-                      <div className="px-4 py-2.5 bg-muted/20 border-t flex items-center justify-between">
-                        <span className="text-[11px] text-muted-foreground">
+                      <div className="px-4 py-2.5 bg-muted/20 border-t flex items-center justify-between gap-2">
+                        <span className="text-[11px] text-muted-foreground truncate">
                           Condition: <strong className="text-foreground">{eq.equipment_condition}</strong>
                         </span>
-                        {canReturnEquipment && (
-                          <Button
-                            variant="outline"
-                            size="sm"
-                            disabled={isReturning}
-                            onClick={() => handleReturn(eq)}
-                            className="h-7 text-xs gap-1"
-                          >
-                            <RotateCcw className="h-3 w-3" />
-                            {isReturning ? "Returning..." : "Mark Returned"}
-                          </Button>
-                        )}
+                        <div className="flex items-center gap-1.5 shrink-0">
+                          {isSelf && (
+                            <Button
+                              variant="secondary"
+                              size="sm"
+                              onClick={() =>
+                                setHandoverEquipment({
+                                  id: eq.equipment_id,
+                                  name: eq.equipment_name,
+                                })
+                              }
+                              className="h-7 text-xs gap-1 text-indigo-600 dark:text-indigo-400 bg-indigo-50 dark:bg-indigo-950/40 hover:bg-indigo-100 dark:hover:bg-indigo-900/50 border border-indigo-200 dark:border-indigo-850"
+                              title="Generate temporary QR code to hand over this gear to a peer"
+                            >
+                              <Handshake className="h-3 w-3" />
+                              Handover
+                            </Button>
+                          )}
+                          {canReturnEquipment && (
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              disabled={isReturning}
+                              onClick={() => handleReturn(eq)}
+                              className="h-7 text-xs gap-1"
+                            >
+                              <RotateCcw className="h-3 w-3" />
+                              {isReturning ? "Returning..." : "Mark Returned"}
+                            </Button>
+                          )}
+                        </div>
                       </div>
                     </Card>
                   );
@@ -845,6 +867,19 @@ export function ProfileClient({
           </form>
         </DialogContent>
       </Dialog>
+
+      {handoverEquipment && (
+        <HandoverModal
+          open={!!handoverEquipment}
+          onClose={() => setHandoverEquipment(null)}
+          equipmentId={handoverEquipment.id}
+          equipmentName={handoverEquipment.name}
+          onHandoverComplete={() => {
+            setHandoverEquipment(null);
+            router.refresh();
+          }}
+        />
+      )}
     </div>
   );
 }

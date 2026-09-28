@@ -30,8 +30,20 @@ import type {
   ReminderType,
   CheckoutReminder,
   ReminderProcessResult,
+  Reservation,
+  ReservationStatus,
+  ReservationConflictCheck,
+  HandoverCode,
+  HandoverStatus,
+  AuditSession,
+  AuditSessionStatus,
+  AuditRecord,
+  AuditRecordStatus,
+  StorageCabinet,
+  StorageShelf,
 } from "./types";
 import { sendDeploymentInvitationEmail, sendOverdueReminderEmail } from "./email";
+import { sendClubWebhook } from "./webhook";
 
 function getAdminEmails(): Set<string> {
   const raw = process.env.ADMIN_EMAILS ?? "";
@@ -384,6 +396,7 @@ export async function upsertUser(params: {
   google_id: string;
   image: string | null;
   provider: string;
+  role?: Role;
 }): Promise<User> {
   await ensureSchema();
   const normalizedEmail = params.email.trim().toLowerCase();
@@ -392,7 +405,7 @@ export async function upsertUser(params: {
   const isAdminEmail = adminEmails.has(normalizedEmail);
 
   if (existing) {
-    const newRole = isAdminEmail && existing.role !== "admin" ? "admin" : existing.role;
+    const newRole = params.role ?? (isAdminEmail && existing.role !== "admin" ? "admin" : existing.role);
     const newImage = params.image ?? existing.image;
     await sql`
       UPDATE users
@@ -407,7 +420,7 @@ export async function upsertUser(params: {
   }
 
   const count = await countUsers();
-  const role: Role = isAdminEmail || count === 0 ? "admin" : "viewer";
+  const role: Role = params.role ?? (isAdminEmail || count === 0 ? "admin" : "viewer");
 
   const { rows } = await sql<User>`
     INSERT INTO users (name, email, google_id, image, role, provider)
@@ -1188,6 +1201,17 @@ export async function returnCheckout(equipment_id: number): Promise<Checkout> {
   }
 
   await sql`UPDATE equipment SET status = ${returnedStatus}, updated_at = CURRENT_TIMESTAMP WHERE id = ${equipment_id}`;
+  return rows[0];
+}
+
+export async function getActiveCheckoutByEquipmentId(equipmentId: number): Promise<Checkout | undefined> {
+  await ensureSchema();
+  const { rows } = await sql<Checkout>`
+    SELECT * FROM checkouts 
+    WHERE equipment_id = ${equipmentId} AND returned_at IS NULL 
+    ORDER BY checked_out_at DESC 
+    LIMIT 1
+  `;
   return rows[0];
 }
 
@@ -2227,4 +2251,743 @@ export async function processReturnReminders(options?: {
     reminders: remindersResult,
   };
 }
+
+// ---------------------------------------------------------------------------
+// Reservations (Feature 2)
+// ---------------------------------------------------------------------------
+
+export async function ensureReservationsTable(): Promise<void> {
+  await ensureSchema();
+}
+
+export async function checkReservationConflict(
+  equipmentId: number,
+  startTime: string,
+  endTime: string,
+  excludeReservationId?: number
+): Promise<ReservationConflictCheck> {
+  await ensureReservationsTable();
+
+  // 1. Conflicting active reservations
+  let query;
+  if (excludeReservationId) {
+    query = sql<Reservation>`
+      SELECT r.*, e.name AS equipment_name, e.serial_number AS equipment_serial_number, e.location AS equipment_location
+      FROM reservations r
+      JOIN equipment e ON e.id = r.equipment_id
+      WHERE r.equipment_id = ${equipmentId}
+        AND r.status = 'confirmed'
+        AND r.id != ${excludeReservationId}
+        AND (r.start_time < ${endTime} AND r.end_time > ${startTime})
+      ORDER BY r.start_time ASC
+    `;
+  } else {
+    query = sql<Reservation>`
+      SELECT r.*, e.name AS equipment_name, e.serial_number AS equipment_serial_number, e.location AS equipment_location
+      FROM reservations r
+      JOIN equipment e ON e.id = r.equipment_id
+      WHERE r.equipment_id = ${equipmentId}
+        AND r.status = 'confirmed'
+        AND (r.start_time < ${endTime} AND r.end_time > ${startTime})
+      ORDER BY r.start_time ASC
+    `;
+  }
+  const { rows: conflictingReservations } = await query;
+
+  // 2. Active checkout check (if the reservation starts in the past or now, and item is currently out)
+  const activeCheckoutRes = await sql<{
+    id: number;
+    checked_out_by_name: string;
+    expected_return_at: string | null;
+  }>`
+    SELECT id, checked_out_by_name, expected_return_at
+    FROM checkouts
+    WHERE equipment_id = ${equipmentId} AND returned_at IS NULL
+    LIMIT 1
+  `;
+  const activeCheckout = activeCheckoutRes.rows[0] ?? null;
+
+  const hasConflict = conflictingReservations.length > 0;
+
+  // 3. Find available alternatives with similar tags if conflict exists
+  const alternatives: Equipment[] = [];
+  if (hasConflict) {
+    const allEq = await getAllEquipment();
+    const targetEq = allEq.find((e) => e.id === equipmentId);
+    if (targetEq && targetEq.tags.length > 0) {
+      for (const candidate of allEq) {
+        if (candidate.id === equipmentId) continue;
+        if (candidate.status !== "Available" && candidate.status !== "Checked Out") continue;
+        const hasCommonTag = candidate.tags.some((t) => targetEq.tags.includes(t));
+        if (hasCommonTag) {
+          const candConf = await sql`
+            SELECT id FROM reservations
+            WHERE equipment_id = ${candidate.id}
+              AND status = 'confirmed'
+              AND (start_time < ${endTime} AND end_time > ${startTime})
+            LIMIT 1
+          `;
+          if (candConf.rows.length === 0) {
+            alternatives.push(candidate);
+            if (alternatives.length >= 4) break;
+          }
+        }
+      }
+    }
+  }
+
+  return {
+    hasConflict,
+    conflictingReservations,
+    activeCheckout,
+    alternatives,
+  };
+}
+
+export async function createReservation(params: {
+  equipment_id: number;
+  reserved_by: number;
+  reserved_by_name: string;
+  start_time: string;
+  end_time: string;
+  notes?: string | null;
+}): Promise<Reservation> {
+  await ensureReservationsTable();
+  const startMs = new Date(params.start_time).getTime();
+  const endMs = new Date(params.end_time).getTime();
+
+  if (isNaN(startMs) || isNaN(endMs) || startMs >= endMs) {
+    throw new Error("Invalid timeframe: start_time must be strictly before end_time.");
+  }
+
+  const conflict = await checkReservationConflict(params.equipment_id, params.start_time, params.end_time);
+  if (conflict.hasConflict) {
+    throw new Error(
+      `Equipment already reserved between ${conflict.conflictingReservations[0].start_time} and ${conflict.conflictingReservations[0].end_time}.`
+    );
+  }
+
+  const { rows } = await sql<Reservation>`
+    INSERT INTO reservations (equipment_id, reserved_by, reserved_by_name, start_time, end_time, status, notes)
+    VALUES (${params.equipment_id}, ${params.reserved_by}, ${params.reserved_by_name}, ${params.start_time}, ${params.end_time}, 'confirmed', ${params.notes ?? null})
+    RETURNING *
+  `;
+
+  const newRes = rows[0];
+  const eq = await getEquipmentById(params.equipment_id);
+
+  // Send webhook notification
+  await sendClubWebhook({
+    event: "reservation.created",
+    title: `📅 New Reservation: ${eq?.name || "Equipment"}`,
+    description: `**${params.reserved_by_name}** has reserved **${eq?.name || "Equipment"}** from ${new Date(params.start_time).toLocaleString()} to ${new Date(params.end_time).toLocaleString()}.`,
+    fields: [
+      { name: "Equipment", value: eq?.name || "N/A" },
+      { name: "Location", value: eq?.location || "Media Room" },
+      { name: "Reserved By", value: params.reserved_by_name },
+      { name: "Notes", value: params.notes || "None" },
+    ],
+  });
+
+  return {
+    ...newRes,
+    equipment_name: eq?.name,
+    equipment_serial_number: eq?.serial_number,
+    equipment_location: eq?.location,
+  };
+}
+
+export async function getReservations(filter?: {
+  equipment_id?: number;
+  reserved_by?: number;
+  status?: ReservationStatus;
+}): Promise<Reservation[]> {
+  await ensureReservationsTable();
+  const { rows } = await sql<Reservation>`
+    SELECT 
+      r.*,
+      e.name AS equipment_name,
+      e.serial_number AS equipment_serial_number,
+      e.location AS equipment_location,
+      u.email AS borrower_email
+    FROM reservations r
+    JOIN equipment e ON e.id = r.equipment_id
+    JOIN users u ON u.id = r.reserved_by
+    WHERE (${filter?.equipment_id ?? null} IS NULL OR r.equipment_id = ${filter?.equipment_id})
+      AND (${filter?.reserved_by ?? null} IS NULL OR r.reserved_by = ${filter?.reserved_by})
+      AND (${filter?.status ?? null} IS NULL OR r.status = ${filter?.status})
+    ORDER BY r.start_time ASC
+  `;
+  return rows;
+}
+
+export async function getReservationById(id: number): Promise<Reservation | undefined> {
+  if (!Number.isInteger(id) || id <= 0) return undefined;
+  await ensureReservationsTable();
+  const { rows } = await sql<Reservation>`
+    SELECT 
+      r.*,
+      e.name AS equipment_name,
+      e.serial_number AS equipment_serial_number,
+      e.location AS equipment_location,
+      u.email AS borrower_email
+    FROM reservations r
+    JOIN equipment e ON e.id = r.equipment_id
+    JOIN users u ON u.id = r.reserved_by
+    WHERE r.id = ${id}
+  `;
+  return rows[0];
+}
+
+export async function cancelReservation(
+  id: number,
+  userId?: number,
+  isAdmin?: boolean
+): Promise<{ success: boolean; error?: string }> {
+  const res = await getReservationById(id);
+  if (!res) return { success: false, error: "Reservation not found." };
+  if (!isAdmin && userId && res.reserved_by !== userId) {
+    return { success: false, error: "Forbidden: You can only cancel your own reservations." };
+  }
+  if (res.status !== "confirmed") {
+    return { success: false, error: `Cannot cancel reservation in ${res.status} status.` };
+  }
+
+  await sql`UPDATE reservations SET status = 'cancelled' WHERE id = ${id}`;
+
+  await sendClubWebhook({
+    event: "reservation.cancelled",
+    title: `❌ Reservation Cancelled: ${res.equipment_name || "Equipment"}`,
+    description: `Reservation #${id} for **${res.equipment_name}** by **${res.reserved_by_name}** was cancelled.`,
+  });
+
+  return { success: true };
+}
+
+export async function fulfillReservation(
+  id: number
+): Promise<{ success: boolean; checkout?: Checkout; error?: string }> {
+  const res = await getReservationById(id);
+  if (!res) return { success: false, error: "Reservation not found." };
+  if (res.status !== "confirmed") {
+    return { success: false, error: `Reservation is already ${res.status}.` };
+  }
+
+  try {
+    const checkout = await createCheckout({
+      equipment_id: res.equipment_id,
+      checked_out_by: res.reserved_by,
+      checked_out_by_name: res.reserved_by_name,
+      expected_return_at: res.end_time,
+      notes: res.notes ? `[Fulfilled Reservation #${id}] ${res.notes}` : `Fulfilled Reservation #${id}`,
+    });
+
+    await sql`UPDATE reservations SET status = 'fulfilled' WHERE id = ${id}`;
+    return { success: true, checkout };
+  } catch (err) {
+    return { success: false, error: err instanceof Error ? err.message : "Failed to convert reservation to checkout." };
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Handover Protocol (Feature 3)
+// ---------------------------------------------------------------------------
+
+export async function ensureHandoverTable(): Promise<void> {
+  await ensureSchema();
+}
+
+function generateRandomHandoverCode(): string {
+  const chars = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+  let token = "HD-";
+  for (let i = 0; i < 4; i++) {
+    token += chars.charAt(Math.floor(Math.random() * chars.length));
+  }
+  return token;
+}
+
+export async function createHandoverCode(
+  checkoutId: number,
+  fromUserId: number
+): Promise<HandoverCode> {
+  await ensureHandoverTable();
+  const chRes = await sql<Checkout>`
+    SELECT * FROM checkouts WHERE id = ${checkoutId} AND returned_at IS NULL
+  `;
+  if (chRes.rows.length === 0) {
+    throw new Error("Cannot create handover: Active loan not found.");
+  }
+  const checkout = chRes.rows[0];
+  if (checkout.checked_out_by && checkout.checked_out_by !== fromUserId) {
+    const userRes = await getUserById(fromUserId);
+    if (userRes?.role !== "admin") {
+      throw new Error("Forbidden: You can only handover equipment checked out to you.");
+    }
+  }
+
+  // Revoke any existing active handover codes for this checkout
+  await sql`UPDATE handover_codes SET status = 'revoked' WHERE checkout_id = ${checkoutId} AND status = 'active'`;
+
+  const code = generateRandomHandoverCode();
+  const expiresAt = new Date(Date.now() + 15 * 60 * 1000).toISOString();
+  const qrPayload = JSON.stringify({
+    type: "MEDIAHUB_HANDOVER",
+    code,
+    checkout_id: checkoutId,
+    equipment_id: checkout.equipment_id,
+    exp: expiresAt,
+  });
+
+  const { rows } = await sql<HandoverCode>`
+    INSERT INTO handover_codes (checkout_id, equipment_id, from_user_id, code, qr_payload, expires_at, status)
+    VALUES (${checkoutId}, ${checkout.equipment_id}, ${fromUserId}, ${code}, ${qrPayload}, ${expiresAt}, 'active')
+    RETURNING *
+  `;
+
+  const eq = await getEquipmentById(checkout.equipment_id);
+  const fromUser = await getUserById(fromUserId);
+
+  return {
+    ...rows[0],
+    equipment_name: eq?.name,
+    equipment_serial_number: eq?.serial_number,
+    from_user_name: fromUser?.name ?? checkout.checked_out_by_name,
+  };
+}
+
+export async function getHandoverCodeByCode(code: string): Promise<HandoverCode | undefined> {
+  await ensureHandoverTable();
+  const cleanCode = code.trim().toUpperCase();
+  const { rows } = await sql<HandoverCode>`
+    SELECT 
+      h.*,
+      e.name AS equipment_name,
+      e.serial_number AS equipment_serial_number,
+      u1.name AS from_user_name,
+      u2.name AS claimed_by_name
+    FROM handover_codes h
+    JOIN equipment e ON e.id = h.equipment_id
+    JOIN users u1 ON u1.id = h.from_user_id
+    LEFT JOIN users u2 ON u2.id = h.claimed_by
+    WHERE UPPER(h.code) = ${cleanCode}
+  `;
+  return rows[0];
+}
+
+export const getHandoverCodeDetails = getHandoverCodeByCode;
+
+export async function generateHandoverCode(params: {
+  equipment_id: number;
+  from_user_id: number;
+}): Promise<HandoverCode> {
+  const activeCheckout = await getActiveCheckoutByEquipmentId(params.equipment_id);
+  if (!activeCheckout) {
+    throw new Error("Cannot handover equipment that is not checked out.");
+  }
+  return createHandoverCode(activeCheckout.id, params.from_user_id);
+}
+
+export async function claimHandoverCode(params: {
+  code: string;
+  claimed_by_id: number;
+  claimed_by_name: string;
+  notes?: string | null;
+}): Promise<{ success: boolean; checkout?: Checkout; error?: string }> {
+  await ensureHandoverTable();
+  const handover = await getHandoverCodeByCode(params.code);
+  if (!handover) return { success: false, error: "Invalid handover code." };
+
+  if (handover.status !== "active") {
+    return { success: false, error: `Handover code is ${handover.status}.` };
+  }
+
+  if (new Date() > new Date(handover.expires_at)) {
+    await sql`UPDATE handover_codes SET status = 'expired' WHERE id = ${handover.id}`;
+    return { success: false, error: "Handover code has expired. Please ask the borrower to generate a fresh code." };
+  }
+
+  if (handover.from_user_id === params.claimed_by_id) {
+    return { success: false, error: "Cannot handover equipment to yourself." };
+  }
+
+  // 1. Close old checkout with transfer note
+  const nowStr = new Date().toISOString();
+  await sql`
+    UPDATE checkouts 
+    SET returned_at = ${nowStr},
+        notes = COALESCE(notes || ' | ', '') || 'Handed over to ' || ${params.claimed_by_name}
+    WHERE id = ${handover.checkout_id}
+  `;
+
+  // 2. Open new checkout for recipient
+  const expectedReturn = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
+  const notesText = params.notes
+    ? `[Handover from ${handover.from_user_name || "previous borrower"}] ${params.notes}`
+    : `Handover from ${handover.from_user_name || "previous borrower"}`;
+
+  const { rows } = await sql<Checkout>`
+    INSERT INTO checkouts (equipment_id, checked_out_by, checked_out_by_name, expected_return_at, notes, checkout_location)
+    VALUES (${handover.equipment_id}, ${params.claimed_by_id}, ${params.claimed_by_name}, ${expectedReturn}, ${notesText}, 'Direct Handover')
+    RETURNING *
+  `;
+  const newCheckout = rows[0];
+
+  // 3. Mark handover code as claimed
+  await sql`
+    UPDATE handover_codes 
+    SET status = 'claimed',
+        claimed_by = ${params.claimed_by_id},
+        claimed_at = ${nowStr}
+    WHERE id = ${handover.id}
+  `;
+
+  // 4. Send club webhook alert
+  await sendClubWebhook({
+    event: "handover.completed",
+    title: `🤝 Equipment Handover: ${handover.equipment_name || "Equipment"}`,
+    description: `**${handover.from_user_name || "Borrower"}** transferred **${handover.equipment_name}** directly to **${params.claimed_by_name}**.`,
+    fields: [
+      { name: "Equipment", value: handover.equipment_name || "N/A" },
+      { name: "From", value: handover.from_user_name || "N/A" },
+      { name: "To", value: params.claimed_by_name },
+      { name: "Expected Return", value: new Date(expectedReturn).toLocaleString() },
+    ],
+  });
+
+  return { success: true, checkout: newCheckout };
+}
+
+// ---------------------------------------------------------------------------
+// Physical Inventory Audit Mode (Feature 5)
+// ---------------------------------------------------------------------------
+
+export async function ensureAuditTables(): Promise<void> {
+  await ensureSchema();
+}
+
+export async function startAuditSession(params: {
+  name: string;
+  started_by: number;
+  notes?: string | null;
+}): Promise<AuditSession> {
+  await ensureAuditTables();
+
+  // Cancel any existing in_progress audit session to prevent overlap
+  await sql`UPDATE audit_sessions SET status = 'cancelled' WHERE status = 'in_progress'`;
+
+  const { rows } = await sql<AuditSession>`
+    INSERT INTO audit_sessions (name, started_by, status, notes)
+    VALUES (${params.name}, ${params.started_by}, 'in_progress', ${params.notes ?? null})
+    RETURNING *
+  `;
+  const session = rows[0];
+
+  const eqList = await sql<{ id: number }>`
+    SELECT id FROM equipment 
+    WHERE condition != 'Retired' AND status != 'Unavailable (Retired)'
+  `;
+
+  for (const eq of eqList.rows) {
+    await sql`
+      INSERT INTO audit_records (session_id, equipment_id, status)
+      VALUES (${session.id}, ${eq.id}, 'missing')
+      ON CONFLICT DO NOTHING
+    `;
+  }
+
+  const total = eqList.rows.length;
+  await sql`
+    UPDATE audit_sessions 
+    SET total_items = ${total}, missing_count = ${total}, found_count = 0 
+    WHERE id = ${session.id}
+  `;
+
+  return {
+    ...session,
+    total_items: total,
+    missing_count: total,
+    found_count: 0,
+  };
+}
+
+export async function getActiveAuditSession(): Promise<AuditSession | null> {
+  await ensureAuditTables();
+  const { rows } = await sql<AuditSession>`
+    SELECT a.*, u.name AS started_by_name
+    FROM audit_sessions a
+    JOIN users u ON u.id = a.started_by
+    WHERE a.status = 'in_progress'
+    ORDER BY a.started_at DESC
+    LIMIT 1
+  `;
+  return rows[0] ?? null;
+}
+
+export async function recordAuditScan(params: {
+  session_id: number;
+  equipment_identifier: string;
+  scanned_by: number;
+  method: "nfc" | "qr" | "manual";
+}): Promise<{ success: boolean; record?: AuditRecord; error?: string; alreadyScanned?: boolean }> {
+  await ensureAuditTables();
+  const rawId = params.equipment_identifier.trim();
+  if (!rawId) return { success: false, error: "Empty equipment identifier." };
+
+  let eq: { id: number; name: string; serial_number: string | null; location: string; condition: Condition; status: EquipmentStatus } | undefined;
+  if (/^\d+$/.test(rawId)) {
+    const detail = await getEquipmentById(Number(rawId));
+    if (detail) eq = detail;
+  }
+  if (!eq) {
+    const bySerial = await sql<{ id: number; name: string; serial_number: string | null; location: string; condition: Condition; status: EquipmentStatus }>`SELECT id, name, serial_number, location, condition, status FROM equipment WHERE LOWER(serial_number) = LOWER(${rawId}) LIMIT 1`;
+    eq = bySerial.rows[0];
+  }
+  if (!eq) {
+    const byName = await sql<{ id: number; name: string; serial_number: string | null; location: string; condition: Condition; status: EquipmentStatus }>`SELECT id, name, serial_number, location, condition, status FROM equipment WHERE LOWER(name) = LOWER(${rawId}) LIMIT 1`;
+    eq = byName.rows[0];
+  }
+  if (!eq) {
+    return { success: false, error: `Equipment "${rawId}" not found in inventory.` };
+  }
+
+  const recRes = await sql<AuditRecord>`
+    SELECT * FROM audit_records WHERE session_id = ${params.session_id} AND equipment_id = ${eq.id}
+  `;
+  if (recRes.rows.length === 0) {
+    await sql`
+      INSERT INTO audit_records (session_id, equipment_id, status, scanned_at, scanned_by, method)
+      VALUES (${params.session_id}, ${eq.id}, 'exists', CURRENT_TIMESTAMP, ${params.scanned_by}, ${params.method})
+    `;
+    await sql`
+      UPDATE audit_sessions 
+      SET total_items = total_items + 1, found_count = found_count + 1 
+      WHERE id = ${params.session_id}
+    `;
+  } else {
+    const existing = recRes.rows[0];
+    if (existing.status === "exists") {
+      return {
+        success: true,
+        alreadyScanned: true,
+        record: {
+          ...existing,
+          equipment_name: eq.name,
+          equipment_serial_number: eq.serial_number,
+          equipment_location: eq.location,
+        },
+      };
+    }
+
+    await sql`
+      UPDATE audit_records 
+      SET status = 'exists', scanned_at = CURRENT_TIMESTAMP, scanned_by = ${params.scanned_by}, method = ${params.method}
+      WHERE session_id = ${params.session_id} AND equipment_id = ${eq.id}
+    `;
+    await sql`
+      UPDATE audit_sessions 
+      SET found_count = found_count + 1, missing_count = CASE WHEN missing_count > 0 THEN missing_count - 1 ELSE 0 END
+      WHERE id = ${params.session_id}
+    `;
+  }
+
+  const updatedRec = (await sql<AuditRecord>`
+    SELECT a.*, u.name AS scanned_by_name
+    FROM audit_records a
+    LEFT JOIN users u ON u.id = a.scanned_by
+    WHERE a.session_id = ${params.session_id} AND a.equipment_id = ${eq.id}
+  `).rows[0];
+
+  return {
+    success: true,
+    record: {
+      ...updatedRec,
+      equipment_name: eq.name,
+      equipment_serial_number: eq.serial_number,
+      equipment_location: eq.location,
+      equipment_condition: eq.condition,
+      equipment_status: eq.status,
+    },
+  };
+}
+
+export async function completeAuditSession(
+  sessionId: number,
+  options?: { markMissingAsCatalogMissing?: boolean }
+): Promise<{ success: boolean; session?: AuditSession; error?: string }> {
+  await ensureAuditTables();
+  const sessionRes = await sql<AuditSession>`SELECT * FROM audit_sessions WHERE id = ${sessionId}`;
+  if (sessionRes.rows.length === 0) return { success: false, error: "Audit session not found." };
+  const session = sessionRes.rows[0];
+  if (session.status === "completed") return { success: true, session };
+
+  const nowStr = new Date().toISOString();
+  await sql`
+    UPDATE audit_sessions 
+    SET status = 'completed', completed_at = ${nowStr}
+    WHERE id = ${sessionId}
+  `;
+
+  if (options?.markMissingAsCatalogMissing) {
+    const missingItems = await sql<{ equipment_id: number }>`
+      SELECT equipment_id FROM audit_records WHERE session_id = ${sessionId} AND status = 'missing'
+    `;
+    for (const item of missingItems.rows) {
+      await updateEquipment(item.equipment_id, {
+        condition: "Missing",
+        status: "Unavailable (Missing)",
+      });
+    }
+  }
+
+  const updatedSession = (await sql<AuditSession>`SELECT * FROM audit_sessions WHERE id = ${sessionId}`).rows[0];
+
+  await sendClubWebhook({
+    event: "audit.completed",
+    title: `📋 Inventory Roll Call Completed: ${session.name}`,
+    description: `Audit finished: **${updatedSession.found_count} verified (exists)**, **${updatedSession.missing_count} missing** out of ${updatedSession.total_items} total items.`,
+    fields: [
+      { name: "Total Items", value: String(updatedSession.total_items) },
+      { name: "Verified / Exists", value: `✅ ${updatedSession.found_count}` },
+      { name: "Missing", value: `❌ ${updatedSession.missing_count}` },
+    ],
+  });
+
+  return { success: true, session: updatedSession };
+}
+
+export async function getAuditSessionDetails(sessionId: number): Promise<{
+  session: AuditSession;
+  records: AuditRecord[];
+} | null> {
+  await ensureAuditTables();
+  const sessionRes = await sql<AuditSession>`
+    SELECT a.*, u.name AS started_by_name
+    FROM audit_sessions a
+    JOIN users u ON u.id = a.started_by
+    WHERE a.id = ${sessionId}
+  `;
+  if (sessionRes.rows.length === 0) return null;
+
+  const recordsRes = await sql<AuditRecord>`
+    SELECT 
+      ar.*,
+      e.name AS equipment_name,
+      e.serial_number AS equipment_serial_number,
+      e.location AS equipment_location,
+      e.condition AS equipment_condition,
+      e.status AS equipment_status,
+      u.name AS scanned_by_name
+    FROM audit_records ar
+    JOIN equipment e ON e.id = ar.equipment_id
+    LEFT JOIN users u ON u.id = ar.scanned_by
+    WHERE ar.session_id = ${sessionId}
+    ORDER BY ar.status ASC, ar.scanned_at DESC, e.name ASC
+  `;
+
+  return {
+    session: sessionRes.rows[0],
+    records: recordsRes.rows,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Storage Map (Feature 8)
+// ---------------------------------------------------------------------------
+
+export async function getStorageMapData(): Promise<StorageCabinet[]> {
+  const allEquipment = await getAllEquipment();
+
+  const cabinetsMap = new Map<string, { description?: string; shelvesMap: Map<string, Equipment[]> }>();
+
+  function normalizeStorage(locRaw: string): { cabinet: string; shelf: string } {
+    const loc = (locRaw || "General Storage").trim();
+    const lower = loc.toLowerCase();
+
+    if (lower.includes("cabinet 1")) {
+      const shelf = lower.includes("shelf b") ? "Shelf B" : lower.includes("shelf c") ? "Shelf C" : "Shelf A";
+      return { cabinet: "Cabinet 1 (Cameras & Video)", shelf };
+    }
+    if (lower.includes("cabinet 2")) {
+      const shelf = lower.includes("shelf b") ? "Shelf B" : lower.includes("shelf c") ? "Shelf C" : "Shelf A";
+      return { cabinet: "Cabinet 2 (Lenses & Glass)", shelf };
+    }
+    if (lower.includes("lens") || lower.includes("locker")) {
+      const shelf = lower.includes("shelf b") ? "Shelf B" : "Shelf A";
+      return { cabinet: "Lens Locker", shelf };
+    }
+    if (lower.includes("audio") || lower.includes("mic") || lower.includes("sound")) {
+      const shelf = lower.includes("wireless") ? "Wireless Audio" : lower.includes("cable") ? "Cables & Mixers" : "Microphones";
+      return { cabinet: "Audio Rack", shelf };
+    }
+    if (lower.includes("tripod") || lower.includes("stand") || lower.includes("grip")) {
+      return { cabinet: "Lighting & Grip Bay", shelf: "Tripods & Stands" };
+    }
+    if (lower.includes("cable") || lower.includes("box") || lower.includes("bin") || lower.includes("tub")) {
+      return { cabinet: "Cable & Accessories Bay", shelf: "Tubs & Bins" };
+    }
+
+    return { cabinet: loc || "Media Room Storage", shelf: "Main Shelf" };
+  }
+
+  const defaultCabinets = [
+    "Cabinet 1 (Cameras & Video)",
+    "Cabinet 2 (Lenses & Glass)",
+    "Audio Rack",
+    "Lighting & Grip Bay",
+    "Cable & Accessories Bay",
+  ];
+
+  for (const c of defaultCabinets) {
+    cabinetsMap.set(c, { shelvesMap: new Map([["Shelf A", []], ["Shelf B", []]]) });
+  }
+
+  for (const item of allEquipment) {
+    const { cabinet, shelf } = normalizeStorage(item.location);
+    if (!cabinetsMap.has(cabinet)) {
+      cabinetsMap.set(cabinet, { shelvesMap: new Map() });
+    }
+    const cab = cabinetsMap.get(cabinet)!;
+    if (!cab.shelvesMap.has(shelf)) {
+      cab.shelvesMap.set(shelf, []);
+    }
+    cab.shelvesMap.get(shelf)!.push(item);
+  }
+
+  const result: StorageCabinet[] = [];
+  for (const [cabName, { shelvesMap, description }] of cabinetsMap.entries()) {
+    const shelves: StorageShelf[] = [];
+    let cabTotal = 0;
+    let cabAvail = 0;
+    let cabChecked = 0;
+    let cabOther = 0;
+
+    for (const [shelfName, items] of shelvesMap.entries()) {
+      shelves.push({
+        id: `${cabName}-${shelfName}`.toLowerCase().replace(/[^a-z0-9]/g, "-"),
+        name: shelfName,
+        items,
+      });
+      cabTotal += items.length;
+      for (const i of items) {
+        if (i.status === "Available") cabAvail++;
+        else if (i.status === "Checked Out") cabChecked++;
+        else cabOther++;
+      }
+    }
+
+    result.push({
+      id: cabName.toLowerCase().replace(/[^a-z0-9]/g, "-"),
+      name: cabName,
+      description,
+      shelves,
+      totalItems: cabTotal,
+      availableCount: cabAvail,
+      checkedOutCount: cabChecked,
+      otherCount: cabOther,
+    });
+  }
+
+  return result;
+}
+
 

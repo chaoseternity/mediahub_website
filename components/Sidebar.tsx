@@ -18,6 +18,9 @@ import {
   ChevronLeft,
   Bot,
   User as UserIcon,
+  CalendarClock,
+  Boxes,
+  ClipboardCheck,
   type LucideIcon,
 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
@@ -45,7 +48,9 @@ const navGroups: NavGroup[] = [
     title: "Equipment & Events",
     items: [
       { href: "/dashboard", label: "Equipment", icon: LayoutGrid, roles: ["admin", "verified", "viewer"] },
+      { href: "/dashboard/reservations", label: "Reservations", icon: CalendarClock, roles: ["admin", "verified", "viewer"] },
       { href: "/dashboard/events", label: "Events", icon: Calendar, roles: ["admin", "verified", "viewer"] },
+      { href: "/dashboard/map", label: "Storage Map", icon: Boxes, roles: ["admin", "verified", "viewer"] },
       { href: "/dashboard/scan", label: "Scan QR", icon: QrCode, roles: ["admin", "verified", "viewer"] },
       { href: "/dashboard/nfc", label: "NFC Station", icon: Nfc, roles: ["admin", "verified"] },
     ],
@@ -65,6 +70,7 @@ const navGroups: NavGroup[] = [
   {
     title: "Admin & Settings",
     items: [
+      { href: "/dashboard/audit", label: "Stock Audit", icon: ClipboardCheck, roles: ["admin"] },
       { href: "/dashboard/tags", label: "Tags", icon: Tag, roles: ["admin"] },
       { href: "/dashboard/users", label: "Users", icon: UsersIcon, roles: ["admin"] },
     ],
