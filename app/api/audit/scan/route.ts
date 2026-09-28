@@ -29,7 +29,7 @@ export async function POST(req: NextRequest) {
     const identifier = rawIdentifier.trim();
 
     const userId = Number(session.user.id);
-    const scanMethod = method === "nfc" ? "nfc" : method === "qr" ? "qr" : "manual";
+    const scanMethod = body.method === "nfc" ? "nfc" : body.method === "qr" ? "qr" : "manual";
 
     const result = await recordAuditScan({
       session_id: sId,
