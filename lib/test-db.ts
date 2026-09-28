@@ -192,6 +192,20 @@ export const SCHEMA_SQL = `
     method        TEXT CHECK(method IN ('nfc', 'qr', 'manual')),
     UNIQUE(session_id, equipment_id)
   );
+
+  CREATE TABLE IF NOT EXISTS storage_map_layout (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    key        TEXT    NOT NULL UNIQUE,
+    value      TEXT    NOT NULL,
+    updated_at TEXT    NOT NULL DEFAULT (datetime('now'))
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_reminders_checkout ON checkout_reminders(checkout_id, reminder_type);
+  CREATE INDEX IF NOT EXISTS idx_reservations_eq_time ON reservations(equipment_id, start_time, end_time);
+  CREATE INDEX IF NOT EXISTS idx_reservations_user ON reservations(reserved_by);
+  CREATE INDEX IF NOT EXISTS idx_handover_code ON handover_codes(code);
+  CREATE INDEX IF NOT EXISTS idx_handover_checkout ON handover_codes(checkout_id);
+  CREATE INDEX IF NOT EXISTS idx_audit_records_session ON audit_records(session_id, status);
 `;
 
 let testDbInstance: Database.Database | null = null;

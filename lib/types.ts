@@ -396,6 +396,13 @@ export interface StorageCabinet {
   otherCount: number;
 }
 
+export interface StorageMapConfigCabinet {
+  id: string;
+  name: string;
+  description?: string;
+  shelves: string[];
+}
+
 // ---------------------------------------------------------------------------
 // Webhooks (Feature 6)
 // ---------------------------------------------------------------------------

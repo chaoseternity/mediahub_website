@@ -61,8 +61,23 @@ export async function ensureSchema(): Promise<void> {
 
   const d1 = await getD1Database();
   if (d1) {
-    // Cloudflare D1 uses migrations (wrangler d1 migrations apply),
-    // but ensureSchema acts as a safe fallback.
+    try {
+      // Execute each statement to auto-create missing tables and indexes on D1
+      const statements = SCHEMA_SQL
+        .split(";")
+        .map((s) => s.trim())
+        .filter((s) => s.length > 0);
+
+      for (const statement of statements) {
+        try {
+          await d1.prepare(statement).run();
+        } catch {
+          // If a table or index already exists, continue gracefully
+        }
+      }
+    } catch (err) {
+      console.warn("Notice: ensureSchema on D1 encountered error:", err);
+    }
     initialized = true;
     return;
   }
