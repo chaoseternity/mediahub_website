@@ -74,7 +74,7 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
       }
       token.role = dbUser.role ?? "viewer";
       token.userId = String(dbUser.id);
-      token.username = dbUser.username ?? null;
+      token.username = dbUser.username ?? dbUser.name ?? null;
       token.name = dbUser.name ?? token.name;
       token.email = dbUser.email;
       void account;
@@ -88,7 +88,7 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
       if (session.user) {
         session.user.role = (token.role as Role) ?? "viewer";
         session.user.id = token.userId as string;
-        session.user.username = (token.username as string | null) ?? null;
+        session.user.username = (token.username as string | null) ?? (token.name as string | null) ?? null;
       }
       return session;
     },
