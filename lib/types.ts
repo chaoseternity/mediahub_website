@@ -21,7 +21,6 @@ export interface User {
   id: number;
   name: string;
   email: string;
-  username: string | null;
   google_id: string | null;
   image: string | null;
   role: Role;
@@ -446,7 +445,6 @@ declare module "next-auth" {
       email?: string | null;
       image?: string | null;
       role: Role;
-      username: string | null;
     };
   }
 }

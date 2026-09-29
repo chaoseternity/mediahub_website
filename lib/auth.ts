@@ -59,7 +59,6 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
         if (user.image) token.picture = user.image;
         token.userId = user.id;
         token.role = undefined;
-        token.username = undefined;
       }
 
       // Re-read role from DB on every token evaluation so that admin-changed
@@ -69,12 +68,10 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
       if (!dbUser) {
         token.userId = "";
         token.role = "viewer";
-        token.username = null;
         return token;
       }
       token.role = dbUser.role ?? "viewer";
       token.userId = String(dbUser.id);
-      token.username = dbUser.username ?? dbUser.name ?? null;
       token.name = dbUser.name ?? token.name;
       token.email = dbUser.email;
       void account;
@@ -88,7 +85,6 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
       if (session.user) {
         session.user.role = (token.role as Role) ?? "viewer";
         session.user.id = token.userId as string;
-        session.user.username = (token.username as string | null) ?? (token.name as string | null) ?? null;
       }
       return session;
     },

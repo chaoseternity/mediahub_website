@@ -1,5 +1,5 @@
 import { auth } from "@/lib/auth";
-import { getUserByEmail, getUserByUsername, getUserProfileData } from "@/lib/db";
+import { getUserByEmail, getUserProfileData } from "@/lib/db";
 import { redirect } from "next/navigation";
 import { ProfileClient } from "@/components/ProfileClient";
 import { Card, CardContent } from "@/components/ui/card";
@@ -8,7 +8,7 @@ import { ShieldAlert, UserX } from "lucide-react";
 import Link from "next/link";
 
 interface ProfilePageProps {
-  searchParams: Promise<{ id?: string; username?: string }>;
+  searchParams: Promise<{ id?: string }>;
 }
 
 export default async function ProfilePage({ searchParams }: ProfilePageProps) {
@@ -29,30 +29,6 @@ export default async function ProfilePage({ searchParams }: ProfilePageProps) {
     const parsed = parseInt(params.id, 10);
     if (!isNaN(parsed) && parsed > 0) {
       targetUserId = parsed;
-    }
-  } else if (params.username) {
-    const user = await getUserByUsername(params.username);
-    if (user) {
-      targetUserId = user.id;
-    } else {
-      return (
-        <div className="px-4 py-12 max-w-md mx-auto text-center space-y-4">
-          <Card className="border-dashed">
-            <CardContent className="py-8 space-y-3">
-              <UserX className="h-10 w-10 text-muted-foreground mx-auto opacity-50" />
-              <h2 className="text-lg font-semibold">User Not Found</h2>
-              <p className="text-sm text-muted-foreground">
-                No user exists matching &ldquo;{params.username}&rdquo;.
-              </p>
-              <Link href="/dashboard/profile">
-                <Button size="sm" variant="outline">
-                  Go to My Profile
-                </Button>
-              </Link>
-            </CardContent>
-          </Card>
-        </div>
-      );
     }
   }
 

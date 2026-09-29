@@ -7,7 +7,7 @@ import { toErrorResponse } from "@/lib/api-errors";
  * GET /api/users
  * - admin: full user records (used by the admin user-management UI)
  * - any other authenticated user (verified or viewer — viewers can be event OICs /
- *   section ICs): a minimal member directory with only id, name, username and image,
+ *   section ICs): a minimal member directory with only id, name and image,
  *   so they can pick members for deployment without seeing email / google_id / role.
  */
 export async function GET() {
@@ -27,7 +27,6 @@ export async function GET() {
   const directory = users.map((u) => ({
     id: u.id,
     name: u.name,
-    username: u.username,
     image: u.image,
   }));
   return NextResponse.json(directory);

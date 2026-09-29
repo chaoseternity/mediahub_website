@@ -1,7 +1,7 @@
 import { NextRequest } from "next/server";
 import { GET as getProfile } from "@/app/api/profile/route";
 import { auth } from "@/lib/auth";
-import { getUserByEmail, getUserByUsername, getUserProfileData } from "@/lib/db";
+import { getUserByEmail, getUserProfileData } from "@/lib/db";
 
 jest.mock("@/lib/auth", () => ({
   auth: jest.fn(),
@@ -9,14 +9,13 @@ jest.mock("@/lib/auth", () => ({
 
 jest.mock("@/lib/db", () => ({
   getUserByEmail: jest.fn(),
-  getUserByUsername: jest.fn(),
   getUserProfileData: jest.fn(),
 }));
 
 describe("Profile API (GET /api/profile)", () => {
-  const mockAdmin = { id: 1, name: "Alice Admin", email: "admin@club.com", username: "alice_admin", role: "admin" };
-  const mockViewer = { id: 2, name: "Bob Viewer", email: "bob@club.com", username: "bob_viewer", role: "viewer" };
-  const mockVerified = { id: 3, name: "Charlie Verified", email: "charlie@club.com", username: "charlie_v", role: "verified" };
+  const mockAdmin = { id: 1, name: "Alice Admin", email: "admin@club.com", role: "admin" };
+  const mockViewer = { id: 2, name: "Bob Viewer", email: "bob@club.com", role: "viewer" };
+  const mockVerified = { id: 3, name: "Charlie Verified", email: "charlie@club.com", role: "verified" };
 
   const mockBobProfile = {
     user: mockViewer,
@@ -52,14 +51,6 @@ describe("Profile API (GET /api/profile)", () => {
       return undefined;
     });
 
-    (getUserByUsername as jest.Mock).mockImplementation(async (username: string) => {
-      const lower = username.toLowerCase();
-      if (lower === "alice_admin" || lower === "alice admin") return mockAdmin;
-      if (lower === "bob_viewer" || lower === "bob viewer") return mockViewer;
-      if (lower === "charlie_v" || lower === "charlie verified") return mockVerified;
-      return undefined;
-    });
-
     (getUserProfileData as jest.Mock).mockImplementation(async (id: number) => {
       if (id === 2) return mockBobProfile;
       return undefined;
@@ -75,7 +66,7 @@ describe("Profile API (GET /api/profile)", () => {
 
   test("GET /api/profile allows viewer to access their own profile", async () => {
     (auth as jest.Mock).mockResolvedValue({
-      user: { id: "2", email: "bob@club.com", name: "Bob Viewer", username: "bob_viewer", role: "viewer" },
+      user: { id: "2", email: "bob@club.com", name: "Bob Viewer", role: "viewer" },
     });
     const req = new NextRequest("http://localhost:3000/api/profile");
     const res = await getProfile(req);
@@ -89,7 +80,7 @@ describe("Profile API (GET /api/profile)", () => {
 
   test("GET /api/profile rejects viewer attempting to view another user's profile with 403 Forbidden", async () => {
     (auth as jest.Mock).mockResolvedValue({
-      user: { id: "2", email: "bob@club.com", name: "Bob Viewer", username: "bob_viewer", role: "viewer" },
+      user: { id: "2", email: "bob@club.com", name: "Bob Viewer", role: "viewer" },
     });
 
     // Attempting via ?id=1 (Admin)
@@ -99,17 +90,23 @@ describe("Profile API (GET /api/profile)", () => {
     const jsonId = await resWithId.json();
     expect(jsonId.error).toContain("Forbidden");
 
-    // Attempting via ?username=alice_admin
-    const reqWithUsername = new NextRequest("http://localhost:3000/api/profile?username=alice_admin");
-    const resWithUsername = await getProfile(reqWithUsername);
-    expect(resWithUsername.status).toBe(403);
-    const jsonUsername = await resWithUsername.json();
-    expect(jsonUsername.error).toContain("Forbidden");
+  });
+
+  test("GET /api/profile ignores the retired ?username= lookup and serves the caller's own profile", async () => {
+    (auth as jest.Mock).mockResolvedValue({
+      user: { id: "2", email: "bob@club.com", name: "Bob Viewer", role: "viewer" },
+    });
+
+    const req = new NextRequest("http://localhost:3000/api/profile?username=alice_admin");
+    const res = await getProfile(req);
+    expect(res.status).toBe(200);
+    expect((await res.json()).user.id).toBe(2);
+    expect(getUserProfileData).toHaveBeenCalledWith(2);
   });
 
   test("GET /api/profile rejects verified user attempting to view another user's profile with 403 Forbidden", async () => {
     (auth as jest.Mock).mockResolvedValue({
-      user: { id: "3", email: "charlie@club.com", name: "Charlie Verified", username: "charlie_v", role: "verified" },
+      user: { id: "3", email: "charlie@club.com", name: "Charlie Verified", role: "verified" },
     });
 
     const req = new NextRequest("http://localhost:3000/api/profile?id=2");
@@ -119,7 +116,7 @@ describe("Profile API (GET /api/profile)", () => {
 
   test("GET /api/profile allows admin to view any user's profile", async () => {
     (auth as jest.Mock).mockResolvedValue({
-      user: { id: "1", email: "admin@club.com", name: "Alice Admin", username: "alice_admin", role: "admin" },
+      user: { id: "1", email: "admin@club.com", name: "Alice Admin", role: "admin" },
     });
 
     // Admin views Bob Viewer's profile
@@ -135,10 +132,10 @@ describe("Profile API (GET /api/profile)", () => {
 
   test("GET /api/profile returns 404 when requested user is not found", async () => {
     (auth as jest.Mock).mockResolvedValue({
-      user: { id: "1", email: "admin@club.com", name: "Alice Admin", username: "alice_admin", role: "admin" },
+      user: { id: "1", email: "admin@club.com", name: "Alice Admin", role: "admin" },
     });
 
-    const req = new NextRequest("http://localhost:3000/api/profile?username=non_existent");
+    const req = new NextRequest("http://localhost:3000/api/profile?id=999");
     const res = await getProfile(req);
     expect(res.status).toBe(404);
   });

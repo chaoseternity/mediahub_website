@@ -55,8 +55,6 @@ const KNOWN_ERROR_PATTERNS: Array<[RegExp, number]> = [
 
 /** Default status for the data layer's typed business errors (see lib/db.ts). */
 const KNOWN_ERROR_NAMES: Record<string, number> = {
-  /** updateUsername: invalid name (400) or "already taken" collision (409 via message). */
-  UsernameTakenError: 400,
   /** updateUserRole: the target is an ADMIN_EMAILS administrator and can't be demoted here. */
   ConfiguredAdminError: 403,
   /** createReservation: invalid times/notes, unavailable or unknown equipment. */

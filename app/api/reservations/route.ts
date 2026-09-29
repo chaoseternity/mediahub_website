@@ -112,7 +112,7 @@ export async function POST(req: NextRequest) {
   const end_time = (parsed.data.end_time ?? parsed.data.end_date)!;
 
   const userId = Number(session.user.id);
-  const userName = session.user.name || session.user.username || "Club Member";
+  const userName = session.user.name || "Club Member";
 
   try {
     const reservation = await createReservation({

@@ -5,7 +5,6 @@ import { cn } from "@/lib/utils";
 
 interface UserLinkProps {
   name?: string | null;
-  username?: string | null;
   userId?: number | null;
   className?: string;
   showIcon?: boolean;
@@ -15,20 +14,18 @@ interface UserLinkProps {
 
 export function UserLink({
   name,
-  username,
   userId,
   className,
   showIcon = false,
   children,
   onClick,
 }: UserLinkProps) {
-  const targetName = (name || username || "").trim();
+  const targetName = (name || "").trim();
   const content = children ?? (targetName || "Unknown");
 
-  // Profiles are resolved by id or username only. A bare display name (e.g. an NFC card's
-  // member name) doesn't identify an account, so it renders as plain text.
-  const trimmedUsername = username?.trim();
-  if (!userId && !trimmedUsername) {
+  // Profiles are resolved by id only. A bare display name (e.g. an NFC card's member name)
+  // doesn't identify an account, so it renders as plain text.
+  if (!userId) {
     return (
       <span className={cn("truncate inline-flex items-center gap-1", className)}>
         {content}
@@ -36,9 +33,7 @@ export function UserLink({
     );
   }
 
-  const href = userId
-    ? `/dashboard/profile?id=${userId}`
-    : `/dashboard/profile?username=${encodeURIComponent(trimmedUsername!)}`;
+  const href = `/dashboard/profile?id=${userId}`;
 
   const handleClick = (e: React.MouseEvent<HTMLAnchorElement>) => {
     e.stopPropagation();

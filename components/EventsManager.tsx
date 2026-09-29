@@ -305,7 +305,7 @@ export function EventsManager({ initialEvents, role, currentUserId }: EventsMana
                     ) : (
                       ev.oics.map((u) => (
                         <Badge key={u.id} variant="secondary" className="text-xs bg-purple-100 dark:bg-purple-950 text-purple-800 dark:text-purple-300">
-                          <UserLink name={u.name} username={u.username} userId={u.id} className="text-inherit hover:underline" />
+                          <UserLink name={u.name} userId={u.id} className="text-inherit hover:underline" />
                         </Badge>
                       ))
                     )}
@@ -376,7 +376,7 @@ export function EventsManager({ initialEvents, role, currentUserId }: EventsMana
                             ) : (
                               secIcs.map((ic) => (
                                 <Badge key={ic.id} variant="secondary" className="text-[11px]">
-                                  <UserLink name={ic.name} username={ic.username} userId={ic.id} className="text-inherit hover:underline" />
+                                  <UserLink name={ic.name} userId={ic.id} className="text-inherit hover:underline" />
                                 </Badge>
                               ))
                             )}
@@ -464,7 +464,7 @@ export function EventsManager({ initialEvents, role, currentUserId }: EventsMana
                                   <div key={dep.id} className="flex items-center justify-between bg-muted/40 px-2 py-1 rounded text-xs gap-1">
                                     <div className="flex items-center gap-1.5 truncate mr-1">
                                       <span className="font-medium truncate">
-                                        <UserLink name={dep.name} username={dep.username} userId={dep.id} />
+                                        <UserLink name={dep.name} userId={dep.id} />
                                       </span>
                                       {dep.attending_rehearsal && (
                                         <Badge variant="outline" className="text-[9px] px-1 py-0 border-purple-400 text-purple-700 dark:text-purple-300">

@@ -32,7 +32,6 @@ import { GET as cronGet, POST as cronPost } from "@/app/api/cron/reminders/route
 import { POST as parseSop } from "@/app/api/sop/parse/route";
 import { POST as uploadSop } from "@/app/api/sop/route";
 import { POST as webhookTest } from "@/app/api/webhooks/test/route";
-import { PATCH as updateMe } from "@/app/api/users/me/route";
 import { PUT as updateUserRoute } from "@/app/api/users/[id]/route";
 import { POST as checkoutRoute } from "@/app/api/equipment/[id]/checkout/route";
 import { POST as sectionRoute } from "@/app/api/events/[id]/section/route";
@@ -458,42 +457,12 @@ describe("API error handling & validation", () => {
   });
 
   describe("users", () => {
-    test("username collision from the data layer → 409 with its message", async () => {
-      const user = await makeUser("Uma User", "verified");
-      asUser(user, "verified");
-      jest
-        .spyOn(db, "updateUsername")
-        .mockRejectedValue(new Error('The name "Bob" is already taken by another member.'));
-      const res = await updateMe(jsonReq("/api/users/me", "PATCH", { username: "Bob" }));
-      expect(res.status).toBe(409);
-      expect((await res.json()).error).toMatch(/already taken/);
-    });
-
-    test("typed data-layer errors: invalid username → 400, taken → 409", async () => {
-      const user = await makeUser("Uma User", "verified");
-      asUser(user, "verified");
-      const spy = jest.spyOn(db, "updateUsername");
-      spy.mockRejectedValueOnce(new db.UsernameTakenError("Username may only contain letters, numbers, spaces, and _ - ."));
-      expect((await updateMe(jsonReq("/api/users/me", "PATCH", { username: "Bob" }))).status).toBe(400);
-      spy.mockRejectedValueOnce(new db.UsernameTakenError('The username "Bob" is already taken.'));
-      expect((await updateMe(jsonReq("/api/users/me", "PATCH", { username: "Bob" }))).status).toBe(409);
-    });
-
     test("typed reservation / storage-map errors map to 400 (404 for unknown equipment)", () => {
       expect(classifyError(new db.ReservationValidationError("Reservations cannot be longer than 30 days."))?.status).toBe(400);
       expect(classifyError(new db.ReservationValidationError('"Cam" cannot be reserved: it is Checked Out.'))?.status).toBe(400);
       expect(classifyError(new db.ReservationValidationError("Equipment not found."))?.status).toBe(404);
       expect(classifyError(new db.StorageMapConfigError('Duplicate cabinet name "A".'))?.status).toBe(400);
       expect(classifyError(new Error("Equipment already reserved between x and y."))?.status).toBe(409);
-    });
-
-    test("raw UNIQUE constraint on username → 409 without leaking SQL", async () => {
-      const user = await makeUser("Uma User", "verified");
-      asUser(user, "verified");
-      jest.spyOn(db, "updateUsername").mockRejectedValue(new Error("UNIQUE constraint failed: users.username"));
-      const res = await updateMe(jsonReq("/api/users/me", "PATCH", { username: "Bob" }));
-      expect(res.status).toBe(409);
-      expect((await res.json()).error).not.toMatch(/UNIQUE|users\.username/);
     });
 
     test("ConfiguredAdminError from the data layer → 403 with its message", async () => {

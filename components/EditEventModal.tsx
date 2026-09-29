@@ -263,7 +263,7 @@ export function EditEventModal({ event, open, isAdmin, onClose, onUpdated }: Edi
               <div className="relative w-64">
                 <Search className="h-3.5 w-3.5 absolute left-2.5 top-2.5 text-muted-foreground" />
                 <Input
-                  placeholder="Search users by name/username…"
+                  placeholder="Search users by name…"
                   value={userSearch}
                   onChange={(e) => setUserSearch(e.target.value)}
                   className="pl-8 h-8 text-xs"
@@ -291,8 +291,8 @@ export function EditEventModal({ event, open, isAdmin, onClose, onUpdated }: Edi
                       className="rounded border-input text-primary"
                     />
                     <span className="font-medium">{u.name}</span>
-                    {(u.email || u.username) && (
-                      <span className="text-[10px] text-muted-foreground">({u.email ?? `@${u.username}`})</span>
+                    {u.email && (
+                      <span className="text-[10px] text-muted-foreground">({u.email})</span>
                     )}
                   </label>
                 ))}

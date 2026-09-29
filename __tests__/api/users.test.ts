@@ -16,7 +16,6 @@ describe("Users API (GET /api/users)", () => {
       id: 1,
       name: "Alice Admin",
       email: "admin@club.com",
-      username: "alice_admin",
       google_id: "g-1",
       image: "https://img/alice.png",
       role: "admin",
@@ -27,7 +26,6 @@ describe("Users API (GET /api/users)", () => {
       id: 2,
       name: "Charlie Verified",
       email: "charlie@club.com",
-      username: "charlie_v",
       google_id: null,
       image: null,
       role: "verified",
@@ -58,17 +56,18 @@ describe("Users API (GET /api/users)", () => {
   test.each([
     ["verified", "2"],
     ["viewer", "3"],
-  ])("returns a minimal directory (id, name, username, image) for %s users", async (role, id) => {
+  ])("returns a minimal directory (id, name, image) for %s users", async (role, id) => {
     (auth as jest.Mock).mockResolvedValue({ user: { id, role } });
     const res = await getUsers();
     expect(res.status).toBe(200);
     const body = await res.json();
     expect(body).toEqual([
-      { id: 1, name: "Alice Admin", username: "alice_admin", image: "https://img/alice.png" },
-      { id: 2, name: "Charlie Verified", username: "charlie_v", image: null },
+      { id: 1, name: "Alice Admin", image: "https://img/alice.png" },
+      { id: 2, name: "Charlie Verified", image: null },
     ]);
     for (const u of body) {
-      expect(Object.keys(u).sort()).toEqual(["id", "image", "name", "username"]);
+      expect(Object.keys(u).sort()).toEqual(["id", "image", "name"]);
+      expect(u).not.toHaveProperty("username");
       expect(u).not.toHaveProperty("email");
       expect(u).not.toHaveProperty("google_id");
       expect(u).not.toHaveProperty("role");

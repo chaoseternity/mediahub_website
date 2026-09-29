@@ -887,25 +887,6 @@ describe("Security Audits & Vulnerability Guards", () => {
       expect(json.error).toBe("User not found");
     });
 
-    test("PATCH /api/users/me rejects session with non-integer or invalid user ID with 400", async () => {
-      const { auth } = jest.requireMock("@/lib/auth");
-      auth.mockResolvedValueOnce({
-        user: { id: "invalid-not-a-number", name: "Test User", role: "viewer", email: "test@club.com" },
-      });
-
-      const { PATCH: patchMe } = await import("@/app/api/users/me/route");
-      const req = new NextRequest("http://localhost:3000/api/users/me", {
-        method: "PATCH",
-        body: JSON.stringify({ username: "Valid Name" }),
-        headers: { "Content-Type": "application/json" },
-      });
-
-      const res = await patchMe(req);
-      expect(res.status).toBe(400);
-      const json = await res.json();
-      expect(json.error).toBe("Invalid user session");
-    });
-
     test("POST /api/equipment/[id]/return rejects return when caller name matches but callerId differs (CWE-287/639)", async () => {
       const { auth } = jest.requireMock("@/lib/auth");
       // Caller has id 6, but name matches borrower id 5 ("Alice Smith")
@@ -1110,25 +1091,6 @@ describe("Security Audits & Vulnerability Guards", () => {
       expect(json.error).toBe("Invalid JSON body");
     });
 
-    test("PATCH /api/users/me returns 400 for malformed JSON body (CWE-755/20)", async () => {
-      const { auth } = jest.requireMock("@/lib/auth");
-      auth.mockResolvedValueOnce({
-        user: { id: "1", name: "Admin", role: "admin", email: "admin@club.com" },
-      });
-
-      const { PATCH: updateMeRoute } = await import("@/app/api/users/me/route");
-      const req = new NextRequest("http://localhost:3000/api/users/me", {
-        method: "PATCH",
-        body: "{ bad json: true",
-        headers: { "Content-Type": "application/json" },
-      });
-
-      const res = await updateMeRoute(req);
-      expect(res.status).toBe(400);
-      const json = await res.json();
-      expect(json.error).toBe("Invalid JSON body");
-    });
-
     test("PUT /api/sop/[id] returns 400 for malformed JSON body (CWE-755/20)", async () => {
       const { auth } = jest.requireMock("@/lib/auth");
       auth.mockResolvedValueOnce({
@@ -1254,26 +1216,7 @@ describe("Security Audits & Vulnerability Guards", () => {
       expect(json.error).toBe("Invalid JSON body");
     });
 
-    test("PATCH /api/users/me rejects username containing control characters with 400 (CWE-20/150)", async () => {
-      const { auth } = jest.requireMock("@/lib/auth");
-      auth.mockResolvedValueOnce({
-        user: { id: "1", name: "Admin", role: "admin", email: "admin@club.com" },
-      });
-
-      const { PATCH: updateMeRoute } = await import("@/app/api/users/me/route");
-      const req = new NextRequest("http://localhost:3000/api/users/me", {
-        method: "PATCH",
-        body: JSON.stringify({ username: "Admin\n<script>alert(1)</script>" }),
-        headers: { "Content-Type": "application/json" },
-      });
-
-      const res = await updateMeRoute(req);
-      expect(res.status).toBe(400);
-      const json = await res.json();
-      expect(json.error).toBeDefined();
-    });
-
-    test("PUT /api/users/[id] rejects username containing control characters with 400 (CWE-20/150)", async () => {
+    test("PUT /api/users/[id] rejects the retired username field with 400 (CWE-20/150)", async () => {
       const { auth } = jest.requireMock("@/lib/auth");
       auth.mockResolvedValueOnce({
         user: { id: "1", name: "Admin", role: "admin", email: "admin@club.com" },

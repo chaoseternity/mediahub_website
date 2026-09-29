@@ -1,21 +1,10 @@
 import { auth } from "@/lib/auth";
-import { getUserById, updateUserRole, updateUsername, deleteUser } from "@/lib/db";
+import { getUserById, updateUserRole, deleteUser } from "@/lib/db";
 import { NextRequest, NextResponse } from "next/server";
 import { resultErrorResponse, toErrorResponse, validationErrorResponse } from "@/lib/api-errors";
-import { usernameErrorResponse } from "../username-errors";
 import { z } from "zod";
 
-const UpdateUserSchema = z.union([
-  z.object({ role: z.enum(["admin", "verified", "viewer"]) }),
-  z.object({
-    username: z
-      .string()
-      .trim()
-      .min(1)
-      .max(50)
-      .regex(/^[\p{L}\p{N}_\-. ]+$/u, "Username contains invalid characters"),
-  }),
-]);
+const UpdateUserSchema = z.object({ role: z.enum(["admin", "verified", "viewer"]) });
 
 export async function PUT(
   req: NextRequest,
@@ -54,28 +43,19 @@ export async function PUT(
     Number(session.user.id) === userId ||
     Boolean(session.user.email && user.email.toLowerCase() === session.user.email.toLowerCase());
 
-  if ("role" in parsed.data && isSelf && parsed.data.role !== "admin") {
+  if (isSelf && parsed.data.role !== "admin") {
     return NextResponse.json({ error: "Cannot demote your own admin account" }, { status: 400 });
   }
 
-  if ("role" in parsed.data) {
-    try {
-      const result = await updateUserRole(userId, parsed.data.role);
-      if (!result.success) {
-        return resultErrorResponse(result.error, "Failed to update user role");
-      }
-      return NextResponse.json({ success: true });
-    } catch (err: unknown) {
-      // e.g. demoting an ADMIN_EMAILS admin (ConfiguredAdminError) → 403 with its message.
-      return toErrorResponse(err, "Failed to update user role");
-    }
-  }
-
   try {
-    await updateUsername(userId, parsed.data.username);
+    const result = await updateUserRole(userId, parsed.data.role);
+    if (!result.success) {
+      return resultErrorResponse(result.error, "Failed to update user role");
+    }
     return NextResponse.json({ success: true });
   } catch (err: unknown) {
-    return usernameErrorResponse(err, "Failed to update username");
+    // e.g. demoting an ADMIN_EMAILS admin (ConfiguredAdminError) → 403 with its message.
+    return toErrorResponse(err, "Failed to update user role");
   }
 }
 

@@ -13,7 +13,7 @@ export default async function DashboardPage() {
     <DashboardClient
       initialData={equipment}
       role={session.user.role}
-      userName={session.user.username ?? session.user.name ?? ""}
+      userName={session.user.name ?? ""}
     />
   );
 }

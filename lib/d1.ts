@@ -156,7 +156,6 @@ async function ensurePostgresSchema(pg: any): Promise<void> {
         id SERIAL PRIMARY KEY,
         name TEXT NOT NULL,
         email TEXT NOT NULL UNIQUE,
-        username TEXT,
         google_id TEXT NOT NULL,
         image TEXT,
         role TEXT NOT NULL DEFAULT 'viewer' CHECK(role IN ('admin', 'editor', 'viewer')),
@@ -444,8 +443,9 @@ async function ensurePostgresSchema(pg: any): Promise<void> {
     "CREATE TABLE storage_map_layout"
   );
 
-  // Column additions for existing tables
-  await runSafe(() => sql`ALTER TABLE users ADD COLUMN IF NOT EXISTS username TEXT;`, "ALTER users username");
+  // Column changes for existing tables. users.username is retired: display names come solely
+  // from the OAuth name.
+  await runSafe(() => sql`ALTER TABLE users DROP COLUMN IF EXISTS username;`, "DROP users username");
   await runSafe(() => sql`ALTER TABLE checkouts ADD COLUMN IF NOT EXISTS nfc_value TEXT;`, "ALTER checkouts nfc_value");
   await runSafe(() => sql`ALTER TABLE checkouts ADD COLUMN IF NOT EXISTS nfc_id TEXT;`, "ALTER checkouts nfc_id");
   await runSafe(() => sql`ALTER TABLE checkouts ADD COLUMN IF NOT EXISTS checkout_location TEXT;`, "ALTER checkouts checkout_location");

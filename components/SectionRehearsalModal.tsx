@@ -148,9 +148,6 @@ export function SectionRehearsalModal({
                           className="rounded border-input text-primary"
                         />
                         <span className="font-medium">{dep.name}</span>
-                        {dep.username && (
-                          <span className="text-[10px] text-muted-foreground">(@{dep.username})</span>
-                        )}
                       </label>
                     ))
                   )}

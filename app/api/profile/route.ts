@@ -1,5 +1,5 @@
 import { auth } from "@/lib/auth";
-import { getUserByEmail, getUserByUsername, getUserProfileData } from "@/lib/db";
+import { getUserByEmail, getUserProfileData } from "@/lib/db";
 import { NextRequest, NextResponse } from "next/server";
 
 export async function GET(req: NextRequest) {
@@ -19,7 +19,6 @@ export async function GET(req: NextRequest) {
 
   const { searchParams } = new URL(req.url);
   const targetIdParam = searchParams.get("id");
-  const targetUsernameParam = searchParams.get("username");
 
   let targetUserId = currentUserId;
 
@@ -29,15 +28,6 @@ export async function GET(req: NextRequest) {
       return NextResponse.json({ error: "Invalid user ID" }, { status: 400 });
     }
     targetUserId = parsedId;
-  } else if (targetUsernameParam) {
-    if (targetUsernameParam.length > 100) {
-      return NextResponse.json({ error: "User not found" }, { status: 404 });
-    }
-    const targetUser = await getUserByUsername(targetUsernameParam);
-    if (!targetUser) {
-      return NextResponse.json({ error: "User not found" }, { status: 404 });
-    }
-    targetUserId = targetUser.id;
   }
 
   // Access control:

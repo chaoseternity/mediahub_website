@@ -38,7 +38,7 @@ export async function POST(req: NextRequest) {
   }
 
   const userId = Number(session.user.id);
-  const userName = session.user.name || session.user.username || "Borrower";
+  const userName = session.user.name || "Borrower";
 
   try {
     const result = await claimHandoverCode({
