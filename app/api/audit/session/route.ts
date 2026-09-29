@@ -25,11 +25,16 @@ export async function GET(req: NextRequest) {
 
   const active = await getActiveAuditSession();
   if (!active) {
-    return NextResponse.json({ active: null });
+    return NextResponse.json({ active: null, session: null, records: [] });
   }
 
   const details = await getAuditSessionDetails(active.id);
-  return NextResponse.json({ active, ...details });
+  return NextResponse.json({
+    active,
+    session: details?.session ?? active,
+    records: details?.records ?? [],
+    ...(details?.session ?? active),
+  });
 }
 
 export async function POST(req: NextRequest) {
