@@ -14,7 +14,11 @@ import {
   getReservations,
 } from "@/lib/db";
 import { POST as createReservationRoute, GET as listReservationsRoute } from "@/app/api/reservations/route";
-import { DELETE as cancelReservationRoute, PATCH as fulfillReservationRoute } from "@/app/api/reservations/[id]/route";
+import {
+  DELETE as cancelReservationRoute,
+  PATCH as fulfillReservationRoute,
+  GET as getReservationRoute,
+} from "@/app/api/reservations/[id]/route";
 import { auth } from "@/lib/auth";
 import { NextRequest } from "next/server";
 
@@ -133,5 +137,154 @@ describe("Gear Reservations & Conflict Detection", () => {
     expect(res2.status).toBe(409);
     const body2 = await res2.json();
     expect(body2.error).toContain("already reserved");
+  });
+
+  describe("admin-only access", () => {
+    async function seedReservation() {
+      const admin = await upsertUser({
+        name: "Admin User",
+        email: "admin@school.edu",
+        role: "admin",
+        google_id: "google_admin",
+        image: null,
+        provider: "google",
+      });
+      const eq = await createEquipment({
+        name: "Canon R5",
+        tags: [],
+        status: "Available",
+        condition: "Working",
+        location: "Cabinet 2",
+      });
+      const reservation = await createReservation({
+        equipment_id: eq.id,
+        reserved_by: admin.id,
+        reserved_by_name: admin.name,
+        start_time: new Date(Date.now() + 10 * 3600 * 1000).toISOString(),
+        end_time: new Date(Date.now() + 20 * 3600 * 1000).toISOString(),
+      });
+      return { admin, eq, reservation };
+    }
+
+    test.each(["verified", "viewer"] as const)("every reservations route returns 403 for %s users", async (role) => {
+      const { eq, reservation } = await seedReservation();
+      const member = await upsertUser({
+        name: `Member ${role}`,
+        email: `${role}@school.edu`,
+        role,
+        google_id: `google_${role}`,
+        image: null,
+        provider: "google",
+      });
+      (auth as jest.Mock).mockResolvedValue({
+        user: { id: String(member.id), email: member.email, name: member.name, role },
+      });
+      const idParams = { params: Promise.resolve({ id: String(reservation.id) }) };
+
+      const list = await listReservationsRoute(new NextRequest("http://localhost/api/reservations"));
+      expect(list.status).toBe(403);
+
+      const create = await createReservationRoute(
+        new NextRequest("http://localhost/api/reservations", {
+          method: "POST",
+          body: JSON.stringify({
+            equipment_id: eq.id,
+            start_time: new Date(Date.now() + 30 * 3600 * 1000).toISOString(),
+            end_time: new Date(Date.now() + 40 * 3600 * 1000).toISOString(),
+          }),
+        })
+      );
+      expect(create.status).toBe(403);
+
+      const get = await getReservationRoute(new NextRequest(`http://localhost/api/reservations/${reservation.id}`), idParams);
+      expect(get.status).toBe(403);
+
+      const cancel = await cancelReservationRoute(
+        new NextRequest(`http://localhost/api/reservations/${reservation.id}`, { method: "DELETE" }),
+        idParams
+      );
+      expect(cancel.status).toBe(403);
+
+      const fulfill = await fulfillReservationRoute(
+        new NextRequest(`http://localhost/api/reservations/${reservation.id}`, {
+          method: "PATCH",
+          body: JSON.stringify({ action: "fulfill" }),
+        }),
+        idParams
+      );
+      expect(fulfill.status).toBe(403);
+
+      // Nothing changed.
+      const [stored] = await getReservations({ equipment_id: eq.id });
+      expect(stored.status).toBe("confirmed");
+      expect(await getReservations()).toHaveLength(1);
+    });
+
+    test("admins can list and view reservations", async () => {
+      const { admin, reservation } = await seedReservation();
+      (auth as jest.Mock).mockResolvedValue({
+        user: { id: String(admin.id), email: admin.email, name: admin.name, role: "admin" },
+      });
+      const list = await listReservationsRoute(new NextRequest("http://localhost/api/reservations"));
+      expect(list.status).toBe(200);
+      const get = await getReservationRoute(new NextRequest(`http://localhost/api/reservations/${reservation.id}`), {
+        params: Promise.resolve({ id: String(reservation.id) }),
+      });
+      expect(get.status).toBe(200);
+    });
+  });
+
+  describe("atomic state transitions", () => {
+    async function seed() {
+      const admin = await upsertUser({
+        name: "Admin User",
+        email: "admin@school.edu",
+        role: "admin",
+        google_id: "google_admin",
+        image: null,
+        provider: "google",
+      });
+      const eq = await createEquipment({
+        name: "Zoom H6",
+        tags: [],
+        status: "Available",
+        condition: "Working",
+        location: "Audio Rack",
+      });
+      const reservation = await createReservation({
+        equipment_id: eq.id,
+        reserved_by: admin.id,
+        reserved_by_name: admin.name,
+        start_time: new Date(Date.now() + 1 * 3600 * 1000).toISOString(),
+        end_time: new Date(Date.now() + 5 * 3600 * 1000).toISOString(),
+      });
+      return { admin, eq, reservation };
+    }
+
+    test("concurrent fulfils create only one checkout", async () => {
+      const { eq, reservation } = await seed();
+      const results = await Promise.all([fulfillReservation(reservation.id), fulfillReservation(reservation.id)]);
+      expect(results.filter((r) => r.success)).toHaveLength(1);
+      const open = db
+        .prepare("SELECT COUNT(*) AS n FROM checkouts WHERE equipment_id = ? AND returned_at IS NULL")
+        .get(eq.id);
+      expect(open.n).toBe(1);
+    });
+
+    test("a cancelled reservation cannot be fulfilled, and vice versa", async () => {
+      const { admin, reservation } = await seed();
+      expect((await cancelReservation(reservation.id, admin.id, true)).success).toBe(true);
+      expect((await cancelReservation(reservation.id, admin.id, true)).success).toBe(false);
+      expect((await fulfillReservation(reservation.id)).success).toBe(false);
+    });
+
+    test("a failed fulfil leaves the reservation confirmed", async () => {
+      const { eq, reservation } = await seed();
+      db.prepare("UPDATE equipment SET status = 'Unavailable (In Repairs)' WHERE id = ?").run(eq.id);
+      const res = await fulfillReservation(reservation.id);
+      expect(res.success).toBe(false);
+      const [stored] = await getReservations({ equipment_id: eq.id });
+      expect(stored.status).toBe("confirmed");
+    });
   });
 });

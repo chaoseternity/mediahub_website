@@ -12,6 +12,7 @@ import {
 import { parseEquipmentId } from "@/lib/utils";
 import type { Equipment } from "@/lib/types";
 import { UserLink } from "@/components/UserLink";
+import { formatTime } from "@/lib/timezone";
 
 interface EquipmentCardProps {
   equipment: Equipment;
@@ -128,7 +129,7 @@ export function EquipmentCard({ equipment, onClick }: EquipmentCardProps) {
               </div>
               {equipment.active_event_end_time && (
                 <p className="text-[10px] text-muted-foreground mt-0.5">
-                  Possession until: {new Date(equipment.active_event_end_time).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                  Possession until: {formatTime(equipment.active_event_end_time)}
                 </p>
               )}
             </div>

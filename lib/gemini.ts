@@ -1,5 +1,76 @@
 import { GoogleGenerativeAI } from "@google/generative-ai";
 import type { SOPDocument, SOPCitation, Equipment, AppEvent } from "./types";
+import { formatLongDateTime, parseDbDate } from "./timezone";
+
+export const MAX_CONTEXT_EVENTS = 10;
+
+/**
+ * Events that have not yet ended (ongoing or upcoming), nearest first, capped at `limit`.
+ * Callers may pass events in any order (the DB returns them newest-first).
+ */
+export function selectUpcomingEvents(
+  events: AppEvent[],
+  now: Date = new Date(),
+  limit: number = MAX_CONTEXT_EVENTS
+): AppEvent[] {
+  const nowMs = now.getTime();
+  return events
+    .map((ev) => ({
+      ev,
+      start: parseDbDate(ev.start_time)?.getTime() ?? NaN,
+      end: (parseDbDate(ev.end_time) ?? parseDbDate(ev.start_time))?.getTime() ?? NaN,
+    }))
+    .filter((e) => Number.isFinite(e.end) && e.end > nowMs)
+    .sort((a, b) => (Number.isFinite(a.start) ? a.start : a.end) - (Number.isFinite(b.start) ? b.start : b.end))
+    .slice(0, limit)
+    .map((e) => e.ev);
+}
+
+const CITATION_BLOCK_RE = /```json_citations\s*([\s\S]*?)\s*```/;
+
+/**
+ * Splits the model's json_citations block from the answer. Citations are only kept when their
+ * document_id refers to one of the documents actually sent to the model; the title is taken
+ * from that document so a hallucinated id/title can never be attributed to another SOP.
+ */
+export function extractCitations(
+  responseText: string,
+  sentDocs: Pick<SOPDocument, "id" | "title">[]
+): { answer: string; citations: SOPCitation[] } {
+  const match = responseText.match(CITATION_BLOCK_RE);
+  if (!match) return { answer: responseText, citations: [] };
+
+  const docsById = new Map(sentDocs.map((d) => [d.id, d]));
+  const citations: SOPCitation[] = [];
+  const seen = new Set<string>();
+  try {
+    const parsed: unknown = JSON.parse(match[1] || "[]");
+    if (Array.isArray(parsed)) {
+      for (const item of parsed) {
+        if (!item || typeof item !== "object") continue;
+        const raw = item as Record<string, unknown>;
+        const id = typeof raw.document_id === "string" ? Number(raw.document_id.trim()) : raw.document_id;
+        if (typeof id !== "number" || !Number.isInteger(id)) continue;
+        const doc = docsById.get(id);
+        if (!doc) continue;
+        const citation: SOPCitation = {
+          document_id: doc.id,
+          document_title: doc.title,
+          section_title: raw.section_title ? String(raw.section_title) : undefined,
+          snippet: raw.snippet ? String(raw.snippet) : "",
+        };
+        const key = `${citation.document_id}|${citation.section_title ?? ""}|${citation.snippet}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        citations.push(citation);
+      }
+    }
+  } catch (e) {
+    console.warn("Could not parse json_citations block:", e);
+  }
+
+  return { answer: responseText.replace(CITATION_BLOCK_RE, "").trim(), citations };
+}
 
 function getGeminiClient(): GoogleGenerativeAI {
   const apiKey = process.env.GEMINI_API_KEY;
@@ -98,7 +169,7 @@ export async function askSOPAssistant({
         let statusText: string = item.status;
         if (item.status === "Checked Out" && item.checked_out_by_name) {
           statusText = `Checked Out by ${item.checked_out_by_name}${
-            item.expected_return_at ? ` (Expected Return: ${item.expected_return_at})` : ""
+            item.expected_return_at ? ` (Expected Return: ${formatLongDateTime(item.expected_return_at, item.expected_return_at)})` : ""
           }${item.checkout_location ? ` at ${item.checkout_location}` : ""}`;
         } else if (item.status.startsWith("In Event") && item.active_event_name) {
           statusText = `${item.status} ("${item.active_event_name}" @ ${item.active_event_location || "Event Venue"})`;
@@ -115,18 +186,17 @@ export async function askSOPAssistant({
     inventoryContextText = "No equipment currently registered in inventory.";
   }
 
-  // 3. Build Upcoming Events Context
+  // 3. Build Upcoming Events Context (not-yet-ended events, nearest first)
   let eventsContextText = "";
-  if (events.length > 0) {
-    eventsContextText = events
-      .slice(0, 10)
+  const upcomingEvents = selectUpcomingEvents(events);
+  if (upcomingEvents.length > 0) {
+    eventsContextText = upcomingEvents
       .map(
         (ev) =>
-          `• [Event #${ev.id}] "${ev.name}" | Location: ${ev.location} | Time: ${new Date(
+          `• [Event #${ev.id}] "${ev.name}" | Location: ${ev.location} | Time: ${formatLongDateTime(
+            ev.start_time,
             ev.start_time
-          ).toLocaleString("en-GB")} to ${new Date(ev.end_time).toLocaleString("en-GB")}${
-            ev.has_rehearsal ? " (Includes Rehearsal)" : ""
-          }`
+          )} to ${formatLongDateTime(ev.end_time, ev.end_time)}${ev.has_rehearsal ? " (Includes Rehearsal)" : ""}`
       )
       .join("\n");
   } else {
@@ -224,29 +294,8 @@ Instructions:
       const result = await model.generateContent(prompt);
       const responseText = result.response.text();
 
-      // Parse out json_citations block
-      let cleanAnswer = responseText;
-      let citations: SOPCitation[] = [];
-
-      const citationMatch = responseText.match(/```json_citations\s*([\s\S]*?)\s*```/);
-      if (citationMatch && citationMatch[1]) {
-        try {
-          const parsed = JSON.parse(citationMatch[1]);
-          if (Array.isArray(parsed)) {
-            citations = parsed
-              .filter((item) => item && item.document_id)
-              .map((item) => ({
-                document_id: Number(item.document_id) || relevantDocs[0]?.id || 0,
-                document_title: String(item.document_title || "SOP Document"),
-                section_title: item.section_title ? String(item.section_title) : undefined,
-                snippet: String(item.snippet || ""),
-              }));
-          }
-        } catch (e) {
-          console.warn("Could not parse json_citations block:", e);
-        }
-        cleanAnswer = responseText.replace(/```json_citations\s*[\s\S]*?\s*```/, "").trim();
-      }
+      // Parse out json_citations block (only citations of documents actually sent are kept)
+      const { answer: cleanAnswer, citations } = extractCitations(responseText, relevantDocs);
 
       return {
         answer: cleanAnswer,

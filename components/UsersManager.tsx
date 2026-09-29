@@ -7,6 +7,7 @@ import { Trash2, Pencil, Check, X } from "lucide-react";
 import type { User, Role } from "@/lib/types";
 import { roleBadgeClass } from "@/lib/utils";
 import { UserLink } from "./UserLink";
+import { readErrorMessage, networkErrorMessage } from "@/lib/fetch-error";
 
 const ROLE_OPTIONS: Role[] = ["admin", "verified", "viewer"];
 
@@ -66,14 +67,14 @@ export function UsersManager({ users: initialUsers, currentUserId }: UsersManage
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ username: trimmed }),
       });
-      if (!res.ok) throw new Error("Failed to update username");
+      if (!res.ok) throw new Error(await readErrorMessage(res, "Failed to update username."));
       setUsers((prev) =>
         prev.map((u) => (u.id === userId ? { ...u, username: trimmed } : u))
       );
       setEditingUsername(null);
       setPendingUsername("");
-    } catch {
-      setError("Failed to update username. Please try again.");
+    } catch (err) {
+      setError(networkErrorMessage(err, "Failed to update username. Please try again."));
     } finally {
       setSaving(null);
     }
@@ -90,14 +91,14 @@ export function UsersManager({ users: initialUsers, currentUserId }: UsersManage
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ role: newRole }),
       });
-      if (!res.ok) throw new Error("Failed to update role");
+      if (!res.ok) throw new Error(await readErrorMessage(res, "Failed to update role."));
       setUsers((prev) =>
         prev.map((u) => (u.id === userId ? { ...u, role: newRole } : u))
       );
       setEditing(null);
       setPendingRole(null);
-    } catch {
-      setError("Failed to update role. Please try again.");
+    } catch (err) {
+      setError(networkErrorMessage(err, "Failed to update role. Please try again."));
     } finally {
       setSaving(null);
     }
@@ -109,10 +110,10 @@ export function UsersManager({ users: initialUsers, currentUserId }: UsersManage
     setError(null);
     try {
       const res = await fetch(`/api/users/${userId}`, { method: "DELETE" });
-      if (!res.ok) throw new Error("Failed to delete user");
+      if (!res.ok) throw new Error(await readErrorMessage(res, "Failed to delete user."));
       setUsers((prev) => prev.filter((u) => u.id !== userId));
-    } catch {
-      setError("Failed to delete user. Please try again.");
+    } catch (err) {
+      setError(networkErrorMessage(err, "Failed to delete user. Please try again."));
     } finally {
       setDeleting(null);
     }

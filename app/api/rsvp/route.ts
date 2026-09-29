@@ -1,5 +1,6 @@
 import { getDeploymentByToken, updateDeploymentRSVP } from "@/lib/db";
 import { NextRequest, NextResponse } from "next/server";
+import { resultErrorResponse, validationErrorResponse } from "@/lib/api-errors";
 import { z } from "zod";
 
 const RSVPPostSchema = z.object({
@@ -38,17 +39,16 @@ export async function GET(req: NextRequest) {
       rehearsalEndTime: details.event.rehearsal_end_time,
       attendingRehearsal: details.attending_rehearsal,
       userName: details.user.name,
-      userEmail: details.user.email,
       section: details.section,
       responseStatus: details.response_status,
       respondedAt: details.responded_at,
+      // RSVP closes once the event has ended (enforced again in updateDeploymentRSVP).
+      eventEnded: Date.now() > new Date(details.event.end_time).getTime(),
     });
   } catch (err: unknown) {
+    // Public endpoint: never expose internal error text.
     console.error("RSVP GET Error:", err);
-    return NextResponse.json(
-      { error: err instanceof Error ? err.message : "Failed to load RSVP details" },
-      { status: 500 }
-    );
+    return NextResponse.json({ error: "Failed to load RSVP details" }, { status: 500 });
   }
 }
 
@@ -62,7 +62,7 @@ export async function POST(req: NextRequest) {
 
   const parsed = RSVPPostSchema.safeParse(body);
   if (!parsed.success) {
-    return NextResponse.json({ error: parsed.error.flatten() }, { status: 400 });
+    return validationErrorResponse(parsed.error);
   }
 
   try {
@@ -71,18 +71,17 @@ export async function POST(req: NextRequest) {
 
     if (!result.success) {
       const isNotFound = result.error?.includes("Invalid or expired");
-      return NextResponse.json(
-        { error: result.error || "Failed to update RSVP" },
-        { status: isNotFound ? 404 : 400 }
-      );
+      const isClosed = result.error?.includes("has ended");
+      if (isNotFound || isClosed) {
+        return NextResponse.json({ error: result.error }, { status: isNotFound ? 404 : 410 });
+      }
+      return resultErrorResponse(result.error, "Failed to update RSVP");
     }
 
     return NextResponse.json({ success: true, status });
   } catch (err: unknown) {
+    // Public endpoint: never expose internal error text.
     console.error("RSVP POST Error:", err);
-    return NextResponse.json(
-      { error: err instanceof Error ? err.message : "Failed to submit RSVP" },
-      { status: 500 }
-    );
+    return NextResponse.json({ error: "Failed to submit RSVP" }, { status: 500 });
   }
 }

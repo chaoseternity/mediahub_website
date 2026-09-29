@@ -6,6 +6,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Search, Check } from "lucide-react";
 import type { Equipment, EventSection } from "@/lib/types";
+import { readErrorMessage, networkErrorMessage } from "@/lib/fetch-error";
 
 interface SectionEquipmentModalProps {
   eventId: number | null;
@@ -30,23 +31,47 @@ export function SectionEquipmentModal({
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  const [loadError, setLoadError] = useState<string | null>(null);
+
+  // Keyed on the ID *contents*, not the array identity, so a parent re-render that passes a
+  // fresh (but equal) array doesn't wipe the user's in-progress selection.
+  const attachedKey = currentlyAttachedEqIds.join(",");
+
   useEffect(() => {
     if (open && eventId && section) {
       setSearch("");
-      setSelectedEqIds([...currentlyAttachedEqIds]);
+      setSelectedEqIds(attachedKey ? attachedKey.split(",").map(Number) : []);
       setError(null);
+      setLoadError(null);
 
-      fetch("/api/equipment")
-        .then((r) => r.json())
-        .then((data: Equipment[]) => setAllEquipment(data))
-        .catch(() => setAllEquipment([]));
+      const controller = new AbortController();
+      fetch("/api/equipment", { signal: controller.signal })
+        .then(async (r) => {
+          if (!r.ok) throw new Error(await readErrorMessage(r, "Failed to load equipment"));
+          return r.json() as Promise<unknown>;
+        })
+        .then((data) => {
+          if (controller.signal.aborted) return;
+          if (Array.isArray(data)) {
+            setAllEquipment(data as Equipment[]);
+          } else {
+            setAllEquipment([]);
+            setLoadError("Failed to load equipment: unexpected response");
+          }
+        })
+        .catch((err: unknown) => {
+          if (controller.signal.aborted) return;
+          setAllEquipment([]);
+          setLoadError(networkErrorMessage(err, "Failed to load equipment — check your connection."));
+        });
+      return () => controller.abort();
     }
-  }, [open, eventId, section, currentlyAttachedEqIds]);
+  }, [open, eventId, section, attachedKey]);
 
   const filteredEquipment = allEquipment.filter(
     (eq) =>
-      eq.name.toLowerCase().includes(search.toLowerCase()) ||
-      eq.location.toLowerCase().includes(search.toLowerCase()) ||
+      (eq.name ?? "").toLowerCase().includes(search.toLowerCase()) ||
+      (eq.location ?? "").toLowerCase().includes(search.toLowerCase()) ||
       (eq.tags && eq.tags.some((t) => t.toLowerCase().includes(search.toLowerCase())))
   );
 
@@ -61,6 +86,7 @@ export function SectionEquipmentModal({
     if (!eventId || !section) return;
     setSubmitting(true);
     setError(null);
+    let changed = false;
 
     try {
       // Find additions and removals compared to initial currentlyAttachedEqIds
@@ -78,9 +104,9 @@ export function SectionEquipmentModal({
           }),
         });
         if (!res.ok) {
-          const json = await res.json().catch(() => ({}));
-          throw new Error(json.error ?? "Failed to attach equipment to section");
+          throw new Error(await readErrorMessage(res, "Failed to attach equipment to section"));
         }
+        changed = true;
       }
 
       for (const eqId of toRemove) {
@@ -94,15 +120,17 @@ export function SectionEquipmentModal({
           }),
         });
         if (!res.ok) {
-          const json = await res.json().catch(() => ({}));
-          throw new Error(json.error ?? "Failed to remove equipment from section");
+          throw new Error(await readErrorMessage(res, "Failed to remove equipment from section"));
         }
+        changed = true;
       }
 
       onUpdated();
       onClose();
     } catch (err: unknown) {
-      setError(err instanceof Error ? err.message : "An error occurred");
+      setError(networkErrorMessage(err));
+      // Some changes may have been applied before the failure — let the parent re-sync.
+      if (changed) onUpdated();
     } finally {
       setSubmitting(false);
     }
@@ -117,6 +145,11 @@ export function SectionEquipmentModal({
 
         <div className="space-y-3 py-2 flex-1 overflow-hidden flex flex-col">
           {error && <p className="text-xs text-destructive font-medium bg-destructive/10 p-2 rounded-md">{error}</p>}
+          {loadError && (
+            <p role="alert" className="text-xs text-destructive font-medium bg-destructive/10 p-2 rounded-md">
+              {loadError}
+            </p>
+          )}
 
           <div className="relative">
             <Search className="h-3.5 w-3.5 absolute left-2.5 top-2.5 text-muted-foreground" />

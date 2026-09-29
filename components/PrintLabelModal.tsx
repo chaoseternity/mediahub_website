@@ -23,18 +23,29 @@ interface PrintLabelModalProps {
 }
 
 export function PrintLabelModal({ equipment, open, onClose }: PrintLabelModalProps) {
-  const [qrDataUrl, setQrDataUrl] = useState<string>("");
-  const [barcodeDataUrl, setBarcodeDataUrl] = useState<string>("");
+  // Generated images are tagged with the code they encode, so a previous item's QR/barcode is
+  // never shown (or printed) while the new item's images are still being generated.
+  const [qr, setQr] = useState<{ code: string; url: string } | null>(null);
+  const [barcode, setBarcode] = useState<{ code: string; url: string } | null>(null);
   const [barcodeError, setBarcodeError] = useState<string | null>(null);
 
   const codeValue =
     equipment?.serial_number?.trim() || (equipment?.id ? `EQ-${equipment.id}` : equipment?.name?.trim() || "EQUIPMENT");
   const parsedId = equipment ? parseEquipmentId(equipment.serial_number) : null;
 
+  const qrDataUrl = qr && qr.code === codeValue ? qr.url : "";
+  const barcodeDataUrl = barcode && barcode.code === codeValue ? barcode.url : "";
+
   useEffect(() => {
     if (!open || !equipment) return;
 
-    // 1. Generate QR Code Data URL
+    let cancelled = false;
+    setQr(null);
+    setBarcode(null);
+    setBarcodeError(null);
+    const setBarcodeDataUrl = (url: string) => setBarcode({ code: codeValue, url });
+
+    // 1. Generate QR Code Data URL (async — ignore the result if the item changed meanwhile)
     QRCode.toDataURL(codeValue, {
       width: 300,
       margin: 1,
@@ -43,14 +54,15 @@ export function PrintLabelModal({ equipment, open, onClose }: PrintLabelModalPro
         light: "#ffffff",
       },
     })
-      .then((url) => setQrDataUrl(url))
+      .then((url) => {
+        if (!cancelled) setQr({ code: codeValue, url });
+      })
       .catch((err) => {
         console.error("Failed to generate QR code", err);
       });
 
     // 2. Generate Barcode (Code128) via Offscreen Canvas to Data URL with Adaptive Bar Width
     try {
-      setBarcodeError(null);
       const adaptiveWidth = getAdaptiveBarcodeWidth(codeValue, 240);
       const canvas = document.createElement("canvas");
       JsBarcode(canvas, codeValue, {
@@ -91,6 +103,10 @@ export function PrintLabelModal({ equipment, open, onClose }: PrintLabelModalPro
         console.error("Barcode generation error:", fallbackErr);
       }
     }
+
+    return () => {
+      cancelled = true;
+    };
   }, [open, equipment, codeValue]);
 
   if (!equipment) return null;
@@ -233,7 +249,12 @@ export function PrintLabelModal({ equipment, open, onClose }: PrintLabelModalPro
           <Button type="button" variant="ghost" onClick={onClose}>
             Close
           </Button>
-          <Button type="button" onClick={handlePrint} className="gap-1.5">
+          <Button
+            type="button"
+            onClick={handlePrint}
+            className="gap-1.5"
+            disabled={!qrDataUrl || (!barcodeDataUrl && !barcodeError)}
+          >
             <Printer className="h-4 w-4" />
             Print Label
           </Button>

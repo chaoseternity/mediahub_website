@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import type { Equipment } from "@/lib/types";
+import { readErrorMessage, networkErrorMessage } from "@/lib/fetch-error";
 
 interface AddEquipmentToEventModalProps {
   eventId: number | null;
@@ -22,10 +23,23 @@ export function AddEquipmentToEventModal({ eventId, open, onClose, onAdded }: Ad
     if (open && eventId) {
       setSelectedEqId(null);
       setError(null);
-      fetch("/api/equipment")
-        .then((r) => r.json())
-        .then((data: Equipment[]) => setAllEquipment(data))
-        .catch(() => setAllEquipment([]));
+      const controller = new AbortController();
+      fetch("/api/equipment", { signal: controller.signal })
+        .then(async (r) => {
+          if (!r.ok) throw new Error(await readErrorMessage(r, "Failed to load equipment"));
+          return r.json() as Promise<unknown>;
+        })
+        .then((data) => {
+          if (controller.signal.aborted) return;
+          setAllEquipment(Array.isArray(data) ? (data as Equipment[]) : []);
+          if (!Array.isArray(data)) setError("Failed to load equipment: unexpected response");
+        })
+        .catch((err: unknown) => {
+          if (controller.signal.aborted) return;
+          setAllEquipment([]);
+          setError(networkErrorMessage(err, "Failed to load equipment — check your connection."));
+        });
+      return () => controller.abort();
     }
   }, [open, eventId]);
 
@@ -42,14 +56,13 @@ export function AddEquipmentToEventModal({ eventId, open, onClose, onAdded }: Ad
       });
 
       if (!res.ok) {
-        const data = await res.json();
-        throw new Error(data.error ?? "Failed to add equipment to event");
+        throw new Error(await readErrorMessage(res, "Failed to add equipment to event"));
       }
 
       onAdded();
       onClose();
     } catch (err: unknown) {
-      setError(err instanceof Error ? err.message : "An error occurred");
+      setError(networkErrorMessage(err));
     } finally {
       setSubmitting(false);
     }

@@ -1,6 +1,7 @@
 import { auth } from "@/lib/auth";
 import { returnCheckout, getEquipmentById, getUserByEmail } from "@/lib/db";
 import { NextRequest, NextResponse } from "next/server";
+import { toErrorResponse } from "@/lib/api-errors";
 
 export async function POST(
   _req: NextRequest,
@@ -43,7 +44,7 @@ export async function POST(
     const checkout = await returnCheckout(eqId);
     return NextResponse.json(checkout);
   } catch (err: unknown) {
-    const message = err instanceof Error ? err.message : "Return failed";
-    return NextResponse.json({ error: message }, { status: 409 });
+    // "No active checkout found for this equipment." → 409.
+    return toErrorResponse(err, "Return failed");
   }
 }

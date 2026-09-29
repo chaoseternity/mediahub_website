@@ -6,7 +6,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { EquipmentModal } from "@/components/EquipmentModal";
-import type { Equipment, Role } from "@/lib/types";
+import type { Checkout, Equipment, Role } from "@/lib/types";
 
 interface QRScannerClientProps {
   equipment: Equipment[];
@@ -82,6 +82,39 @@ function findEquipmentByCode(equipmentList: Equipment[], rawCode: string): Equip
   return undefined;
 }
 
+/** Handover codes are "HD-" followed by 6 digits (e.g. "HD-482913"). */
+const HANDOVER_CODE_RE = /^HD-\d{6}$/i;
+
+/** Bare 6-digit form ("482913"), also accepted by the server's normalizeHandoverCode. */
+const BARE_HANDOVER_DIGITS_RE = /^\d{6}$/;
+/** QR payload types: the server generates "MEDIAHUB_HANDOVER"; "HANDOVER" kept for older payloads. */
+const HANDOVER_QR_TYPES = new Set(["MEDIAHUB_HANDOVER", "HANDOVER"]);
+
+/**
+ * Returns the normalized "HD-XXXXXX" code if `code` is an explicit handover code
+ * ("HD-123456", or a JSON QR payload of a handover type), else null. Bare 6-digit
+ * input is handled by the caller so it cannot shadow an equipment ID.
+ */
+function extractHandoverCode(code: string): string | null {
+  if (HANDOVER_CODE_RE.test(code)) return code.toUpperCase();
+  if (code.startsWith("{") && code.includes("HANDOVER")) {
+    try {
+      const parsed = JSON.parse(code);
+      if (parsed && HANDOVER_QR_TYPES.has(parsed.type) && typeof parsed.code === "string") {
+        const inner = parsed.code.trim().toUpperCase();
+        if (HANDOVER_CODE_RE.test(inner)) return inner;
+        if (BARE_HANDOVER_DIGITS_RE.test(inner)) return `HD-${inner}`;
+      }
+    } catch {
+      // ignore parse error
+    }
+  }
+  return null;
+}
+
+/** Ignore repeat decodes of the same code within this window (camera decodes at ~15fps). */
+const SAME_CODE_DEDUPE_MS = 3000;
+
 export function QRScannerClient({ equipment, role, userName }: QRScannerClientProps) {
   const [started, setStarted] = useState(false);
   const [selectedId, setSelectedId] = useState<number | null>(null);
@@ -94,6 +127,11 @@ export function QRScannerClient({ equipment, role, userName }: QRScannerClientPr
   const scannerRef = useRef<any>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const pausedRef = useRef(false);
+  // Set synchronously when ANY code starts being handled; cleared once its result is shown.
+  const inFlightRef = useRef(false);
+  const lastCodeRef = useRef<{ code: string; at: number } | null>(null);
+  // Incremented on every init/unmount so a stale async init can detect it was superseded.
+  const initGenRef = useRef(0);
   const manualInputRef = useRef<HTMLInputElement | null>(null);
 
   // Keep equipment ref stable so the scan callback always sees current data
@@ -104,66 +142,73 @@ export function QRScannerClient({ equipment, role, userName }: QRScannerClientPr
     const code = rawCode.trim();
     if (!code) return;
 
-    // Check if scanned code is a Handover QR JSON or HD- code
-    let handoverCodeToClaim: string | null = null;
-    if (code.startsWith("HD-")) {
-      handoverCodeToClaim = code;
-    } else if (code.startsWith("{") && code.includes("HANDOVER")) {
-      try {
-        const parsed = JSON.parse(code);
-        if (parsed.type === "HANDOVER" && parsed.code) {
-          handoverCodeToClaim = parsed.code;
-        }
-      } catch {
-        // ignore parse error
-      }
-    }
+    // Synchronous guards: the camera decode callback fires ~15 times per second, so the
+    // in-flight flag must be set before any await, and repeats of the same code are dropped.
+    if (inFlightRef.current) return;
+    const now = Date.now();
+    const last = lastCodeRef.current;
+    if (last && last.code === code && now - last.at < SAME_CODE_DEDUPE_MS) return;
+    inFlightRef.current = true;
+    lastCodeRef.current = { code, at: now };
 
-    if (handoverCodeToClaim) {
-      playScanBeep();
-      try {
-        const res = await fetch("/api/handover/claim", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ code: handoverCodeToClaim }),
-        });
-        const data = await res.json();
-        if (res.ok) {
-          alert(`Handover Successful! 🎉\n\nYou are now in possession of: ${data.equipment.name} (${data.equipment.serial_number || "No Serial"}).`);
-          window.location.reload();
-          return;
-        } else {
-          alert(`Handover Claim Failed: ${data.error}`);
-          return;
+    try {
+      const found = findEquipmentByCode(equipmentRef.current, code);
+      // Explicit handover codes always claim; a bare 6-digit code claims only if it is not an equipment ID.
+      const handoverCodeToClaim =
+        extractHandoverCode(code) ?? (!found && BARE_HANDOVER_DIGITS_RE.test(code) ? `HD-${code}` : null);
+
+      if (handoverCodeToClaim) {
+        playScanBeep();
+        try {
+          const res = await fetch("/api/handover/claim", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ code: handoverCodeToClaim }),
+          });
+          const data: { success?: boolean; checkout?: Checkout; error?: string } = await res
+            .json()
+            .catch(() => ({}));
+          if (res.ok && data.success !== false) {
+            // The claim API returns { success, checkout }; resolve the equipment from the local list.
+            const equipmentId = data.checkout?.equipment_id;
+            const eq = equipmentId != null ? equipmentRef.current.find((e) => e.id === equipmentId) : undefined;
+            const label = eq ? `${eq.name} (${eq.serial_number || "No Serial"})` : "the handed-over equipment";
+            alert(`Handover Successful! \u{1F389}\n\nYou are now in possession of: ${label}.`);
+            window.location.reload();
+          } else {
+            alert(`Handover Claim Failed: ${data.error ?? `Request failed (${res.status})`}`);
+          }
+        } catch (err) {
+          console.error(err);
+          alert("Failed to process handover claim.");
         }
-      } catch (err) {
-        console.error(err);
-        alert("Failed to process handover claim.");
+        // The result has been shown (alert blocks); restart the dedupe window from now.
+        lastCodeRef.current = { code, at: Date.now() };
         return;
       }
-    }
 
-    const found = findEquipmentByCode(equipmentRef.current, code);
-    if (found) {
-      playScanBeep();
-      pausedRef.current = true;
-      if (scannerRef.current?.isScanning) {
-        try {
-          scannerRef.current.pause(true);
-        } catch {
-          // Ignore
+      if (found) {
+        playScanBeep();
+        pausedRef.current = true;
+        if (scannerRef.current?.isScanning) {
+          try {
+            scannerRef.current.pause(true);
+          } catch {
+            // Ignore
+          }
         }
+        setNotFound(null);
+        setSelectedId(found.id);
+        setModalOpen(true);
+      } else {
+        setNotFound(code);
       }
-      setNotFound(null);
-      setSelectedId(found.id);
-      setModalOpen(true);
-    } else {
-      setNotFound(code);
+    } finally {
+      inFlightRef.current = false;
     }
   }
 
-  async function cleanup() {
-    const scanner = scannerRef.current;
+  async function stopScanner(scanner: { isScanning?: boolean; stop: () => Promise<void>; clear: () => void } | null) {
     if (!scanner) return;
     try {
       if (scanner.isScanning) await scanner.stop();
@@ -171,13 +216,26 @@ export function QRScannerClient({ equipment, role, userName }: QRScannerClientPr
     } catch {
       // ignore
     }
+  }
+
+  async function cleanup() {
+    const scanner = scannerRef.current;
+    scannerRef.current = null;
+    await stopScanner(scanner);
     streamRef.current?.getTracks().forEach((t) => t.stop());
     streamRef.current = null;
-    scannerRef.current = null;
+  }
+
+  function invalidatePendingInit() {
+    initGenRef.current += 1;
   }
 
   async function init() {
+    const gen = ++initGenRef.current;
+    const isStale = () => gen !== initGenRef.current;
+
     await cleanup();
+    if (isStale()) return;
     setCameraError(null);
     setNotFound(null);
     setStarted(false);
@@ -187,9 +245,10 @@ export function QRScannerClient({ equipment, role, userName }: QRScannerClientPr
     try {
       mod = await import("html5-qrcode");
     } catch {
-      setCameraError("QR and Barcode scanner failed to load.");
+      if (!isStale()) setCameraError("QR and Barcode scanner failed to load.");
       return;
     }
+    if (isStale()) return;
 
     // Configure formats to support standard 2D QR codes and 1D Barcodes
     const supportedFormats = [
@@ -214,17 +273,28 @@ export function QRScannerClient({ equipment, role, userName }: QRScannerClientPr
         { facingMode: "environment" },
         { fps: 15, qrbox: { width: 260, height: 180 } },
         (decodedText: string) => {
-          if (pausedRef.current) return;
-          handleCodeRecognized(decodedText);
+          if (pausedRef.current || inFlightRef.current) return;
+          void handleCodeRecognized(decodedText);
         },
         undefined
       );
+      // Unmounted (or re-initialised) while start() was pending: release the camera now,
+      // otherwise the stream would leak (e.g. React StrictMode double mount).
+      if (isStale()) {
+        if (scannerRef.current === scanner) scannerRef.current = null;
+        await stopScanner(scanner);
+        return;
+      }
       setStarted(true);
       const video = document.querySelector<HTMLVideoElement>("#qr-reader video");
       if (video?.srcObject instanceof MediaStream) {
         streamRef.current = video.srcObject;
       }
     } catch (err) {
+      if (isStale()) {
+        await stopScanner(scanner);
+        return;
+      }
       const msg = String(err);
       setCameraError(
         /NotAllowed|PermissionDenied/.test(msg)
@@ -268,6 +338,8 @@ export function QRScannerClient({ equipment, role, userName }: QRScannerClientPr
   useEffect(() => {
     void init();
     return () => {
+      // Invalidate any pending init so it stops the scanner once start() resolves.
+      invalidatePendingInit();
       void cleanup();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -286,9 +358,12 @@ export function QRScannerClient({ equipment, role, userName }: QRScannerClientPr
 
   function handleManualSubmit(e: React.FormEvent) {
     e.preventDefault();
-    if (manualCode.trim()) {
-      handleCodeRecognized(manualCode.trim());
+    const value = manualCode.trim();
+    if (value) {
       setManualCode("");
+      // Manual entry is an explicit action: allow re-submitting the same code immediately.
+      lastCodeRef.current = null;
+      void handleCodeRecognized(value);
     }
   }
 
@@ -306,7 +381,7 @@ export function QRScannerClient({ equipment, role, userName }: QRScannerClientPr
         </Badge>
         <Badge variant="outline" className="gap-1 text-xs py-1 px-2.5 bg-background font-medium">
           <Handshake className="h-3.5 w-3.5 text-indigo-500" />
-          Peer Handover (HD-XXXX)
+          Peer Handover (HD-XXXXXX)
         </Badge>
         <Badge variant="outline" className="gap-1 text-xs py-1 px-2.5 bg-primary/10 text-primary border-primary/20 font-medium">
           <Zap className="h-3.5 w-3.5" />
@@ -352,7 +427,7 @@ export function QRScannerClient({ equipment, role, userName }: QRScannerClientPr
           <Input
             id="barcode-input"
             ref={manualInputRef}
-            placeholder="Scan with USB gun or enter ID (e.g. LP-KAM-001)…"
+            placeholder="Scan with USB gun, enter ID (e.g. LP-KAM-001) or handover code (HD-123456)…"
             value={manualCode}
             onChange={(e) => setManualCode(e.target.value)}
             className="text-xs h-9 font-mono"

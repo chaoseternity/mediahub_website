@@ -1,5 +1,6 @@
 "use client";
 
+import { useEffect, useState } from "react";
 import { signIn } from "next-auth/react";
 import { Button } from "@/components/ui/button";
 import {
@@ -35,7 +36,19 @@ function GoogleIcon() {
 }
 
 
+const ERROR_MESSAGES: Record<string, string> = {
+  MicrosoftDomain: "Microsoft sign-in is only available for @nushigh.edu.sg accounts.",
+  AccessDenied: "Sign-in was denied. Please try a different account.",
+};
+
 export default function LoginPage() {
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    const code = new URLSearchParams(window.location.search).get("error");
+    if (code) setError(ERROR_MESSAGES[code] ?? "Sign-in failed. Please try again.");
+  }, []);
+
   return (
     <main className="min-h-screen flex items-center justify-center bg-muted/40 p-4">
       <Card className="w-full max-w-sm shadow-md">
@@ -54,6 +67,12 @@ export default function LoginPage() {
           </CardDescription>
         </CardHeader>
         <CardContent className="flex flex-col gap-3">
+          {error && (
+            <p role="alert" className="rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-xs text-destructive">
+              {error}
+            </p>
+          )}
+
           {/* Option 1: Google */}
           <Button
             className="w-full font-medium h-10"

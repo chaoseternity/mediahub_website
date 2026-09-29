@@ -4,6 +4,8 @@ import { useState, useSyncExternalStore } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { signOut } from "next-auth/react";
+import { confirmOfflineSignOut } from "@/lib/offlineSync";
+import { clearServiceWorkerCaches } from "@/lib/sw-client";
 import { useTheme } from "next-themes";
 import {
   LayoutGrid,
@@ -190,7 +192,12 @@ export function MobileNav({ userName, role }: MobileNavProps) {
             variant="outline"
             size="sm"
             className="w-full justify-start gap-2 text-sm font-medium h-9"
-            onClick={() => signOut({ callbackUrl: "/login" })}
+            onClick={() => {
+              // Warns about unsynced NFC offline actions and clears cached member data.
+              if (!confirmOfflineSignOut()) return;
+              void clearServiceWorkerCaches();
+              void signOut({ callbackUrl: "/login" });
+            }}
           >
             <LogOut className="h-4.5 w-4.5" />
             Sign Out

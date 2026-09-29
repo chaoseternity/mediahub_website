@@ -43,10 +43,10 @@ yarn-error.log*
 
 # local dev database
 /data/dev.sqlite3
+/data/*.db
+/data/*.db-shm
+/data/*.db-wal
 
 # typescript
 *.tsbuildinfo
 next-env.d.ts
-
-.vercel
-.env*

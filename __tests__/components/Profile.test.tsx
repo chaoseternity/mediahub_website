@@ -38,11 +38,11 @@ describe("UserLink Component", () => {
     expect(link).toHaveAttribute("href", "/dashboard/profile?username=bob_v");
   });
 
-  test("renders link with encoded name when username and userId are missing", () => {
+  test("renders plain text (no profile link) when only a display name is known", () => {
+    // A display name (e.g. an NFC card's member name) doesn't identify an account.
     render(<UserLink name="Charlie Brown" />);
-    const link = screen.getByRole("link");
-    expect(link).toBeInTheDocument();
-    expect(link).toHaveAttribute("href", "/dashboard/profile?username=Charlie%20Brown");
+    expect(screen.queryByRole("link")).not.toBeInTheDocument();
+    expect(screen.getByText("Charlie Brown")).toBeInTheDocument();
   });
 });
 

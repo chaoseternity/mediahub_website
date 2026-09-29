@@ -25,6 +25,7 @@ export default async function NFCPage() {
         initialCards={nfcCards}
         currentRole={session?.user?.role ?? "viewer"}
         currentUserName={session?.user?.name ?? ""}
+        currentUserId={String(session.user.id ?? session.user.email ?? "")}
       />
     </div>
   );

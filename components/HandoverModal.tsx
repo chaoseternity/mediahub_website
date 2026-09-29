@@ -2,7 +2,7 @@
 
 import { useEffect, useState, useRef } from "react";
 import QRCode from "qrcode";
-import { Copy, Check, Clock, QrCode, ArrowRight, ShieldCheck, Loader2 } from "lucide-react";
+import { Copy, Check, Clock, QrCode, ShieldCheck, Loader2 } from "lucide-react";
 import {
   Dialog,
   DialogContent,
@@ -12,6 +12,7 @@ import {
 } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import type { HandoverCode } from "@/lib/types";
+import { parseDbDate } from "@/lib/timezone";
 
 interface HandoverModalProps {
   equipmentId: number;
@@ -36,7 +37,17 @@ export function HandoverModal({
   const [secondsRemaining, setSecondsRemaining] = useState<number>(15 * 60);
   const [claimed, setClaimed] = useState(false);
 
-  const pollIntervalRef = useRef<NodeJS.Timeout | null>(null);
+  // Expiry timestamp (ms) of the current code; read by the poller without making it a dependency.
+  const expiresAtRef = useRef<number>(0);
+  // Latest callbacks, so the timers below don't restart when the parent re-renders.
+  const onCloseRef = useRef(onClose);
+  const onHandoverCompleteRef = useRef(onHandoverComplete);
+  useEffect(() => {
+    onCloseRef.current = onClose;
+    onHandoverCompleteRef.current = onHandoverComplete;
+  }, [onClose, onHandoverComplete]);
+  // Ensures onHandoverComplete fires at most once per claimed code.
+  const completionNotifiedRef = useRef(false);
 
   // Generate code on open
   useEffect(() => {
@@ -45,9 +56,11 @@ export function HandoverModal({
       setQrDataUrl("");
       setClaimed(false);
       setError(null);
-      if (pollIntervalRef.current) clearInterval(pollIntervalRef.current);
       return;
     }
+
+    let cancelled = false;
+    completionNotifiedRef.current = false;
 
     async function init() {
       try {
@@ -56,76 +69,133 @@ export function HandoverModal({
         const res = await fetch(`/api/equipment/${equipmentId}/handover`, {
           method: "POST",
         });
-        const data = await res.json();
+        const data = await res.json().catch(() => ({}));
         if (!res.ok) {
           throw new Error(data.error || "Failed to generate handover code.");
         }
+        if (cancelled) return;
 
+        // Calculate initial remaining seconds
+        // SQLite timestamps have no zone designator; parseDbDate reads them as UTC.
+        const expiresAt = parseDbDate(data.expires_at)?.getTime() ?? Date.now();
+        expiresAtRef.current = expiresAt;
+        setSecondsRemaining(Math.max(0, Math.floor((expiresAt - Date.now()) / 1000)));
         setHandoverData(data);
 
-        // Generate QR code
+        // Generate QR code (encodes the plain "HD-XXXXXX" code)
         const qrUrl = await QRCode.toDataURL(data.code, {
           width: 260,
           margin: 1.5,
           color: { dark: "#000000", light: "#ffffff" },
         });
-        setQrDataUrl(qrUrl);
-
-        // Calculate initial remaining seconds
-        const diffMs = new Date(data.expires_at).getTime() - Date.now();
-        setSecondsRemaining(Math.max(0, Math.floor(diffMs / 1000)));
+        if (!cancelled) setQrDataUrl(qrUrl);
       } catch (err: unknown) {
-        setError(err instanceof Error ? err.message : "Failed to initiate handover.");
+        if (!cancelled) setError(err instanceof Error ? err.message : "Failed to initiate handover.");
       } finally {
-        setLoading(false);
+        if (!cancelled) setLoading(false);
       }
     }
 
     init();
+    return () => {
+      cancelled = true;
+    };
   }, [open, equipmentId]);
 
-  // Countdown timer
+  const activeCode = handoverData?.code ?? null;
+
+  // Countdown timer: one interval per code, derived from the absolute expiry time so it
+  // never drifts and is not re-created every second.
   useEffect(() => {
-    if (!handoverData || claimed || secondsRemaining <= 0) return;
+    if (!activeCode || claimed) return;
     const timer = setInterval(() => {
-      setSecondsRemaining((prev) => Math.max(0, prev - 1));
+      const remaining = Math.max(0, Math.floor((expiresAtRef.current - Date.now()) / 1000));
+      setSecondsRemaining(remaining);
+      if (remaining <= 0) clearInterval(timer);
     }, 1000);
     return () => clearInterval(timer);
-  }, [handoverData, claimed, secondsRemaining]);
+  }, [activeCode, claimed]);
 
-  // Poll for claim status
+  // Poll for claim status on a stable 3s interval (depends only on the code / claimed state).
   useEffect(() => {
-    if (!handoverData || claimed || secondsRemaining <= 0) return;
+    if (!open || !activeCode || claimed) return;
 
-    pollIntervalRef.current = setInterval(async () => {
+    let cancelled = false;
+    let inFlight = false;
+
+    const poll = setInterval(async () => {
+      if (Date.now() >= expiresAtRef.current) {
+        clearInterval(poll);
+        return;
+      }
+      if (inFlight) return;
+      inFlight = true;
       try {
-        const res = await fetch(`/api/handover/${handoverData.code}`);
+        const res = await fetch(`/api/handover/${encodeURIComponent(activeCode)}`, { cache: "no-store" });
+        if (cancelled) return;
         if (res.ok) {
           const data: HandoverCode = await res.json();
+          if (cancelled) return;
           if (data.status === "claimed") {
+            clearInterval(poll);
             setClaimed(true);
-            if (pollIntervalRef.current) clearInterval(pollIntervalRef.current);
-            setTimeout(() => {
-              onHandoverComplete?.();
-              onClose();
-            }, 2500);
+          } else if (data.status !== "active") {
+            // expired / revoked: nothing left to wait for
+            clearInterval(poll);
           }
+        } else if (res.status === 403 || res.status === 404) {
+          // Not visible to us (or gone) — stop polling rather than hammering the API.
+          clearInterval(poll);
         }
       } catch {
-        // ignore poll errors
+        // ignore transient poll errors
+      } finally {
+        inFlight = false;
       }
     }, 3000);
 
     return () => {
-      if (pollIntervalRef.current) clearInterval(pollIntervalRef.current);
+      cancelled = true;
+      clearInterval(poll);
     };
-  }, [handoverData, claimed, secondsRemaining, onClose, onHandoverComplete]);
+  }, [open, activeCode, claimed]);
+
+  // After a successful claim, show the success state briefly, then close.
+  useEffect(() => {
+    if (!claimed) return;
+    const t = setTimeout(() => {
+      if (!completionNotifiedRef.current) {
+        completionNotifiedRef.current = true;
+        onHandoverCompleteRef.current?.();
+      }
+      onCloseRef.current();
+    }, 2500);
+    return () => clearTimeout(t);
+  }, [claimed]);
+
+  function handleClose() {
+    // If the user dismisses the success screen early, still let the parent refresh.
+    if (claimed && !completionNotifiedRef.current) {
+      completionNotifiedRef.current = true;
+      onHandoverComplete?.();
+    }
+    onClose();
+  }
+
+  // Clear the "copied" indicator timer on unmount.
+  const copyTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => {
+    return () => {
+      if (copyTimerRef.current) clearTimeout(copyTimerRef.current);
+    };
+  }, []);
 
   function handleCopy() {
     if (!handoverData?.code) return;
-    navigator.clipboard.writeText(handoverData.code);
+    navigator.clipboard.writeText(handoverData.code).catch(() => {});
     setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
+    if (copyTimerRef.current) clearTimeout(copyTimerRef.current);
+    copyTimerRef.current = setTimeout(() => setCopied(false), 2000);
   }
 
   const minutes = Math.floor(secondsRemaining / 60);
@@ -133,7 +203,7 @@ export function HandoverModal({
   const timerDisplay = `${minutes}:${seconds.toString().padStart(2, "0")}`;
 
   return (
-    <Dialog open={open} onOpenChange={(v) => !v && onClose()}>
+    <Dialog open={open} onOpenChange={(v) => !v && handleClose()}>
       <DialogContent className="sm:max-w-md max-w-[95vw]">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
@@ -151,7 +221,7 @@ export function HandoverModal({
           <div className="py-8 text-center space-y-3">
             <div className="text-destructive font-semibold">Handover Error</div>
             <p className="text-sm text-muted-foreground">{error}</p>
-            <Button variant="outline" onClick={onClose} className="mt-2">
+            <Button variant="outline" onClick={handleClose} className="mt-2">
               Close
             </Button>
           </div>
@@ -189,11 +259,11 @@ export function HandoverModal({
               </div>
             )}
 
-            {/* Temporary 6-character code */}
+            {/* Temporary 6-digit code (HD-XXXXXX) */}
             {handoverData && (
               <div className="space-y-1.5">
                 <div className="text-xs text-center text-muted-foreground font-medium">
-                  Or enter this code on the recipient's phone:
+                  Or enter this code on the recipient&apos;s phone:
                 </div>
                 <div className="flex items-center justify-center gap-2">
                   <span className="font-mono text-2xl font-extrabold tracking-widest bg-accent px-4 py-1.5 rounded-lg border text-foreground select-all">
@@ -230,7 +300,7 @@ export function HandoverModal({
         )}
 
         <DialogFooter className="sm:justify-end">
-          <Button variant="ghost" onClick={onClose} disabled={loading}>
+          <Button variant="ghost" onClick={handleClose} disabled={loading}>
             Close
           </Button>
         </DialogFooter>

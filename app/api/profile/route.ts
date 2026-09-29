@@ -30,6 +30,9 @@ export async function GET(req: NextRequest) {
     }
     targetUserId = parsedId;
   } else if (targetUsernameParam) {
+    if (targetUsernameParam.length > 100) {
+      return NextResponse.json({ error: "User not found" }, { status: 404 });
+    }
     const targetUser = await getUserByUsername(targetUsernameParam);
     if (!targetUser) {
       return NextResponse.json({ error: "User not found" }, { status: 404 });

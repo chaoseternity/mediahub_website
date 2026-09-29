@@ -7,6 +7,7 @@ import { Input } from "@/components/ui/input";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import type { Tag as TagType, Equipment, Role } from "@/lib/types";
+import { readErrorMessage, networkErrorMessage } from "@/lib/fetch-error";
 
 interface TagsManagerProps {
   initialTags: TagType[];
@@ -21,11 +22,13 @@ function EquipmentSearch({
   alreadyTagged,
   allEquipment,
   onAdd,
+  onError,
 }: {
   tagId: number;
   alreadyTagged: number[];
   allEquipment: Equipment[];
   onAdd: (item: Equipment) => void;
+  onError: (message: string | null) => void;
 }) {
   const [query, setQuery] = useState("");
   const [open, setOpen] = useState(false);
@@ -45,16 +48,24 @@ function EquipmentSearch({
     .slice(0, 8);
 
   async function handleAdd(item: Equipment) {
+    if (adding) return;
     setAdding(true);
     setOpen(false);
     setQuery("");
-    const res = await fetch(`/api/tags/${tagId}/equipment`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ equipmentId: item.id }),
-    });
-    if (res.ok) onAdd(item);
-    setAdding(false);
+    onError(null);
+    try {
+      const res = await fetch(`/api/tags/${tagId}/equipment`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ equipmentId: item.id }),
+      });
+      if (res.ok) onAdd(item);
+      else onError(await readErrorMessage(res, `Failed to add "${item.name}" to tag`));
+    } catch (err) {
+      onError(networkErrorMessage(err));
+    } finally {
+      setAdding(false);
+    }
   }
 
   return (
@@ -116,42 +127,56 @@ export function TagsManager({ initialTags, initialEquipment, role }: TagsManager
     if (!newTagName.trim()) return;
     setCreating(true);
     setError(null);
-    const res = await fetch("/api/tags", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ name: newTagName.trim() }),
-    });
-    if (res.ok) {
-      const tag: TagType = await res.json();
-      setTags((prev) => [...prev, tag].sort((a, b) => a.name.localeCompare(b.name)));
-      setNewTagName("");
-    } else {
-      const json = await res.json();
-      setError(json.error ?? "Failed to create tag");
+    try {
+      const res = await fetch("/api/tags", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name: newTagName.trim() }),
+      });
+      if (res.ok) {
+        const tag: TagType = await res.json();
+        setTags((prev) => [...prev, tag].sort((a, b) => a.name.localeCompare(b.name)));
+        setNewTagName("");
+      } else {
+        setError(await readErrorMessage(res, "Failed to create tag"));
+      }
+    } catch (err) {
+      setError(networkErrorMessage(err));
+    } finally {
+      setCreating(false);
     }
-    setCreating(false);
   }
 
   async function handleDeleteTag(id: number) {
     setError(null);
-    const res = await fetch(`/api/tags/${id}`, { method: "DELETE" });
-    if (res.ok) {
-      setTags((prev) => prev.filter((t) => t.id !== id));
-      setExpanded((prev) => { const s = new Set(prev); s.delete(id); return s; });
-    } else {
-      const json = await res.json();
-      setError(json.error ?? "Failed to delete tag");
+    try {
+      const res = await fetch(`/api/tags/${id}`, { method: "DELETE" });
+      if (res.ok) {
+        setTags((prev) => prev.filter((t) => t.id !== id));
+        setExpanded((prev) => { const s = new Set(prev); s.delete(id); return s; });
+      } else {
+        setError(await readErrorMessage(res, "Failed to delete tag"));
+      }
+    } catch (err) {
+      setError(networkErrorMessage(err));
     }
   }
 
   async function handleRemoveItem(tagId: number, tagName: string, equipmentId: number) {
-    const res = await fetch(`/api/tags/${tagId}/equipment/${equipmentId}`, { method: "DELETE" });
-    if (res.ok) {
-      setAllEquipment((prev) =>
-        prev.map((e) =>
-          e.id === equipmentId ? { ...e, tags: e.tags.filter((t) => t !== tagName) } : e
-        )
-      );
+    setError(null);
+    try {
+      const res = await fetch(`/api/tags/${tagId}/equipment/${equipmentId}`, { method: "DELETE" });
+      if (res.ok) {
+        setAllEquipment((prev) =>
+          prev.map((e) =>
+            e.id === equipmentId ? { ...e, tags: e.tags.filter((t) => t !== tagName) } : e
+          )
+        );
+      } else {
+        setError(await readErrorMessage(res, "Failed to remove equipment from tag"));
+      }
+    } catch (err) {
+      setError(networkErrorMessage(err));
     }
   }
 
@@ -295,6 +320,7 @@ export function TagsManager({ initialTags, initialEquipment, role }: TagsManager
                         alreadyTagged={items.map((e) => e.id)}
                         allEquipment={allEquipment}
                         onAdd={(item) => handleAddItem(tag.name, item)}
+                        onError={setError}
                       />
                     )}
                   </CardContent>

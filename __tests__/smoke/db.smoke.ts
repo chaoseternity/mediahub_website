@@ -7,92 +7,16 @@
 
 import Database from "better-sqlite3";
 import { makeTestDb } from "@/lib/test-db";
+import { setTestDb } from "@/lib/d1";
 
 let testDb: Database.Database = makeTestDb();
+setTestDb(testDb);
 
 function resetDb() {
   testDb.close();
   testDb = makeTestDb();
+  setTestDb(testDb);
 }
-
-jest.mock("@/lib/postgres", () => ({
-  ensureSchema: async () => {},
-}));
-
-jest.mock("@vercel/postgres", () => {
-  return {
-    sql: async (strings: TemplateStringsArray, ...values: unknown[]) => {
-      let query = "";
-      for (let i = 0; i < strings.length; i++) {
-        query += strings[i];
-        if (i < values.length) {
-          query += "?";
-        }
-      }
-
-      let sqliteQuery = query
-        .replace(/COUNT\(\*\)::text/gi, "COUNT(*)")
-        .replace(/SERIAL PRIMARY KEY/gi, "INTEGER PRIMARY KEY AUTOINCREMENT")
-        .replace(/TIMESTAMP WITH TIME ZONE/gi, "TEXT")
-        .replace(/ILIKE/gi, "LIKE")
-        .replace(/COALESCE\(\s*ARRAY_AGG\(DISTINCT t\.name\)\s*FILTER\s*\(WHERE\s*t\.name\s*IS\s*NOT\s*NULL\),\s*'{}'\s*\)/gi, "GROUP_CONCAT(DISTINCT t.name)")
-        .replace(/COALESCE\(\s*ARRAY_AGG\(t\.name\)\s*FILTER\s*\(WHERE\s*t\.name\s*IS\s*NOT\s*NULL\),\s*'{}'\s*\)/gi, "GROUP_CONCAT(t.name)")
-        .replace(/INSERT INTO (\w+) \((.*?)\) VALUES \((.*?)\) ON CONFLICT DO NOTHING/gi, "INSERT OR IGNORE INTO $1 ($2) VALUES ($3)")
-        .replace(/INSERT INTO (\w+) \((.*?)\) VALUES \((.*?)\) ON CONFLICT \((.*?)\) DO UPDATE SET (.*?)$/gi, "INSERT OR REPLACE INTO $1 ($2) VALUES ($3)");
-
-      let isReturning = false;
-      if (/RETURNING\s+(\*|\w+)/i.test(sqliteQuery)) {
-        isReturning = true;
-        sqliteQuery = sqliteQuery.replace(/RETURNING\s+(\*|\w+)/gi, "");
-      }
-
-      const trimmed = sqliteQuery.trim();
-      if (/^ALTER TABLE.*ADD COLUMN/i.test(trimmed)) {
-        // Columns already exist in in-memory test database schema
-        return { rows: [], rowCount: 0 };
-      }
-
-      const sanitizedValues = values.map((v) => (typeof v === "boolean" ? (v ? 1 : 0) : v));
-
-      try {
-        if (/^(SELECT|WITH)/i.test(trimmed)) {
-          const stmt = testDb.prepare(sqliteQuery);
-          const rows = stmt.all(...(sanitizedValues as [])) as Array<Record<string, unknown>>;
-          const processedRows = rows.map((r) => {
-            if ("tags" in r && typeof r.tags === "string") {
-              const strVal = r.tags as string;
-              (r as Record<string, unknown>).tags = strVal ? strVal.split(",").filter(Boolean) : [];
-            }
-            return r;
-          });
-          return { rows: processedRows, rowCount: processedRows.length };
-        } else {
-          const stmt = testDb.prepare(sqliteQuery);
-          const info = stmt.run(...(sanitizedValues as []));
-          const returnedRows: Array<Record<string, unknown>> = [];
-          if (isReturning && info.lastInsertRowid) {
-            let table = "users";
-            if (/INSERT INTO equipment/i.test(sqliteQuery)) table = "equipment";
-            else if (/INSERT INTO tags/i.test(sqliteQuery)) table = "tags";
-            else if (/INSERT INTO checkouts/i.test(sqliteQuery)) table = "checkouts";
-            else if (/UPDATE checkouts/i.test(sqliteQuery)) table = "checkouts";
-            else if (/INSERT INTO events/i.test(sqliteQuery)) table = "events";
-            else if (/INSERT INTO sop_documents/i.test(sqliteQuery)) table = "sop_documents";
-            else if (/UPDATE sop_documents/i.test(sqliteQuery)) table = "sop_documents";
-
-            const fetchStmt = testDb.prepare(`SELECT * FROM ${table} WHERE id = ?`);
-            const row = fetchStmt.get(info.lastInsertRowid) as Record<string, unknown>;
-            if (row) returnedRows.push(row);
-          }
-          return { rows: returnedRows, rowCount: info.changes };
-        }
-      } catch (err) {
-        console.error("SQL Error in test mock:", sqliteQuery, values, err);
-        throw err;
-      }
-    },
-  };
-});
 
 import {
   getAllEquipment,

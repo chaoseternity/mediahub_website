@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useRef, useState } from "react";
 import {
   Boxes,
   MapPin,
@@ -16,7 +16,6 @@ import {
   Lock,
   ArrowRight,
   ShieldCheck,
-  Info,
 } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
@@ -31,8 +30,50 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { EquipmentModal } from "@/components/EquipmentModal";
-import type { StorageCabinet, StorageMapConfigCabinet, Role, Equipment } from "@/lib/types";
+import type { StorageCabinet, StorageMapConfigCabinet, Role } from "@/lib/types";
 import { cn } from "@/lib/utils";
+import { readErrorMessage, networkErrorMessage } from "@/lib/fetch-error";
+
+interface DraggedEquipment {
+  id: number;
+  name: string;
+  fromCabinetName: string;
+  fromShelfName: string;
+}
+
+/** Deep-copy a layout so edits never mutate props (initialConfig) or previous state. */
+function cloneConfig(config: StorageMapConfigCabinet[]): StorageMapConfigCabinet[] {
+  return config.map((c) => ({ ...c, shelves: [...c.shelves] }));
+}
+
+function configFromCabinets(cabinets: StorageCabinet[]): StorageMapConfigCabinet[] {
+  return cabinets.map((c) => ({
+    id: c.id,
+    name: c.name,
+    description: c.description || "",
+    shelves: c.shelves.map((s) => s.name),
+  }));
+}
+
+/** Client-side checks mirroring the server's layout validation, for a friendlier message. */
+function validateConfig(config: StorageMapConfigCabinet[]): string | null {
+  const cabNames = new Set<string>();
+  for (const cab of config) {
+    const name = cab.name.trim();
+    if (!name) return "Every zone needs a name.";
+    const key = name.toLowerCase();
+    if (cabNames.has(key)) return `Zone names must be unique ("${name}" is used twice).`;
+    cabNames.add(key);
+    const shelfNames = new Set<string>();
+    for (const shelf of cab.shelves) {
+      const s = shelf.trim();
+      if (!s) return `Zone "${name}" has a shelf with no name.`;
+      if (shelfNames.has(s.toLowerCase())) return `Zone "${name}" has two shelves named "${s}".`;
+      shelfNames.add(s.toLowerCase());
+    }
+  }
+  return null;
+}
 
 interface StorageMapClientProps {
   initialData: StorageCabinet[];
@@ -57,29 +98,24 @@ export function StorageMapClient({
   const [modalOpen, setModalOpen] = useState(false);
 
   // Drag and drop state
-  const [draggedEquipment, setDraggedEquipment] = useState<{
-    id: number;
-    name: string;
-    fromCabinetName: string;
-    fromShelfName: string;
-  } | null>(null);
+  const [draggedEquipment, setDraggedEquipment] = useState<DraggedEquipment | null>(null);
   const [dragOverShelfId, setDragOverShelfId] = useState<string | null>(null);
   const [dragOverCabinetId, setDragOverCabinetId] = useState<string | null>(null);
   const [moveNotice, setMoveNotice] = useState<string | null>(null);
-  const [isSavingMove, setIsSavingMove] = useState(false);
+  const [pendingMoves, setPendingMoves] = useState(0);
+  const isSavingMove = pendingMoves > 0;
+  // Every move/refresh response carries the full cabinet list; only the newest request's
+  // response may be applied, so an older, slower response can't undo a newer move.
+  const cabinetsSeqRef = useRef(0);
 
   // Custom Layout Dialog state
   const [designerOpen, setDesignerOpen] = useState(false);
   const [configCabinets, setConfigCabinets] = useState<StorageMapConfigCabinet[]>(() => {
-    if (initialConfig && initialConfig.length > 0) return initialConfig;
-    return cabinets.map((c) => ({
-      id: c.id,
-      name: c.name,
-      description: c.description || "",
-      shelves: c.shelves.map((s) => s.name),
-    }));
+    if (initialConfig && initialConfig.length > 0) return cloneConfig(initialConfig);
+    return configFromCabinets(cabinets);
   });
   const [isSavingConfig, setIsSavingConfig] = useState(false);
+  const [configError, setConfigError] = useState<string | null>(null);
   const [newCabinetName, setNewCabinetName] = useState("");
   const [newShelfNames, setNewShelfNames] = useState<Record<string, string>>({});
 
@@ -104,14 +140,38 @@ export function StorageMapClient({
     }
   }
 
-  // --- Drag and Drop Handlers (Admin Only) ---
+  function showNotice(message: string) {
+    setMoveNotice(message);
+    setTimeout(() => setMoveNotice((cur) => (cur === message ? null : cur)), 3500);
+  }
+
+  /** Re-fetch the map (e.g. after a failed move) — sequenced like moves. */
+  async function reloadCabinets() {
+    const seq = ++cabinetsSeqRef.current;
+    try {
+      const res = await fetch("/api/storage-map");
+      if (!res.ok) return;
+      const data = (await res.json()) as { cabinets?: unknown };
+      if (seq === cabinetsSeqRef.current && Array.isArray(data.cabinets)) {
+        setCabinets(data.cabinets as StorageCabinet[]);
+      }
+    } catch {
+      /* keep the current view */
+    }
+  }
+
+  // --- Move Handler (drag & drop and the tap-friendly "Move to…" menu; Admin Only) ---
   async function handleMoveEquipment(
-    equipmentId: number,
+    item: DraggedEquipment,
     targetCabinetName: string,
     targetShelfName: string
   ) {
     if (!isAdmin) return;
-    setIsSavingMove(true);
+    // Dropping back onto the shelf it came from is a no-op.
+    if (item.fromCabinetName === targetCabinetName && item.fromShelfName === targetShelfName) return;
+
+    const seq = ++cabinetsSeqRef.current;
+    setPendingMoves((n) => n + 1);
 
     try {
       const res = await fetch("/api/storage-map", {
@@ -119,28 +179,31 @@ export function StorageMapClient({
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           action: "move_item",
-          equipment_id: equipmentId,
+          equipment_id: item.id,
           cabinet: targetCabinetName,
           shelf: targetShelfName,
         }),
       });
 
       if (!res.ok) {
-        const err = await res.json();
-        throw new Error(err.error || "Failed to move equipment");
+        throw new Error(await readErrorMessage(res, "Failed to move equipment"));
       }
 
-      const data = await res.json();
-      if (data.cabinets) {
-        setCabinets(data.cabinets);
+      const data = (await res.json()) as { cabinets?: unknown };
+      // Ignore stale responses: a newer move/refresh has been issued since this one.
+      if (seq === cabinetsSeqRef.current && Array.isArray(data.cabinets)) {
+        setCabinets(data.cabinets as StorageCabinet[]);
       }
-      setMoveNotice(`Relocated to "${targetCabinetName} - ${targetShelfName}"`);
-      setTimeout(() => setMoveNotice(null), 3500);
-    } catch (err: any) {
-      alert(`Error relocating equipment: ${err.message}`);
+      showNotice(`Relocated "${item.name}" to "${targetCabinetName} - ${targetShelfName}"`);
+    } catch (err: unknown) {
+      alert(`Error relocating equipment: ${networkErrorMessage(err)}`);
+      // If this was the latest request, re-sync so the view reflects the server.
+      if (seq === cabinetsSeqRef.current) void reloadCabinets();
     } finally {
-      setIsSavingMove(false);
-      setDraggedEquipment(null);
+      setPendingMoves((n) => Math.max(0, n - 1));
+      // Only clear drag state if it still belongs to this drag — a second drag may have
+      // started while this request was in flight.
+      setDraggedEquipment((cur) => (cur === item ? null : cur));
       setDragOverShelfId(null);
       setDragOverCabinetId(null);
     }
@@ -149,6 +212,17 @@ export function StorageMapClient({
   // --- Save Custom Layout Configuration ---
   async function handleSaveConfig() {
     if (!isAdmin) return;
+    const trimmed = configCabinets.map((c) => ({
+      ...c,
+      name: c.name.trim(),
+      shelves: c.shelves.map((s) => s.trim()),
+    }));
+    const invalid = validateConfig(trimmed);
+    if (invalid) {
+      setConfigError(invalid);
+      return;
+    }
+    setConfigError(null);
     setIsSavingConfig(true);
 
     try {
@@ -157,27 +231,29 @@ export function StorageMapClient({
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           action: "save_config",
-          cabinets: configCabinets,
+          cabinets: trimmed,
         }),
       });
 
       if (!res.ok) {
-        const err = await res.json();
-        throw new Error(err.error || "Failed to save configuration");
+        // e.g. 400 validation errors — shown inline in the designer, which stays open.
+        setConfigError(await readErrorMessage(res, "Failed to save configuration"));
+        return;
       }
 
-      const data = await res.json();
-      if (data.cabinets) {
-        setCabinets(data.cabinets);
-        if (data.cabinets.length > 0 && !data.cabinets.some((c: StorageCabinet) => c.id === selectedCabinetId)) {
-          setSelectedCabinetId(data.cabinets[0].id);
+      const data = (await res.json()) as { cabinets?: unknown };
+      if (Array.isArray(data.cabinets)) {
+        const fresh = data.cabinets as StorageCabinet[];
+        cabinetsSeqRef.current++; // supersede any in-flight move responses
+        setCabinets(fresh);
+        if (fresh.length > 0 && !fresh.some((c) => c.id === selectedCabinetId)) {
+          setSelectedCabinetId(fresh[0].id);
         }
       }
       setDesignerOpen(false);
-      setMoveNotice("Storage layout updated and saved successfully!");
-      setTimeout(() => setMoveNotice(null), 3500);
-    } catch (err: any) {
-      alert(`Error saving layout: ${err.message}`);
+      showNotice("Storage layout updated and saved successfully!");
+    } catch (err: unknown) {
+      setConfigError(`Error saving layout: ${networkErrorMessage(err)}`);
     } finally {
       setIsSavingConfig(false);
     }
@@ -186,32 +262,58 @@ export function StorageMapClient({
   async function handleResetToDefaults() {
     if (!confirm("Reset storage layout to automatic default zones?")) return;
     setIsSavingConfig(true);
+    setConfigError(null);
     try {
       const res = await fetch("/api/storage-map", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ action: "reset_config" }),
       });
-      if (res.ok) {
-        const data = await res.json();
-        if (data.cabinets) {
-          setCabinets(data.cabinets);
-          setConfigCabinets(
-            data.cabinets.map((c: StorageCabinet) => ({
-              id: c.id,
-              name: c.name,
-              description: c.description || "",
-              shelves: c.shelves.map((s) => s.name),
-            }))
-          );
-        }
-        setDesignerOpen(false);
+      if (!res.ok) {
+        setConfigError(await readErrorMessage(res, "Failed to reset layout"));
+        return;
       }
-    } catch (err: any) {
-      alert(`Reset failed: ${err.message}`);
+      const data = (await res.json()) as { cabinets?: unknown };
+      if (Array.isArray(data.cabinets)) {
+        const fresh = data.cabinets as StorageCabinet[];
+        cabinetsSeqRef.current++;
+        setCabinets(fresh);
+        setConfigCabinets(configFromCabinets(fresh));
+      }
+      setDesignerOpen(false);
+    } catch (err: unknown) {
+      setConfigError(`Reset failed: ${networkErrorMessage(err)}`);
     } finally {
       setIsSavingConfig(false);
     }
+  }
+
+  // --- Immutable layout-designer updates ---
+  function renameCabinet(cabIdx: number, name: string) {
+    setConfigCabinets((prev) => prev.map((c, i) => (i === cabIdx ? { ...c, name } : c)));
+  }
+
+  function removeShelf(cabIdx: number, shelfIdx: number) {
+    setConfigCabinets((prev) =>
+      prev.map((c, i) =>
+        i === cabIdx ? { ...c, shelves: c.shelves.filter((_, sIdx) => sIdx !== shelfIdx) } : c
+      )
+    );
+  }
+
+  function addShelf(cabIdx: number, draftKey: string) {
+    const name = (newShelfNames[draftKey] || "").trim();
+    if (!name) return;
+    const cab = configCabinets[cabIdx];
+    if (cab && cab.shelves.some((s) => s.trim().toLowerCase() === name.toLowerCase())) {
+      setConfigError(`"${cab.name}" already has a shelf named "${name}".`);
+      return;
+    }
+    setConfigError(null);
+    setConfigCabinets((prev) =>
+      prev.map((c, i) => (i === cabIdx ? { ...c, shelves: [...c.shelves, name] } : c))
+    );
+    setNewShelfNames((prev) => ({ ...prev, [draftKey]: "" }));
   }
 
   // Presets
@@ -272,14 +374,8 @@ export function StorageMapClient({
               variant="outline"
               size="sm"
               onClick={() => {
-                setConfigCabinets(
-                  cabinets.map((c) => ({
-                    id: c.id,
-                    name: c.name,
-                    description: c.description || "",
-                    shelves: c.shelves.map((s) => s.name),
-                  }))
-                );
+                setConfigCabinets(configFromCabinets(cabinets));
+                setConfigError(null);
                 setDesignerOpen(true);
               }}
               className="gap-2 bg-background hover:bg-muted font-medium text-xs shadow-xs"
@@ -314,7 +410,7 @@ export function StorageMapClient({
           <div className="flex items-center gap-2.5">
             <ShieldCheck className="h-4 w-4 text-primary shrink-0" />
             <span>
-              <strong>Admin Drag & Drop Mode Active:</strong> Drag any equipment card to another shelf or sidebar zone to instantly reassign its storage location.
+              <strong>Admin Drag & Drop Mode Active:</strong> Drag any equipment card to another shelf or sidebar zone to instantly reassign its storage location. On a phone, use the &ldquo;Move to…&rdquo; menu on each card.
             </span>
           </div>
           {isSavingMove && (
@@ -386,7 +482,7 @@ export function StorageMapClient({
                       e.preventDefault();
                       setDragOverCabinetId(null);
                       const targetShelf = cab.shelves[0]?.name || "Main Shelf";
-                      handleMoveEquipment(draggedEquipment.id, cab.name, targetShelf);
+                      void handleMoveEquipment(draggedEquipment, cab.name, targetShelf);
                     }}
                     className={cn(
                       "w-full text-left p-3 rounded-xl border transition-all flex items-center justify-between gap-3 relative cursor-pointer",
@@ -482,7 +578,7 @@ export function StorageMapClient({
                           if (!isAdmin || !draggedEquipment) return;
                           e.preventDefault();
                           setDragOverShelfId(null);
-                          handleMoveEquipment(draggedEquipment.id, activeCabinet.name, shelf.name);
+                          void handleMoveEquipment(draggedEquipment, activeCabinet.name, shelf.name);
                         }}
                         className={cn(
                           "p-3 rounded-xl min-h-[96px] flex flex-wrap gap-2.5 items-center relative transition-all border-2",
@@ -558,6 +654,50 @@ export function StorageMapClient({
                                   <p className="text-[10px] font-mono text-muted-foreground truncate">
                                     {item.serial_number || `#${item.id}`}
                                   </p>
+                                  {isAdmin && (
+                                    // Tap-friendly alternative to HTML5 drag & drop (which
+                                    // doesn't work on touch devices).
+                                    <select
+                                      aria-label={`Move ${item.name} to another shelf`}
+                                      value=""
+                                      disabled={isSavingMove}
+                                      onClick={(e) => e.stopPropagation()}
+                                      onMouseDown={(e) => e.stopPropagation()}
+                                      onChange={(e) => {
+                                        e.stopPropagation();
+                                        const [ci, si] = e.target.value.split(":").map(Number);
+                                        const targetCab = cabinets[ci];
+                                        const targetShelf = targetCab?.shelves[si];
+                                        if (!targetCab || !targetShelf) return;
+                                        void handleMoveEquipment(
+                                          {
+                                            id: item.id,
+                                            name: item.name,
+                                            fromCabinetName: activeCabinet.name,
+                                            fromShelfName: shelf.name,
+                                          },
+                                          targetCab.name,
+                                          targetShelf.name
+                                        );
+                                      }}
+                                      className="mt-1 w-full max-w-[160px] rounded border border-input bg-background px-1 py-0.5 text-[10px] text-muted-foreground"
+                                    >
+                                      <option value="">Move to…</option>
+                                      {cabinets.map((cab, ci) => (
+                                        <optgroup key={cab.id} label={cab.name}>
+                                          {cab.shelves.map((s, si) => (
+                                            <option
+                                              key={s.id}
+                                              value={`${ci}:${si}`}
+                                              disabled={cab.name === activeCabinet.name && s.name === shelf.name}
+                                            >
+                                              {s.name}
+                                            </option>
+                                          ))}
+                                        </optgroup>
+                                      ))}
+                                    </select>
+                                  )}
                                 </div>
                               </div>
                             );
@@ -588,6 +728,14 @@ export function StorageMapClient({
             </DialogHeader>
 
             <div className="space-y-6 py-2">
+              {configError && (
+                <p
+                  role="alert"
+                  className="text-sm text-destructive bg-destructive/10 border border-destructive/30 rounded-md p-2.5"
+                >
+                  {configError}
+                </p>
+              )}
               {/* Preset Buttons */}
               <div className="bg-muted/30 p-3 rounded-xl border space-y-2">
                 <div className="flex items-center justify-between">
@@ -637,17 +785,16 @@ export function StorageMapClient({
                   Storage Zones & Shelves Configuration
                 </h4>
 
-                {configCabinets.map((cab, cabIdx) => (
+                {configCabinets.map((cab, cabIdx) => {
+                  const draftKey = cab.id || String(cabIdx);
+                  const seenShelves = new Map<string, number>();
+                  return (
                   <Card key={cab.id || cabIdx} className="border p-4 space-y-3 bg-card">
                     <div className="flex items-center justify-between gap-3">
                       <div className="flex-1 space-y-1">
                         <Input
                           value={cab.name}
-                          onChange={(e) => {
-                            const updated = [...configCabinets];
-                            updated[cabIdx].name = e.target.value;
-                            setConfigCabinets(updated);
-                          }}
+                          onChange={(e) => renameCabinet(cabIdx, e.target.value)}
                           placeholder="Zone / Cabinet Name"
                           className="text-sm font-semibold h-8"
                         />
@@ -656,8 +803,7 @@ export function StorageMapClient({
                         variant="ghost"
                         size="icon-sm"
                         onClick={() => {
-                          const updated = configCabinets.filter((_, idx) => idx !== cabIdx);
-                          setConfigCabinets(updated);
+                          setConfigCabinets((prev) => prev.filter((_, idx) => idx !== cabIdx));
                         }}
                         className="text-destructive hover:bg-destructive/10"
                         title="Delete Zone"
@@ -669,50 +815,41 @@ export function StorageMapClient({
                     {/* Shelves for this cabinet */}
                     <div className="space-y-2 pl-2 border-l-2 border-primary/20">
                       <div className="flex flex-wrap gap-2 items-center">
-                        {cab.shelves.map((shelf, shelfIdx) => (
+                        {cab.shelves.map((shelf, shelfIdx) => {
+                          // Stable key from cabinet + shelf name (disambiguated if duplicated).
+                          const n = seenShelves.get(shelf) ?? 0;
+                          seenShelves.set(shelf, n + 1);
+                          return (
                           <div
-                            key={shelfIdx}
+                            key={`${draftKey}::${shelf}${n ? `::${n}` : ""}`}
                             className="bg-muted px-2.5 py-1 rounded-md text-xs flex items-center gap-1.5 border"
                           >
                             <span>{shelf}</span>
                             <button
                               type="button"
-                              onClick={() => {
-                                const updated = [...configCabinets];
-                                updated[cabIdx].shelves = updated[cabIdx].shelves.filter(
-                                  (_, sIdx) => sIdx !== shelfIdx
-                                );
-                                setConfigCabinets(updated);
-                              }}
+                              onClick={() => removeShelf(cabIdx, shelfIdx)}
                               className="text-muted-foreground hover:text-destructive"
+                              aria-label={`Remove shelf ${shelf}`}
                             >
                               &times;
                             </button>
                           </div>
-                        ))}
+                          );
+                        })}
                       </div>
 
                       {/* Add Shelf Input */}
                       <div className="flex items-center gap-2 pt-1">
                         <Input
                           placeholder="Add new shelf (e.g. Shelf C, Drawer 1)"
-                          value={newShelfNames[cab.id || cabIdx] || ""}
+                          value={newShelfNames[draftKey] || ""}
                           onChange={(e) =>
-                            setNewShelfNames({
-                              ...newShelfNames,
-                              [cab.id || cabIdx]: e.target.value,
-                            })
+                            setNewShelfNames((prev) => ({ ...prev, [draftKey]: e.target.value }))
                           }
                           onKeyDown={(e) => {
                             if (e.key === "Enter") {
                               e.preventDefault();
-                              const name = (newShelfNames[cab.id || cabIdx] || "").trim();
-                              if (name) {
-                                const updated = [...configCabinets];
-                                updated[cabIdx].shelves.push(name);
-                                setConfigCabinets(updated);
-                                setNewShelfNames({ ...newShelfNames, [cab.id || cabIdx]: "" });
-                              }
+                              addShelf(cabIdx, draftKey);
                             }
                           }}
                           className="text-xs h-7 flex-1"
@@ -721,15 +858,7 @@ export function StorageMapClient({
                           type="button"
                           variant="secondary"
                           size="sm"
-                          onClick={() => {
-                            const name = (newShelfNames[cab.id || cabIdx] || "").trim();
-                            if (name) {
-                              const updated = [...configCabinets];
-                              updated[cabIdx].shelves.push(name);
-                              setConfigCabinets(updated);
-                              setNewShelfNames({ ...newShelfNames, [cab.id || cabIdx]: "" });
-                            }
-                          }}
+                          onClick={() => addShelf(cabIdx, draftKey)}
                           className="h-7 text-xs px-2.5"
                         >
                           <Plus className="h-3 w-3 mr-1" /> Add Shelf
@@ -737,7 +866,8 @@ export function StorageMapClient({
                       </div>
                     </div>
                   </Card>
-                ))}
+                  );
+                })}
 
                 {/* Add New Cabinet Section */}
                 <div className="flex items-center gap-2 pt-2">
@@ -752,12 +882,13 @@ export function StorageMapClient({
                     variant="outline"
                     size="sm"
                     onClick={() => {
-                      if (!newCabinetName.trim()) return;
-                      setConfigCabinets([
-                        ...configCabinets,
+                      const name = newCabinetName.trim();
+                      if (!name) return;
+                      setConfigCabinets((prev) => [
+                        ...prev,
                         {
                           id: `zone-${Date.now()}`,
-                          name: newCabinetName.trim(),
+                          name,
                           shelves: ["Shelf A", "Shelf B"],
                         },
                       ]);
@@ -804,12 +935,8 @@ export function StorageMapClient({
             setModalOpen(false);
             setSelectedEquipmentId(null);
           }}
-          onUpdated={async () => {
-            const res = await fetch("/api/storage-map");
-            if (res.ok) {
-              const data = await res.json();
-              if (data.cabinets) setCabinets(data.cabinets);
-            }
+          onUpdated={() => {
+            void reloadCabinets();
           }}
         />
       )}

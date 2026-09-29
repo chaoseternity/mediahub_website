@@ -43,6 +43,9 @@ import { cn, roleBadgeClass } from "@/lib/utils";
 import type { Role, UserProfileData, UserProfileCheckout, UserProfileEvent } from "@/lib/types";
 import { EventDetailModal } from "@/components/EventDetailModal";
 import { HandoverModal } from "@/components/HandoverModal";
+import { formatDate, formatDateTime, isDateOnly, parseDueDate } from "@/lib/timezone";
+import { readErrorMessage } from "@/lib/fetch-error";
+import { useNow } from "@/lib/use-now";
 
 interface ProfileClientProps {
   initialData: UserProfileData;
@@ -51,37 +54,10 @@ interface ProfileClientProps {
   isSelf: boolean;
 }
 
-function fmtDateTime(s: string | null | undefined): string {
-  if (!s) return "—";
-  try {
-    const d = new Date(s);
-    if (isNaN(d.getTime())) return s;
-    return d.toLocaleString("en-SG", {
-      year: "numeric",
-      month: "short",
-      day: "numeric",
-      hour: "2-digit",
-      minute: "2-digit",
-    });
-  } catch {
-    return s;
-  }
-}
-
-function fmtDate(s: string | null | undefined): string {
-  if (!s) return "—";
-  try {
-    const d = new Date(s);
-    if (isNaN(d.getTime())) return s;
-    return d.toLocaleDateString("en-SG", {
-      year: "numeric",
-      month: "short",
-      day: "numeric",
-    });
-  } catch {
-    return s;
-  }
-}
+const fmtDateTime = (s: string | null | undefined) => formatDateTime(s);
+const fmtDate = (s: string | null | undefined) => formatDate(s);
+/** Due dates may be date-only ("YYYY-MM-DD") — show those without a time. */
+const fmtDue = (s: string | null | undefined) => (isDateOnly(s) ? formatDate(s) : formatDateTime(s));
 
 export function ProfileClient({
   initialData,
@@ -103,6 +79,9 @@ export function ProfileClient({
   const [updatingUsername, setUpdatingUsername] = useState(false);
   const [usernameError, setUsernameError] = useState<string | null>(null);
 
+  // null during SSR/first render so overdue badges don't cause a hydration mismatch.
+  const now = useNow();
+
   const user = data.user;
   const isAdmin = viewerRole === "admin";
   const canReturnEquipment = isAdmin || viewerRole === "verified" || isSelf;
@@ -115,8 +94,7 @@ export function ProfileClient({
         method: "POST",
       });
       if (!res.ok) {
-        const json = await res.json();
-        alert(json.error ?? "Failed to mark equipment as returned.");
+        alert(await readErrorMessage(res, "Failed to mark equipment as returned."));
         return;
       }
       // Move from active to past in local state
@@ -157,8 +135,7 @@ export function ProfileClient({
         body: JSON.stringify({ username: trimmed }),
       });
       if (!res.ok) {
-        const json = await res.json();
-        setUsernameError(json?.error?.formErrors?.[0] ?? json.error ?? "Failed to update name");
+        setUsernameError(await readErrorMessage(res, "Failed to update name"));
         return;
       }
       setData({
@@ -360,8 +337,8 @@ export function ProfileClient({
             ) : (
               <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
                 {data.activeEquipment.map((eq) => {
-                  const isOverdue =
-                    eq.expected_return_at && new Date() > new Date(eq.expected_return_at);
+                  const due = parseDueDate(eq.expected_return_at);
+                  const isOverdue = now !== null && due !== null && now > due.getTime();
                   const isReturning = returningId === eq.equipment_id;
 
                   return (
@@ -411,7 +388,7 @@ export function ProfileClient({
                                 isOverdue ? "text-destructive font-semibold" : "text-foreground"
                               )}
                             >
-                              {fmtDateTime(eq.expected_return_at)}
+                              {fmtDue(eq.expected_return_at)}
                             </span>
                           </div>
                         </div>
@@ -435,7 +412,8 @@ export function ProfileClient({
                           Condition: <strong className="text-foreground">{eq.equipment_condition}</strong>
                         </span>
                         <div className="flex items-center gap-1.5 shrink-0">
-                          {isSelf && (
+                          {/* Handover is only offered for web checkouts made under an admin account (not NFC-station loans). */}
+                          {isSelf && user.role === "admin" && eq.checked_out_by === user.id && !eq.nfc_value && (
                             <Button
                               variant="secondary"
                               size="sm"

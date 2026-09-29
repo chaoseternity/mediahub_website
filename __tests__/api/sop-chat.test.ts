@@ -1,28 +1,4 @@
-import { z } from "zod";
-
-const ChatRequestSchema = z
-  .object({
-    question: z.string().optional(),
-    message: z.string().optional(),
-    history: z
-      .array(
-        z.object({
-          role: z.enum(["user", "assistant"]),
-          content: z.string(),
-        })
-      )
-      .optional(),
-  })
-  .refine(
-    (data) =>
-      Boolean(
-        (data.question && data.question.trim().length > 0) ||
-        (data.message && data.message.trim().length > 0)
-      ),
-    {
-      message: "Please provide a question or message.",
-    }
-  );
+import { ChatRequestSchema } from "@/app/api/sop/chat/schema";
 
 describe("SOP Chat Request Validation", () => {
   test("accepts payload with 'message' field", () => {
@@ -77,6 +53,23 @@ describe("SOP Chat Request Validation", () => {
     };
     const result = ChatRequestSchema.safeParse(payload);
     expect(result.success).toBe(false);
+  });
+
+  test("enforces the route's length limits", () => {
+    expect(ChatRequestSchema.safeParse({ question: "a".repeat(4001) }).success).toBe(false);
+    expect(ChatRequestSchema.safeParse({ question: "a".repeat(4000) }).success).toBe(true);
+    expect(
+      ChatRequestSchema.safeParse({
+        question: "hi",
+        history: Array.from({ length: 51 }, () => ({ role: "user", content: "x" })),
+      }).success
+    ).toBe(false);
+    expect(
+      ChatRequestSchema.safeParse({ question: "hi", history: [{ role: "user", content: "a".repeat(4001) }] }).success
+    ).toBe(false);
+    expect(ChatRequestSchema.safeParse({ question: "hi", history: [{ role: "system", content: "x" }] }).success).toBe(
+      false
+    );
   });
 });
 

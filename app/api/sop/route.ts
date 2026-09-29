@@ -3,16 +3,64 @@ import { getAllSOPDocuments, createSOPDocument, updateSOPDocument, getUserByEmai
 import { extractTextFromDocument } from "@/lib/doc-parser";
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
+import { declaredContentLength, isUploadedFile, zodErrorMessage } from "@/lib/api-errors";
+import { checkUploadFormat, extractionErrorMessage } from "./upload-format";
 
 export const runtime = "nodejs";
+
+const MAX_FILE_BYTES = 10 * 1024 * 1024;
+
+function hasControlChars(value: string): boolean {
+  for (let i = 0; i < value.length; i++) {
+    const code = value.charCodeAt(i);
+    if (code < 0x20 || code === 0x7f) return true;
+  }
+  return false;
+}
+/** The file plus the other form fields (a pre-extracted `content` field may be up to ~2MB). */
+const MAX_MULTIPART_BYTES = MAX_FILE_BYTES + 2 * 1024 * 1024;
+
+const MultipartFieldsSchema = z.object({
+  title: z
+    .string({ error: "title must be a text field" })
+    .max(1000, "Title cannot exceed 200 characters")
+    .optional()
+    .refine((v) => v === undefined || v.trim().length <= 200, "Title cannot exceed 200 characters"),
+  category: z.string({ error: "category must be a text field" }).max(100, "Category cannot exceed 100 characters").optional(),
+  content: z
+    .string({ error: "content must be a text field" })
+    .max(500000, "Content cannot exceed 500,000 characters")
+    .optional(),
+  overwrite_id: z.string({ error: "overwrite_id must be a text field" }).max(20).optional(),
+});
 
 const CreateSOPManualSchema = z.object({
   title: z.string().trim().min(1, "Title is required").max(200, "Title cannot exceed 200 characters"),
   category: z.string().trim().max(100, "Category cannot exceed 100 characters").optional(),
   content: z.string().trim().min(1, "Content is required").max(500000, "Content cannot exceed 500,000 characters"),
-  file_name: z.string().trim().max(255, "File name cannot exceed 255 characters").nullable().optional(),
-  file_type: z.string().trim().max(100, "File type cannot exceed 100 characters").nullable().optional(),
-  file_size: z.number().max(10 * 1024 * 1024, "File size cannot exceed 10MB").nullable().optional(),
+  // Client-supplied metadata for pre-extracted uploads: type- and length-checked, never trusted
+  // for anything beyond display.
+  file_name: z
+    .string()
+    .trim()
+    .max(255, "File name cannot exceed 255 characters")
+    .refine((v) => !/[\\/]/.test(v) && !hasControlChars(v), "File name contains invalid characters")
+    .nullable()
+    .optional(),
+  file_type: z
+    .string()
+    .trim()
+    .max(100, "File type cannot exceed 100 characters")
+    .regex(/^[\w.+-]*\/?[\w.+-]*$/, "File type must be a MIME type")
+    .nullable()
+    .optional(),
+  file_size: z
+    .number()
+    .int("File size must be a whole number of bytes")
+    .nonnegative("File size cannot be negative")
+    .max(MAX_FILE_BYTES, "File size cannot exceed 10MB")
+    .nullable()
+    .optional(),
   overwrite_id: z.number().int().positive().nullable().optional(),
 });
 
@@ -120,43 +168,75 @@ export async function POST(req: NextRequest) {
 
     // 2. Multipart Form Data (Raw File Upload)
     if (contentType.includes("multipart/form-data")) {
-      const formData = await req.formData();
-      const file = formData.get("file") as File | null;
-      const customTitle = formData.get("title") as string | null;
-      if (customTitle && customTitle.trim().length > 200) {
-        return NextResponse.json({ error: "Title cannot exceed 200 characters" }, { status: 400 });
+      // Reject oversized bodies before buffering them into memory.
+      const contentLength = declaredContentLength(req);
+      if (contentLength !== null && contentLength > MAX_MULTIPART_BYTES) {
+        return NextResponse.json({ error: "File size exceeds the 10MB upload limit." }, { status: 413 });
       }
-      const rawCategory = (formData.get("category") as string | null) || "General";
-      const category = rawCategory.trim().slice(0, 100);
-      const clientExtractedContent = formData.get("content") as string | null;
-      if (clientExtractedContent && clientExtractedContent.trim().length > 500000) {
-        return NextResponse.json({ error: "Content cannot exceed 500,000 characters" }, { status: 400 });
+
+      let formData: FormData;
+      try {
+        formData = await req.formData();
+      } catch {
+        return NextResponse.json({ error: "Invalid multipart form data." }, { status: 400 });
       }
-      const overwriteIdStr = formData.get("overwrite_id") as string | null;
-      const overwriteId = overwriteIdStr && /^\d+$/.test(overwriteIdStr) ? Number(overwriteIdStr) : null;
+
+      const rawFile = formData.get("file");
+      if (rawFile !== null && !isUploadedFile(rawFile)) {
+        return NextResponse.json({ error: "The \"file\" field must be an uploaded file." }, { status: 400 });
+      }
+      const file = rawFile;
+
+      const fields = MultipartFieldsSchema.safeParse({
+        title: formData.get("title") ?? undefined,
+        category: formData.get("category") ?? undefined,
+        content: formData.get("content") ?? undefined,
+        overwrite_id: formData.get("overwrite_id") ?? undefined,
+      });
+      if (!fields.success) {
+        return NextResponse.json({ error: zodErrorMessage(fields.error) }, { status: 400 });
+      }
+      const customTitle = fields.data.title ?? null;
+      const category = (fields.data.category || "General").slice(0, 100);
+      const clientExtractedContent = fields.data.content ?? null;
+      const overwriteIdStr = fields.data.overwrite_id ?? null;
+      const overwriteId = overwriteIdStr && /^[1-9]\d{0,15}$/.test(overwriteIdStr) ? Number(overwriteIdStr) : null;
 
       if (!file && !clientExtractedContent) {
         return NextResponse.json({ error: "No file or text content provided in upload." }, { status: 400 });
       }
 
-      if (file && file.size > 10 * 1024 * 1024) {
+      if (file && file.size > MAX_FILE_BYTES) {
         return NextResponse.json(
           { error: "File size exceeds the 10MB upload limit." },
           { status: 413 }
         );
       }
 
-      const fileName = file?.name || "document.txt";
-      const fileType = file?.type || "application/octet-stream";
+      // Reject unsupported formats (e.g. legacy .doc) up front with a clear message, unless the
+      // client already extracted the text.
+      if (file && !clientExtractedContent) {
+        const format = checkUploadFormat(file.name || "", file.type || "");
+        if (!format.ok) {
+          return NextResponse.json({ error: format.error }, { status: format.status });
+        }
+      }
+
+      const fileName = (file?.name || "document.txt").slice(0, 255);
+      const fileType = (file?.type || "application/octet-stream").slice(0, 100);
       const fileSize = file?.size || null;
-      const title = customTitle?.trim() || fileName.replace(/\.[^/.]+$/, "").replace(/[-_]/g, " ");
+      const title = (customTitle?.trim() || fileName.replace(/\.[^/.]+$/, "").replace(/[-_]/g, " ")).slice(0, 200);
 
       let content = clientExtractedContent?.trim() || "";
 
       // If content was not extracted client-side, extract on the server
       if (!content && file) {
-        const buffer = Buffer.from(await file.arrayBuffer());
-        content = await extractTextFromDocument(buffer, fileName, fileType);
+        try {
+          const buffer = Buffer.from(await file.arrayBuffer());
+          content = await extractTextFromDocument(buffer, fileName, fileType);
+        } catch (err: unknown) {
+          return NextResponse.json({ error: extractionErrorMessage(err) }, { status: 422 });
+        }
       }
 
       if (!content) {

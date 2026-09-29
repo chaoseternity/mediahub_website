@@ -2,6 +2,7 @@ import { auth } from "@/lib/auth";
 import { getEventById, updateEvent, deleteEvent, getUserByEmail } from "@/lib/db";
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
+import { errorResponse, toErrorResponse, validationErrorResponse } from "@/lib/api-errors";
 
 const UpdateEventSchema = z
   .object({
@@ -37,27 +38,56 @@ const UpdateEventSchema = z
     photo_ic_ids: z.array(z.number().int().positive()).max(20).optional(),
     video_ic_ids: z.array(z.number().int().positive()).max(20).optional(),
     av_ic_ids: z.array(z.number().int().positive()).max(20).optional(),
-  })
-  .refine(
-    (data) => {
-      if (!data.start_time || !data.end_time) return true;
-      return new Date(data.end_time).getTime() >= new Date(data.start_time).getTime();
-    },
-    {
-      message: "Event end time cannot be earlier than start time",
-      path: ["end_time"],
-    }
-  )
-  .refine(
-    (data) => {
-      if (!data.rehearsal_start_time || !data.rehearsal_end_time) return true;
-      return new Date(data.rehearsal_end_time).getTime() >= new Date(data.rehearsal_start_time).getTime();
-    },
-    {
-      message: "Rehearsal end time cannot be earlier than rehearsal start time",
-      path: ["rehearsal_end_time"],
-    }
-  );
+  });
+
+/**
+ * Validates the event's timing AFTER merging the update onto the stored event, so a partial
+ * update (e.g. only end_time) can't produce end < start, and rehearsal times stay consistent.
+ * Returns an error message, or null when valid.
+ */
+function validateMergedTimes(
+  existing: {
+    start_time: string;
+    end_time: string;
+    has_rehearsal: boolean | number | null;
+    rehearsal_start_time: string | null;
+    rehearsal_end_time: string | null;
+  },
+  update: z.infer<typeof UpdateEventSchema>
+): string | null {
+  const start = update.start_time ?? existing.start_time;
+  const end = update.end_time ?? existing.end_time;
+  const startMs = Date.parse(start);
+  const endMs = Date.parse(end);
+  if (!Number.isNaN(startMs) && !Number.isNaN(endMs) && endMs <= startMs) {
+    return "Event end time must be after the start time";
+  }
+
+  const hasRehearsal = update.has_rehearsal ?? Boolean(existing.has_rehearsal);
+  if (!hasRehearsal) return null;
+
+  const rehStart =
+    update.rehearsal_start_time !== undefined ? update.rehearsal_start_time : existing.rehearsal_start_time;
+  const rehEnd =
+    update.rehearsal_end_time !== undefined ? update.rehearsal_end_time : existing.rehearsal_end_time;
+
+  const touchesRehearsal =
+    update.has_rehearsal !== undefined ||
+    update.rehearsal_start_time !== undefined ||
+    update.rehearsal_end_time !== undefined;
+  if (!rehStart || !rehEnd) {
+    // Only reject when this update is what leaves the rehearsal incomplete, so legacy rows
+    // with has_rehearsal but no times can still be edited in other respects.
+    return touchesRehearsal ? "Rehearsal start and end times are required when the event has a rehearsal" : null;
+  }
+
+  const rehStartMs = Date.parse(rehStart);
+  const rehEndMs = Date.parse(rehEnd);
+  if (!Number.isNaN(rehStartMs) && !Number.isNaN(rehEndMs) && rehEndMs <= rehStartMs) {
+    return "Rehearsal end time must be after the rehearsal start time";
+  }
+  return null;
+}
 
 export async function GET(
   _req: NextRequest,
@@ -108,11 +138,15 @@ export async function PUT(
 
   const parsed = UpdateEventSchema.safeParse(body);
   if (!parsed.success) {
-    return NextResponse.json({ error: parsed.error.flatten() }, { status: 400 });
+    return validationErrorResponse(parsed.error);
+  }
+
+  const timingError = validateMergedTimes(event, parsed.data);
+  if (timingError) {
+    return errorResponse(400, timingError);
   }
 
   try {
-
     // Non-admin OICs cannot rename event title
     if (!isAdmin && parsed.data.name && parsed.data.name !== event.name) {
       return NextResponse.json({ error: "Event name can only be changed by Admin accounts" }, { status: 403 });
@@ -124,10 +158,10 @@ export async function PUT(
     }
 
     const updated = await updateEvent(eventId, parsed.data);
+    if (!updated) return NextResponse.json({ error: "Event not found" }, { status: 404 });
     return NextResponse.json(updated);
   } catch (err: unknown) {
-    const msg = err instanceof Error ? err.message : "Failed to update event";
-    return NextResponse.json({ error: msg }, { status: 400 });
+    return toErrorResponse(err, "Failed to update event");
   }
 }
 
@@ -158,7 +192,6 @@ export async function DELETE(
     }
     return NextResponse.json({ success: true });
   } catch (err: unknown) {
-    const msg = err instanceof Error ? err.message : "Failed to delete event";
-    return NextResponse.json({ error: msg }, { status: 500 });
+    return toErrorResponse(err, "Failed to delete event");
   }
 }

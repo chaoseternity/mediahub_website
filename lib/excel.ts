@@ -51,27 +51,64 @@ export function sortEquipmentForExcel(equipment: Equipment[]): Equipment[] {
   });
 }
 
+/** Max data rows parsed from one uploaded spreadsheet. */
+export const MAX_IMPORT_ROWS = 5000;
+/** Max items the batch equipment API accepts per request; clients must chunk uploads to this size. */
+export const BATCH_CHUNK_SIZE = 500;
+
+const FORMULA_TRIGGER_RE = /^[=+\-@\t\r\n]/;
+
 /**
- * Neutralizes CSV/Excel formula injection (CWE-1236).
- * Values starting with =, +, -, @, tab, or newline are prefixed with an apostrophe (')
- * so spreadsheet applications (Excel, LibreOffice, Google Sheets) treat them as text.
+ * Neutralizes CSV formula injection (CWE-1236) for **CSV/text** exports only.
+ * Values starting with =, +, -, @, tab, or newline are prefixed with an apostrophe (') so
+ * spreadsheet applications treat them as text when they parse a CSV.
+ *
+ * Do not use this for .xlsx export: cells written as explicit string cells (t: "s") are never
+ * evaluated as formulas, and the apostrophe would show up literally.
  */
 export function sanitizeExcelCell(val: string | null | undefined): string {
   if (!val) return "";
   const str = String(val);
-  if (/^[=+\-@\t\r\n]/.test(str)) {
+  if (FORMULA_TRIGGER_RE.test(str)) {
     return `'${str}`;
   }
   return str;
 }
 
+/**
+ * Reverses {@link sanitizeExcelCell} for values that came from a CSV export.
+ * Not used for .xlsx import, where a leading apostrophe is genuine cell text.
+ */
 export function desanitizeExcelCell(val: unknown): string {
   if (val === null || val === undefined) return "";
   const str = String(val).trim();
-  if (str.startsWith("'") && /^[=+\-@\t\r\n]/.test(str.slice(1))) {
+  if (str.startsWith("'") && FORMULA_TRIGGER_RE.test(str.slice(1))) {
     return str.slice(1);
   }
   return str;
+}
+
+/** Reads a cell value from an .xlsx import as plain text (a leading apostrophe is kept). */
+function cellText(val: unknown): string {
+  if (val === null || val === undefined) return "";
+  return String(val).trim();
+}
+
+/** Builds a worksheet in which every cell is an explicit string cell (never a formula). */
+function stringSheet(rows: string[][]): XLSX.WorkSheet {
+  const ws: XLSX.WorkSheet = {};
+  let maxCol = 0;
+  rows.forEach((row, r) => {
+    maxCol = Math.max(maxCol, row.length);
+    row.forEach((value, c) => {
+      ws[XLSX.utils.encode_cell({ r, c })] = { t: "s", v: value ?? "" };
+    });
+  });
+  ws["!ref"] = XLSX.utils.encode_range({
+    s: { r: 0, c: 0 },
+    e: { r: Math.max(rows.length - 1, 0), c: Math.max(maxCol - 1, 0) },
+  });
+  return ws;
 }
 
 /**
@@ -83,7 +120,7 @@ export function generateEquipmentExcel(equipment: Equipment[]): Uint8Array {
   const sorted = sortEquipmentForExcel(equipment);
 
   const header = ["Tag", "ID", "Name", "Description", "Condition", "Location"];
-  const rows: (string | null)[][] = [header];
+  const rows: string[][] = [header];
 
   let lastTag: string | null = null;
 
@@ -93,18 +130,20 @@ export function generateEquipmentExcel(equipment: Equipment[]): Uint8Array {
     const displayTag = currentTag !== lastTag ? currentTag : "";
     lastTag = currentTag;
 
+    // Written as explicit string cells, so values like "=SUM(...)" or "- charger" are stored
+    // verbatim as text and never evaluated as formulas (no apostrophe prefix needed).
     rows.push([
-      sanitizeExcelCell(displayTag),
-      sanitizeExcelCell(item.serial_number ?? ""),
-      sanitizeExcelCell(item.name),
-      sanitizeExcelCell(item.description ?? ""),
-      sanitizeExcelCell(item.condition),
-      sanitizeExcelCell(item.location),
+      displayTag,
+      item.serial_number ?? "",
+      item.name ?? "",
+      item.description ?? "",
+      item.condition ?? "",
+      item.location ?? "",
     ]);
   }
 
   const wb = XLSX.utils.book_new();
-  const ws = XLSX.utils.aoa_to_sheet(rows);
+  const ws = stringSheet(rows);
 
   // Set friendly column widths
   ws["!cols"] = [
@@ -122,7 +161,7 @@ export function generateEquipmentExcel(equipment: Equipment[]): Uint8Array {
 }
 
 /**
- * Parses an Excel file (.xlsx / .xls) buffer into equipment items.
+ * Parses an Excel file (.xlsx / .xls) buffer into equipment items (at most MAX_IMPORT_ROWS).
  * If a tag cell is empty, it inherits the nearest non-empty tag above.
  */
 export function parseEquipmentExcel(data: ArrayBuffer | Uint8Array): ParsedEquipmentItem[] {
@@ -131,7 +170,7 @@ export function parseEquipmentExcel(data: ArrayBuffer | Uint8Array): ParsedEquip
   if (!sheetName) return [];
 
   const ws = wb.Sheets[sheetName];
-  const rows: any[][] = XLSX.utils.sheet_to_json(ws, { header: 1, defval: "" });
+  const rows: unknown[][] = XLSX.utils.sheet_to_json(ws, { header: 1, defval: "" });
 
   if (rows.length < 2) return [];
 
@@ -155,7 +194,7 @@ export function parseEquipmentExcel(data: ArrayBuffer | Uint8Array): ParsedEquip
 
   const parsedItems: ParsedEquipmentItem[] = [];
   let currentTag = "";
-  const maxRows = Math.min(rows.length, 5001); // Cap at 5000 rows
+  const maxRows = Math.min(rows.length, MAX_IMPORT_ROWS + 1); // header + MAX_IMPORT_ROWS data rows
 
   for (let r = 1; r < maxRows; r++) {
     const rawRow = rows[r];
@@ -168,16 +207,16 @@ export function parseEquipmentExcel(data: ArrayBuffer | Uint8Array): ParsedEquip
     const isEmpty = row.every((c) => c === null || c === undefined || String(c).trim() === "");
     if (isEmpty) continue;
 
-    const rawTag = desanitizeExcelCell(row[colTag]);
+    const rawTag = cellText(row[colTag]);
     if (rawTag) {
       currentTag = rawTag.slice(0, 100);
     }
 
-    const rawId = desanitizeExcelCell(row[colId]);
-    const rawName = desanitizeExcelCell(row[colName]);
-    const rawDesc = desanitizeExcelCell(row[colDesc]);
-    const rawCond = desanitizeExcelCell(row[colCond]);
-    const rawLoc = desanitizeExcelCell(row[colLoc]);
+    const rawId = cellText(row[colId]);
+    const rawName = cellText(row[colName]);
+    const rawDesc = cellText(row[colDesc]);
+    const rawCond = cellText(row[colCond]);
+    const rawLoc = cellText(row[colLoc]);
 
     const serialNumber = rawId ? rawId.slice(0, 100) : "";
     const name = rawName ? rawName.slice(0, 200) : "";

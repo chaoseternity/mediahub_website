@@ -1,6 +1,7 @@
 import { auth } from "@/lib/auth";
 import { getEquipmentByTagId, addTagToEquipment } from "@/lib/db";
 import { NextRequest, NextResponse } from "next/server";
+import { toErrorResponse, validationErrorResponse } from "@/lib/api-errors";
 import { z } from "zod";
 
 export async function GET(
@@ -44,10 +45,9 @@ export async function POST(
 
   const parsed = AddEquipmentSchema.safeParse(body);
   if (!parsed.success)
-    return NextResponse.json({ error: parsed.error.flatten() }, { status: 400 });
+    return validationErrorResponse(parsed.error);
 
   try {
-
     const result = await addTagToEquipment(parsed.data.equipmentId, tagId);
     if (!result.success) {
       return NextResponse.json(
@@ -57,7 +57,6 @@ export async function POST(
     }
     return NextResponse.json({ success: true });
   } catch (err: unknown) {
-    const msg = err instanceof Error ? err.message : "Failed to add tag to equipment";
-    return NextResponse.json({ error: msg }, { status: 400 });
+    return toErrorResponse(err, "Failed to add tag to equipment");
   }
 }

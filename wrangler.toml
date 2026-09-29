@@ -3,12 +3,21 @@ main = ".open-next/worker.js"
 compatibility_date = "2024-12-18"
 compatibility_flags = ["nodejs_compat"]
 assets = { directory = ".open-next/assets" }
+[[d1_databases]]
+binding = "DB"
+database_name = "inventory-tracker-db"
+database_id = "4187eaff-020c-4e8d-af9f-ff13aea305cd"
+migrations_dir = "migrations"
 
 [vars]
-# Public/non-secret env vars go here.
-# Secret vars (AUTH_SECRET, GOOGLE_CLIENT_SECRET, etc.) go in:
-#   - .dev.vars for local wrangler dev
-#   - `wrangler secret put <KEY>` for production
+AUTH_URL = "https://mediahub-website.media-club.workers.dev"
+# ADMIN_EMAILS is a secret: `npx wrangler secret put ADMIN_EMAILS` (comma-separated emails)
+GEMINI_BACKUP_MODEL = "gemini-3.1-flash-lite"
+GEMINI_MODEL = "gemini-3.5-flash-lite"
+SMTP_HOST = "smtp.gmail.com"
+SMTP_PORT = "587"
+SMTP_SECURE = "false"
+SMTP_FROM = '"MediaHub Operations" <zhangbohan0429@gmail.com>'
 
 [observability.logs]
 enabled = true
@@ -16,7 +25,11 @@ head_sampling_rate = 1
 invocation_logs = true
 persist = true
 
+[triggers]
+crons = ["0 9 * * *"]
+
 [observability.traces]
 enabled = true
 head_sampling_rate = 1
 persist = true
+

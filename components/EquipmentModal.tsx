@@ -29,6 +29,8 @@ import { PrintLabelModal } from "@/components/PrintLabelModal";
 import { EventDetailModal } from "@/components/EventDetailModal";
 import { UserLink } from "@/components/UserLink";
 import { cn } from "@/lib/utils";
+import { formatDate, formatDateTime, isDateOnly, parseDbDate, parseDueDate } from "@/lib/timezone";
+import { readErrorMessage, networkErrorMessage } from "@/lib/fetch-error";
 import type { EquipmentDetail, Role, Checkout, Tag, EventEquipmentLog } from "@/lib/types";
 
 interface EquipmentModalProps {
@@ -52,40 +54,8 @@ const EditSchema = z.object({
 
 type EditFormValues = z.infer<typeof EditSchema>;
 
-const SGT = "Asia/Singapore";
-
-// SQLite datetime('now') stores UTC as "YYYY-MM-DD HH:MM:SS" — no 'T', no 'Z'.
-// new Date() treats space-separated strings as *local* time, so we must
-// normalise to an unambiguous ISO 8601 UTC string before parsing.
-function parseUTC(s: string): Date {
-  if (!s.includes("T") && !s.endsWith("Z") && !s.includes("+")) {
-    return new Date(s.replace(" ", "T") + "Z");
-  }
-  return new Date(s);
-}
-
-function fmtDate(s: string | null | undefined): string {
-  if (!s) return "—";
-  const d = parseUTC(s);
-  return isNaN(d.getTime())
-    ? s
-    : d.toLocaleDateString("en-GB", { year: "numeric", month: "short", day: "numeric", timeZone: SGT });
-}
-
-function fmtDateTime(s: string | null | undefined): string {
-  if (!s) return "—";
-  const d = parseUTC(s);
-  return isNaN(d.getTime())
-    ? s
-    : d.toLocaleString("en-GB", {
-        year: "numeric",
-        month: "short",
-        day: "numeric",
-        hour: "2-digit",
-        minute: "2-digit",
-        timeZone: SGT,
-      });
-}
+// Derived states are set by checkouts/events, never chosen by an admin.
+const DERIVED_STATUSES = new Set(["Checked Out", "In Event", "In Event (Rehearsal)"]);
 
 export function EquipmentModal({
   equipmentId,
@@ -103,6 +73,10 @@ export function EquipmentModal({
   const [selectedEventId, setSelectedEventId] = useState<number | null>(null);
   const [eventDetailOpen, setEventDetailOpen] = useState(false);
   const [availableTags, setAvailableTags] = useState<string[]>([]);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [actionError, setActionError] = useState<string | null>(null);
+  const [actionNotice, setActionNotice] = useState<string | null>(null);
+  const [actionBusy, setActionBusy] = useState<"return" | "delete" | null>(null);
 
   const isAdmin = role === "admin";
   const canCheckout = role === "admin" || role === "verified";
@@ -127,17 +101,35 @@ export function EquipmentModal({
       setPrintModalOpen(false);
       return;
     }
+    let cancelled = false;
     setLoading(true);
+    setLoadError(null);
+    setActionError(null);
+    setActionNotice(null);
     setShowCheckout(false);
     setPrintModalOpen(false);
     setEditingField(null);
-    Promise.all([
-      fetch(`/api/equipment/${equipmentId}`).then((r) => r.json()),
-      fetch("/api/tags").then((r) => r.json()),
-    ])
-      .then(([data, tagsData]: [EquipmentDetail, Tag[]]) => {
+    (async () => {
+      try {
+        const [eqRes, tagsRes] = await Promise.all([
+          fetch(`/api/equipment/${equipmentId}`),
+          fetch("/api/tags"),
+        ]);
+        if (!eqRes.ok) {
+          const msg = await readErrorMessage(eqRes, "Failed to load equipment");
+          if (!cancelled) {
+            setEquipment(null);
+            setLoadError(msg);
+          }
+          return;
+        }
+        const data = (await eqRes.json()) as EquipmentDetail;
+        const tagsData: unknown = tagsRes.ok ? await tagsRes.json().catch(() => []) : [];
+        if (cancelled) return;
         setEquipment(data);
-        setAvailableTags(tagsData.map((t) => t.name));
+        setAvailableTags(
+          Array.isArray(tagsData) ? (tagsData as Tag[]).map((t) => t.name).filter(Boolean) : []
+        );
         reset({
           name: data.name,
           tags: data.tags,
@@ -147,36 +139,96 @@ export function EquipmentModal({
           location: data.location,
           status: data.status,
         });
-      })
-      .finally(() => setLoading(false));
+      } catch (err) {
+        if (!cancelled) {
+          setEquipment(null);
+          setLoadError(networkErrorMessage(err, "Failed to load equipment — check your connection."));
+        }
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
   }, [open, equipmentId, reset]);
 
   async function onSave(data: EditFormValues) {
-    await fetch(`/api/equipment/${equipmentId}`, {
-      method: "PUT",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(data),
-    });
-    onUpdated();
-    onClose();
+    if (actionBusy) return;
+    setActionError(null);
+    setActionNotice(null);
+    // Derived statuses (Checked Out / In Event) can't be set by hand — don't send them back.
+    const payload: Partial<EditFormValues> = { ...data };
+    if (DERIVED_STATUSES.has(payload.status ?? "")) delete payload.status;
+    try {
+      const res = await fetch(`/api/equipment/${equipmentId}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+      if (!res.ok) {
+        setActionError(await readErrorMessage(res, "Failed to save changes"));
+        return;
+      }
+      onUpdated();
+      onClose();
+    } catch (err) {
+      setActionError(networkErrorMessage(err));
+    }
   }
 
   async function handleReturn() {
-    await fetch(`/api/equipment/${equipmentId}/return`, { method: "POST" });
-    onUpdated();
-    onClose();
+    if (actionBusy) return;
+    setActionBusy("return");
+    setActionError(null);
+    setActionNotice(null);
+    try {
+      const res = await fetch(`/api/equipment/${equipmentId}/return`, { method: "POST" });
+      if (!res.ok) {
+        setActionError(await readErrorMessage(res, "Failed to mark as returned"));
+        return;
+      }
+      onUpdated();
+      onClose();
+    } catch (err) {
+      setActionError(networkErrorMessage(err));
+    } finally {
+      setActionBusy(null);
+    }
   }
 
   async function handleDelete() {
+    if (actionBusy) return;
     if (!confirm("Delete this equipment item?")) return;
-    const res = await fetch(`/api/equipment/${equipmentId}`, { method: "DELETE" });
-    if (!res.ok) {
-      const json = await res.json();
-      alert(json.error ?? "Delete failed");
-      return;
+    setActionBusy("delete");
+    setActionError(null);
+    setActionNotice(null);
+    try {
+      const res = await fetch(`/api/equipment/${equipmentId}`, { method: "DELETE" });
+      if (!res.ok) {
+        setActionError(await readErrorMessage(res, "Delete failed"));
+        return;
+      }
+      const json = (await res.json().catch(() => ({}))) as { retired?: boolean; message?: string };
+      onUpdated();
+      if (json.retired) {
+        // Item had history, so the server retired it instead of deleting it. Keep the modal
+        // open so the admin sees why it still exists.
+        setActionNotice(
+          json.message ?? "This equipment has usage history, so it was retired instead of deleted."
+        );
+        setEquipment((prev) =>
+          prev ? { ...prev, condition: "Retired", status: "Unavailable (Retired)" } : prev
+        );
+        reset({ ...watched, condition: "Retired", status: "Unavailable (Retired)" } as EditFormValues);
+        return;
+      }
+      onClose();
+    } catch (err) {
+      setActionError(networkErrorMessage(err));
+    } finally {
+      setActionBusy(null);
     }
-    onUpdated();
-    onClose();
   }
 
   // ── Inline field renderers ─────────────────────────────────────────────────
@@ -193,7 +245,7 @@ export function EquipmentModal({
       raw === undefined || raw === null || raw === ""
         ? "—"
         : type === "date"
-        ? fmtDate(String(raw))
+        ? formatDate(String(raw))
         : String(raw);
     const canEdit = canEditAll || (canEditDescription && name === "description");
 
@@ -330,14 +382,14 @@ export function EquipmentModal({
             kind: "checkout" as const,
             id: `ch-${ch.id}`,
             checkout: ch,
-            returnDate: parseUTC(rawReturn),
+            returnDate: parseDueDate(rawReturn) ?? new Date(0),
             returnDateStr: rawReturn,
             isReturned: Boolean(ch.returned_at),
           };
         }),
         ...(equipment.event_logs || []).map((ev) => {
           const rawReturn = ev.end_time || ev.start_time || ev.added_at;
-          const returnDate = parseUTC(rawReturn);
+          const returnDate = parseDbDate(rawReturn) ?? new Date(0);
           return {
             kind: "event" as const,
             id: `ev-${ev.event_id}-${ev.added_at}`,
@@ -378,6 +430,12 @@ export function EquipmentModal({
         </DialogHeader>
 
         {loading && <p className="text-sm text-muted-foreground py-4">Loading…</p>}
+
+        {!loading && loadError && (
+          <p role="alert" className="text-sm text-destructive py-4" data-testid="load-error">
+            {loadError}
+          </p>
+        )}
 
         {!loading && equipment && (
           <>
@@ -441,8 +499,8 @@ export function EquipmentModal({
                         : watched.condition === "Broken"
                         ? ["Unavailable (Broken)", "Unavailable (In Repairs)"]
                         : watched.condition === "Impaired"
-                        ? ["Available", "Checked Out", "In Event", "In Event (Rehearsal)", "Unavailable (In Repairs)", "Unavailable (Missing)"]
-                        : ["Available", "Checked Out", "In Event", "In Event (Rehearsal)", "Unavailable (Missing)"]
+                        ? ["Available", "Unavailable (In Repairs)", "Unavailable (Missing)"]
+                        : ["Available", "Unavailable (Missing)"]
                     )}
                   </div>
                 </TabsContent>
@@ -474,17 +532,17 @@ export function EquipmentModal({
                               <div className="grid grid-cols-2 gap-x-4 gap-y-2 text-xs">
                                 <div>
                                   <p className="text-muted-foreground mb-0.5">Checked out</p>
-                                  <p>{fmtDateTime(ch.checked_out_at)}</p>
+                                  <p>{formatDateTime(ch.checked_out_at)}</p>
                                 </div>
                                 {ch.returned_at ? (
                                   <div>
                                     <p className="text-muted-foreground mb-0.5 font-medium text-foreground">Date of Return</p>
-                                    <p className="font-medium text-foreground">{fmtDateTime(ch.returned_at)}</p>
+                                    <p className="font-medium text-foreground">{formatDateTime(ch.returned_at)}</p>
                                   </div>
                                 ) : ch.expected_return_at ? (
                                   <div>
                                     <p className="text-muted-foreground mb-0.5 font-medium text-primary">Expected Return</p>
-                                    <p className="font-medium text-primary">{fmtDateTime(ch.expected_return_at)}</p>
+                                    <p className="font-medium text-primary">{isDateOnly(ch.expected_return_at) ? formatDate(ch.expected_return_at) : formatDateTime(ch.expected_return_at)}</p>
                                   </div>
                                 ) : (
                                   <div>
@@ -529,11 +587,11 @@ export function EquipmentModal({
                             <div className="grid grid-cols-2 gap-x-4 gap-y-2 text-xs">
                               <div>
                                 <p className="text-muted-foreground mb-0.5">Event Start</p>
-                                <p>{fmtDateTime(ev.start_time)}</p>
+                                <p>{formatDateTime(ev.start_time)}</p>
                               </div>
                               <div>
                                 <p className="text-muted-foreground mb-0.5 font-medium text-foreground">Date of Return / End</p>
-                                <p className="font-medium text-foreground">{fmtDateTime(ev.end_time)}</p>
+                                <p className="font-medium text-foreground">{formatDateTime(ev.end_time)}</p>
                               </div>
                             </div>
 
@@ -593,6 +651,20 @@ export function EquipmentModal({
                 </div>
               ) : (
                 <div className="space-y-3">
+                  {actionError && (
+                    <p role="alert" className="text-sm text-destructive" data-testid="action-error">
+                      {actionError}
+                    </p>
+                  )}
+                  {actionNotice && (
+                    <p
+                      role="status"
+                      className="text-sm rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-amber-900 dark:border-amber-800 dark:bg-amber-950/40 dark:text-amber-200"
+                      data-testid="action-notice"
+                    >
+                      {actionNotice}
+                    </p>
+                  )}
                   {equipment.status === "Checked Out" && equipment.active_checkout && (
                     <p className="text-xs text-muted-foreground">
                       Currently checked out to{" "}
@@ -603,7 +675,7 @@ export function EquipmentModal({
                       />
                       {" since "}
                       <span className="font-medium text-foreground">
-                        {fmtDateTime(equipment.active_checkout.checked_out_at)}
+                        {formatDateTime(equipment.active_checkout.checked_out_at)}
                       </span>
                     </p>
                   )}
@@ -612,21 +684,31 @@ export function EquipmentModal({
                       <Button
                         type="submit"
                         form="equipment-edit-form"
-                        disabled={isSubmitting || !isDirty}
+                        disabled={isSubmitting || !isDirty || actionBusy !== null}
                         data-testid="save-button"
                       >
                         {isSubmitting ? "Saving…" : "Save Changes"}
                       </Button>
                     )}
                     {isAdmin && (
-                      <Button type="button" variant="destructive" onClick={handleDelete}>
-                        Delete
+                      <Button
+                        type="button"
+                        variant="destructive"
+                        onClick={handleDelete}
+                        disabled={isSubmitting || actionBusy !== null}
+                      >
+                        {actionBusy === "delete" ? "Deleting…" : "Delete"}
                       </Button>
                     )}
                     <div className="ml-auto">
                       {equipment.status === "Checked Out" && canCheckout && (
-                        <Button variant="outline" size="sm" onClick={handleReturn}>
-                          Mark as Returned
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={handleReturn}
+                          disabled={isSubmitting || actionBusy !== null}
+                        >
+                          {actionBusy === "return" ? "Returning…" : "Mark as Returned"}
                         </Button>
                       )}
                       {equipment.status === "Available" && canCheckout && (

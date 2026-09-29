@@ -1,6 +1,5 @@
-import { sql as vercelSql } from "@vercel/postgres";
-import { ensureSchema } from "./postgres";
-import { getTestDb } from "./test-db";
+import { sql, ensureSchema, batch, stmt, rawStmt, query, type BoundStatement } from "./d1";
+import { formatLongDateTime, parseDbDate, parseDueDate } from "./timezone";
 import type {
   Equipment,
   EquipmentDetail,
@@ -14,12 +13,9 @@ import type {
   EventStatus,
   EventSection,
   EventEquipmentLog,
-  SectionICMap,
-  SectionEquipmentMap,
   SectionEquipmentItem,
-  SectionDeploymentMap,
   SectionDeploymentItem,
-  SectionRehearsalMap,
+  EventMember,
   SOPDocument,
   DeploymentResponseStatus,
   NFCCard,
@@ -48,90 +44,61 @@ import type {
 import { sendDeploymentInvitationEmail, sendOverdueReminderEmail } from "./email";
 import { sendClubWebhook } from "./webhook";
 
-async function sql<T = Record<string, unknown>>(
-  strings: TemplateStringsArray,
-  ...values: unknown[]
-): Promise<{ rows: T[]; rowCount: number }> {
-  const testDb = getTestDb();
-  if (testDb) {
-    let query = "";
-    for (let i = 0; i < strings.length; i++) {
-      query += strings[i];
-      if (i < values.length) {
-        query += "?";
-      }
-    }
-
-    let sqliteQuery = query
-      .replace(/COUNT\(\*\)::text/gi, "COUNT(*)")
-      .replace(/SERIAL PRIMARY KEY/gi, "INTEGER PRIMARY KEY AUTOINCREMENT")
-      .replace(/TIMESTAMP WITH TIME ZONE/gi, "TEXT")
-      .replace(/ILIKE/gi, "LIKE")
-      .replace(/COALESCE\(\s*ARRAY_AGG\(DISTINCT t\.name\)\s*FILTER\s*\(WHERE\s*t\.name\s*IS\s*NOT\s*NULL\),\s*'{}'\s*\)/gi, "GROUP_CONCAT(DISTINCT t.name)")
-      .replace(/COALESCE\(\s*ARRAY_AGG\(t\.name\)\s*FILTER\s*\(WHERE\s*t\.name\s*IS\s*NOT\s*NULL\),\s*'{}'\s*\)/gi, "GROUP_CONCAT(t.name)")
-      .replace(/INSERT INTO (\w+) \((.*?)\) VALUES \((.*?)\) ON CONFLICT DO NOTHING/gi, "INSERT OR IGNORE INTO $1 ($2) VALUES ($3)")
-      .replace(/INSERT INTO (\w+) \((.*?)\) VALUES \((.*?)\) ON CONFLICT \((.*?)\) DO UPDATE SET (.*?)$/gi, "INSERT OR REPLACE INTO $1 ($2) VALUES ($3)");
-
-    let isReturning = false;
-    if (/RETURNING\s+(\*|\w+)/i.test(sqliteQuery)) {
-      isReturning = true;
-      sqliteQuery = sqliteQuery.replace(/RETURNING\s+(\*|\w+)/gi, "");
-    }
-
-    const trimmed = sqliteQuery.trim();
-    if (/^ALTER TABLE.*ADD COLUMN/i.test(trimmed)) {
-      return { rows: [], rowCount: 0 };
-    }
-
-    const sanitizedValues = values.map((v) => (typeof v === "boolean" ? (v ? 1 : 0) : v === undefined ? null : v));
-
-    if (/^(SELECT|WITH|PRAGMA)/i.test(trimmed)) {
-      const stmt = testDb.prepare(sqliteQuery);
-      const rows = stmt.all(...(sanitizedValues as [])) as Array<Record<string, unknown>>;
-      const processedRows = rows.map((r) => {
-        if ("tags" in r && typeof r.tags === "string") {
-          const strVal = r.tags as string;
-          (r as Record<string, unknown>).tags = strVal ? strVal.split(",").filter(Boolean) : [];
-        }
-        return r;
-      });
-      return { rows: processedRows as T[], rowCount: processedRows.length };
-    } else {
-      const stmt = testDb.prepare(sqliteQuery);
-      const info = stmt.run(...(sanitizedValues as []));
-      const returnedRows: Array<Record<string, unknown>> = [];
-      if (isReturning && info.lastInsertRowid) {
-        let table = "users";
-        if (/INSERT INTO equipment/i.test(sqliteQuery)) table = "equipment";
-        else if (/INSERT INTO tags/i.test(sqliteQuery)) table = "tags";
-        else if (/INSERT INTO checkouts/i.test(sqliteQuery)) table = "checkouts";
-        else if (/UPDATE checkouts/i.test(sqliteQuery)) table = "checkouts";
-        else if (/INSERT INTO checkout_reminders/i.test(sqliteQuery)) table = "checkout_reminders";
-        else if (/INSERT INTO reservations/i.test(sqliteQuery)) table = "reservations";
-        else if (/INSERT INTO handover_codes/i.test(sqliteQuery)) table = "handover_codes";
-        else if (/INSERT INTO audit_sessions/i.test(sqliteQuery)) table = "audit_sessions";
-        else if (/INSERT INTO audit_records/i.test(sqliteQuery)) table = "audit_records";
-        else if (/INSERT INTO events/i.test(sqliteQuery)) table = "events";
-        else if (/INSERT INTO sop_documents/i.test(sqliteQuery)) table = "sop_documents";
-        else if (/UPDATE sop_documents/i.test(sqliteQuery)) table = "sop_documents";
-        else if (/INSERT INTO storage_map_layout/i.test(sqliteQuery)) table = "storage_map_layout";
-
-        const fetchStmt = testDb.prepare(`SELECT * FROM ${table} WHERE id = ?`);
-        const row = fetchStmt.get(info.lastInsertRowid) as Record<string, unknown>;
-        if (row) returnedRows.push(row);
-      }
-      return { rows: returnedRows as T[], rowCount: info.changes };
-    }
-  }
-
-  return (vercelSql as any)(strings, ...values);
-}
-
 function getAdminEmails(): Set<string> {
   const raw = process.env.ADMIN_EMAILS ?? "";
   return new Set(
     raw.split(",").map((e) => e.trim().toLowerCase()).filter(Boolean)
   );
+}
+
+/** True if the email is listed in ADMIN_EMAILS (such accounts are re-promoted on every login). */
+export function isConfiguredAdminEmail(email: string | null | undefined): boolean {
+  if (!email) return false;
+  return getAdminEmails().has(email.trim().toLowerCase());
+}
+
+// ---------------------------------------------------------------------------
+// Error types (route handlers can map these to 4xx responses)
+// ---------------------------------------------------------------------------
+
+/** updateUsername: the username is invalid or already used (as a username or display name). */
+export class UsernameTakenError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "UsernameTakenError";
+  }
+}
+
+/** updateUserRole: the target account is listed in ADMIN_EMAILS and cannot be demoted. */
+export class ConfiguredAdminError extends Error {
+  constructor(message = "This account is a configured administrator (ADMIN_EMAILS) and can't be demoted here.") {
+    super(message);
+    this.name = "ConfiguredAdminError";
+  }
+}
+
+/** createReservation: the request is invalid (bad times, unavailable equipment, bad notes...). */
+export class ReservationValidationError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "ReservationValidationError";
+  }
+}
+
+/** saveStorageMapConfig: the cabinets configuration is malformed. */
+export class StorageMapConfigError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "StorageMapConfigError";
+  }
+}
+
+/** createTag / tag normalisation: the tag name is empty or too long. */
+export class InvalidTagNameError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "InvalidTagNameError";
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -155,9 +122,13 @@ export async function getUserByUsername(username: string): Promise<User | undefi
   if (!username) return undefined;
   await ensureSchema();
   const trimmed = username.trim();
+  if (!trimmed) return undefined;
+  // Username only: display names are not unique and can be copied by anyone, so matching them
+  // here would let one user resolve to (and view) another user's profile.
   const { rows } = await sql<User>`
-    SELECT * FROM users 
-    WHERE LOWER(username) = LOWER(${trimmed}) OR LOWER(name) = LOWER(${trimmed})
+    SELECT * FROM users
+    WHERE LOWER(username) = LOWER(${trimmed})
+    ORDER BY id ASC
     LIMIT 1
   `;
   return rows[0];
@@ -170,10 +141,10 @@ export async function getUserProfileData(userId: number): Promise<UserProfileDat
   const user = await getUserById(userId);
   if (!user) return undefined;
 
-  // 1. Fetch checkouts associated with user (by ID or matching username/name)
-  const username = user.username ?? "";
-  const name = user.name ?? "";
-
+  // 1. Fetch checkouts made under this user's account. Matching by checked_out_by_name is
+  // deliberately NOT done: names are not unique (and usernames can be set to anyone's name), so
+  // it would expose other people's history. NFC-station checkouts have no user link (nfc_cards
+  // has no user column), so they are not attributed to accounts.
   const { rows: checkoutRows } = await sql<{
     id: number;
     equipment_id: number;
@@ -207,9 +178,7 @@ export async function getUserProfileData(userId: number): Promise<UserProfileDat
     FROM checkouts c
     JOIN equipment e ON e.id = c.equipment_id
     WHERE c.checked_out_by = ${userId}
-       OR (LENGTH(${username}) > 0 AND LOWER(c.checked_out_by_name) = LOWER(${username}))
-       OR (LENGTH(${name}) > 0 AND LOWER(c.checked_out_by_name) = LOWER(${name}))
-    ORDER BY c.checked_out_at DESC
+    ORDER BY julianday(c.checked_out_at) DESC, c.id DESC
   `;
 
   const activeEquipment: UserProfileCheckout[] = [];
@@ -339,9 +308,10 @@ export async function getUserProfileData(userId: number): Promise<UserProfileDat
   const eventMap = new Map<number, UserProfileEvent>();
 
   const getStatus = (start: string, end: string): EventStatus => {
-    const now = new Date().toISOString();
-    if (now < start) return "Upcoming";
-    if (now > end) return "Completed";
+    // Compare as instants, not strings (stored times may be ISO or "YYYY-MM-DD HH:MM:SS").
+    const now = Date.now();
+    if (now < new Date(start).getTime()) return "Upcoming";
+    if (now > new Date(end).getTime()) return "Completed";
     return "Ongoing";
   };
 
@@ -423,17 +393,9 @@ export async function getUserProfileData(userId: number): Promise<UserProfileDat
     (a, b) => new Date(b.start_time).getTime() - new Date(a.start_time).getTime()
   );
 
-  // 3. Check for linked NFC card
-  let nfcCard: NFCCard | null = null;
-  const { rows: nfcCards } = await sql<NFCCard>`
-    SELECT * FROM nfc_cards 
-    WHERE (LENGTH(${username}) > 0 AND LOWER(member_name) = LOWER(${username}))
-       OR (LENGTH(${name}) > 0 AND LOWER(member_name) = LOWER(${name}))
-    LIMIT 1
-  `;
-  if (nfcCards.length > 0) {
-    nfcCard = nfcCards[0];
-  }
+  // 3. Linked NFC card: nfc_cards has no user_id column, so there is no explicit card <-> account
+  // link. Guessing by member_name would attach someone else's card, so none is reported.
+  const nfcCard: NFCCard | null = null;
 
   // 4. Stats
   const activePossessionsCount = activeEquipment.length;
@@ -501,8 +463,9 @@ export async function upsertUser(params: {
     return (await getUserById(existing.id))!;
   }
 
-  const count = await countUsers();
-  const role: Role = params.role ?? (isAdminEmail || count === 0 ? "admin" : "viewer");
+  // Admins come only from ADMIN_EMAILS or scripts/set-role.ts. (The first account to sign in is
+  // NOT made admin: on a fresh deployment that would hand the site to whoever logs in first.)
+  const role: Role = params.role ?? (isAdminEmail ? "admin" : "viewer");
 
   const { rows } = await sql<User>`
     INSERT INTO users (name, email, google_id, image, role, provider)
@@ -527,11 +490,22 @@ export async function updateUserRole(id: number, role: Role): Promise<{ success:
   if (!user) {
     return { success: false, error: "User not found" };
   }
+  if (role !== "admin" && isConfiguredAdminEmail(user.email)) {
+    // upsertUser re-promotes ADMIN_EMAILS accounts on every login, so a demotion here would
+    // silently revert. Remove the address from ADMIN_EMAILS instead.
+    throw new ConfiguredAdminError();
+  }
   if (user.role === "admin" && role !== "admin") {
-    const adminCount = await countAdmins();
-    if (adminCount <= 1) {
+    // Conditional UPDATE so two concurrent demotions can't remove the last two admins.
+    const { rowCount } = await sql`
+      UPDATE users SET role = ${role}
+      WHERE id = ${id}
+        AND (SELECT COUNT(*) FROM users WHERE role = 'admin' AND id <> ${id}) >= 1
+    `;
+    if (rowCount === 0) {
       return { success: false, error: "Cannot demote the only remaining admin account." };
     }
+    return { success: true };
   }
   await sql`UPDATE users SET role = ${role} WHERE id = ${id}`;
   return { success: true };
@@ -561,21 +535,124 @@ export async function deleteUser(id: number): Promise<{ success: boolean; error?
       error: "Cannot delete user with active equipment checkouts. Please return all equipment first.",
     };
   }
-  await sql`UPDATE checkouts SET checked_out_by = NULL WHERE checked_out_by = ${id}`;
-  await sql`DELETE FROM users WHERE id = ${id}`;
+  // reservations.reserved_by still cascades on user delete. Announce the cancellation of any
+  // upcoming confirmed reservations (after the delete commits) so the freed slots don't silently
+  // disappear.
+  const { rows: futureReservations } = await sql<{ id: number; equipment_name: string | null; reserved_by_name: string }>`
+    SELECT r.id, e.name AS equipment_name, r.reserved_by_name
+    FROM reservations r
+    LEFT JOIN equipment e ON e.id = r.equipment_id
+    WHERE r.reserved_by = ${id}
+      AND r.status = 'confirmed'
+      AND julianday(r.end_time) > julianday('now')
+  `;
+
+  // All writes are applied atomically: checkout history is detached (checked_out_by_name keeps
+  // the borrower's name), audit sessions get a name snapshot (started_by is ON DELETE SET NULL
+  // since migration 0005), reservations are cancelled, then the user row is deleted. If a
+  // checkout was opened concurrently, the DELETE fails on the checkouts FK and nothing changes.
+  const buildStatements = (withAuditSnapshot: boolean): BoundStatement[] => [
+    stmt`UPDATE checkouts SET checked_out_by = NULL WHERE checked_out_by = ${id} AND returned_at IS NOT NULL`,
+    ...(withAuditSnapshot
+      ? [
+          stmt`
+            UPDATE audit_sessions SET started_by_name = ${user.name}
+            WHERE started_by = ${id} AND (started_by_name IS NULL OR started_by_name = '')
+          `,
+        ]
+      : []),
+    stmt`
+      UPDATE reservations SET status = 'cancelled'
+      WHERE reserved_by = ${id} AND status = 'confirmed' AND julianday(end_time) > julianday('now')
+    `,
+    stmt`DELETE FROM users WHERE id = ${id}`,
+  ];
+  try {
+    try {
+      await batch(buildStatements(true));
+    } catch (err) {
+      // Migration 0005 not applied yet (no started_by_name column): skip the snapshot.
+      if (!(err instanceof Error) || !/started_by_name/i.test(err.message)) throw err;
+      await batch(buildStatements(false));
+    }
+  } catch (err) {
+    if (err instanceof Error && /FOREIGN KEY/i.test(err.message)) {
+      return {
+        success: false,
+        error: "Cannot delete user with active equipment checkouts. Please return all equipment first.",
+      };
+    }
+    throw err;
+  }
+
+  if (futureReservations.length > 0) {
+    for (const r of futureReservations) {
+      try {
+        await sendClubWebhook({
+          event: "reservation.cancelled",
+          title: `❌ Reservation Cancelled: ${r.equipment_name || "Equipment"}`,
+          description: `Reservation #${r.id} for **${r.equipment_name || "Equipment"}** by **${r.reserved_by_name}** was cancelled because the user account was deleted.`,
+        });
+      } catch {
+        // Notification failures must not block account deletion.
+      }
+    }
+  }
+
   return { success: true };
 }
 
+/** Allowed username characters (same rule as the API route schemas): letters, digits, space, _ - . */
+const USERNAME_RE = /^[\p{L}\p{N}_\-. ]+$/u;
+export const USERNAME_MAX_LENGTH = 50;
+
+/**
+ * Sets a user's username.
+ *
+ * Throws UsernameTakenError (a subclass of Error) when the username is invalid or when, compared
+ * case-insensitively, it equals another user's username OR another user's display name (so
+ * nobody can impersonate someone else by taking their name as a username). Throws a plain
+ * Error("Invalid user ID") / Error("User not found") for a bad id.
+ */
 export async function updateUsername(id: number, username: string): Promise<void> {
   if (!Number.isInteger(id) || id <= 0) {
     throw new Error("Invalid user ID");
   }
-  const trimmed = username ? username.trim() : "";
-  if (!trimmed || trimmed.length > 50) {
-    throw new Error("Invalid username");
+  const trimmed = typeof username === "string" ? username.normalize("NFC").trim().replace(/\s+/g, " ") : "";
+  if (!trimmed) {
+    throw new UsernameTakenError("Username cannot be empty.");
+  }
+  if (trimmed.length > USERNAME_MAX_LENGTH) {
+    throw new UsernameTakenError(`Username cannot exceed ${USERNAME_MAX_LENGTH} characters.`);
+  }
+  if (!USERNAME_RE.test(trimmed)) {
+    throw new UsernameTakenError("Username may only contain letters, numbers, spaces, and _ - .");
   }
   await ensureSchema();
-  await sql`UPDATE users SET username = ${trimmed} WHERE id = ${id}`;
+
+  // The availability check is part of the UPDATE, so two users can't claim the same name at once.
+  let rowCount: number;
+  try {
+    ({ rowCount } = await sql`
+      UPDATE users SET username = ${trimmed}
+      WHERE id = ${id}
+        AND NOT EXISTS (
+          SELECT 1 FROM users o
+          WHERE o.id <> ${id}
+            AND (LOWER(o.username) = LOWER(${trimmed}) OR LOWER(TRIM(o.name)) = LOWER(${trimmed}))
+        )
+    `);
+  } catch (err) {
+    if (err instanceof Error && /UNIQUE/i.test(err.message)) {
+      throw new UsernameTakenError(`The username "${trimmed}" is already taken.`);
+    }
+    throw err;
+  }
+  if (rowCount === 0) {
+    const exists = await sql`SELECT 1 FROM users WHERE id = ${id}`;
+    if (exists.rows.length === 0) throw new Error("User not found");
+    throw new UsernameTakenError(`The username "${trimmed}" is already taken.`);
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -645,7 +722,10 @@ export async function deleteNfcCard(id: number): Promise<void> {
 // Equipment helpers
 // ---------------------------------------------------------------------------
 
-type EquipmentRawRow = Omit<Equipment, "tags"> & { tags: string[] | string | null };
+type EquipmentRawRow = Omit<Equipment, "tags" | "is_rehearsal"> & {
+  tags: string[] | string | null;
+  is_rehearsal?: boolean | number | null;
+};
 
 function formatEquipmentRow(row: EquipmentRawRow): Equipment {
   let tags: string[] = [];
@@ -655,10 +735,15 @@ function formatEquipmentRow(row: EquipmentRawRow): Equipment {
     tags = row.tags.split(",").map((t) => t.trim()).filter(Boolean);
   }
 
+  const { is_rehearsal, ...rest } = row;
   const formatted: Equipment = {
-    ...row,
+    ...rest,
     tags,
   };
+  // SQLite returns 0/1; normalise to a real boolean (only when the query selected it).
+  if (is_rehearsal !== undefined) {
+    formatted.is_rehearsal = Boolean(is_rehearsal);
+  }
 
   if (formatted.active_event_id && (formatted.status === "Available" || formatted.status === "Checked Out")) {
     formatted.status = formatted.is_rehearsal ? "In Event (Rehearsal)" : "In Event";
@@ -667,90 +752,75 @@ function formatEquipmentRow(row: EquipmentRawRow): Equipment {
   return formatted;
 }
 
+/** SQL: "now" falls inside the event's main window. */
+const EV_MAIN_ACTIVE = (ev: string) =>
+  `(julianday('now') >= julianday(${ev}.start_time) AND julianday('now') <= julianday(${ev}.end_time))`;
+/** SQL: "now" falls inside the event's rehearsal window (has_rehearsal set). */
+const EV_REHEARSAL_ACTIVE = (ev: string) =>
+  `(${ev}.has_rehearsal AND julianday('now') >= julianday(${ev}.rehearsal_start_time) AND julianday('now') <= julianday(${ev}.rehearsal_end_time))`;
+
+/** SQL: some section of event `ev` uses equipment `e` for the rehearsal. */
+const EV_USED_FOR_REHEARSAL =
+  "EXISTS (SELECT 1 FROM event_equipment eer WHERE eer.event_id = ev.id AND eer.equipment_id = e.id AND eer.used_for_rehearsal)";
+
+/**
+ * One row per equipment item. Tags come from a correlated GROUP_CONCAT, the open checkout is
+ * the single most recent open one, and at most one active event is chosen per item: among the
+ * events whose main window is now, or whose rehearsal window is now and the item is used for
+ * rehearsal in some section, the one that ends first (rehearsal end for a rehearsal match) wins,
+ * with a rehearsal match preferred on ties. is_rehearsal is true when the chosen event's
+ * rehearsal is running and any of the item's sections for that event is used for rehearsal.
+ *
+ * Append WHERE / ORDER BY clauses; alias `e` is the equipment row.
+ */
+const EQUIPMENT_SELECT_SQL = `
+  SELECT
+    e.id, e.name, e.description, e.serial_number,
+    e.condition, e.location, e.status, e.created_at, e.updated_at,
+    (SELECT GROUP_CONCAT(t.name) FROM equipment_tags et JOIN tags t ON t.id = et.tag_id WHERE et.equipment_id = e.id) AS tags,
+    c.id AS active_checkout_id,
+    c.checked_out_by,
+    c.checked_out_by_name,
+    c.checked_out_at,
+    c.expected_return_at,
+    c.checkout_location,
+    ev.id AS active_event_id,
+    ev.name AS active_event_name,
+    ev.location AS active_event_location,
+    CASE WHEN ${EV_REHEARSAL_ACTIVE("ev")} AND ${EV_USED_FOR_REHEARSAL} THEN ev.rehearsal_start_time ELSE ev.start_time END AS active_event_start_time,
+    CASE WHEN ${EV_REHEARSAL_ACTIVE("ev")} AND ${EV_USED_FOR_REHEARSAL} THEN ev.rehearsal_end_time ELSE ev.end_time END AS active_event_end_time,
+    CASE WHEN ev.id IS NULL THEN 0 WHEN ${EV_REHEARSAL_ACTIVE("ev")} AND ${EV_USED_FOR_REHEARSAL} THEN 1 ELSE 0 END AS is_rehearsal
+  FROM equipment e
+  LEFT JOIN checkouts c ON c.id = (
+    SELECT c2.id FROM checkouts c2
+    WHERE c2.equipment_id = e.id AND c2.returned_at IS NULL
+    ORDER BY julianday(c2.checked_out_at) DESC, c2.id DESC
+    LIMIT 1
+  )
+  LEFT JOIN events ev ON ev.id = (
+    SELECT ev2.id
+    FROM event_equipment ee2
+    JOIN events ev2 ON ev2.id = ee2.event_id
+    WHERE ee2.equipment_id = e.id
+      AND (${EV_MAIN_ACTIVE("ev2")} OR (${EV_REHEARSAL_ACTIVE("ev2")} AND ee2.used_for_rehearsal))
+    ORDER BY
+      julianday(CASE WHEN ${EV_REHEARSAL_ACTIVE("ev2")} AND ee2.used_for_rehearsal THEN ev2.rehearsal_end_time ELSE ev2.end_time END) ASC,
+      (CASE WHEN ${EV_REHEARSAL_ACTIVE("ev2")} AND ee2.used_for_rehearsal THEN 1 ELSE 0 END) DESC,
+      ev2.id ASC
+    LIMIT 1
+  )
+`;
+
 export async function getAllEquipment(): Promise<Equipment[]> {
   await ensureSchema();
-  const { rows } = await sql<EquipmentRawRow>`
-    SELECT 
-      e.id, e.name, e.description, e.serial_number,
-      e.condition, e.location, e.status, e.created_at, e.updated_at,
-      COALESCE(
-        ARRAY_AGG(DISTINCT t.name) FILTER (WHERE t.name IS NOT NULL),
-        '{}'
-      ) AS tags,
-      c.id AS active_checkout_id,
-      c.checked_out_by,
-      c.checked_out_by_name,
-      c.checked_out_at,
-      c.expected_return_at,
-      c.checkout_location,
-      ev.id AS active_event_id,
-      ev.name AS active_event_name,
-      ev.location AS active_event_location,
-      CASE
-        WHEN ev.has_rehearsal AND CURRENT_TIMESTAMP >= ev.rehearsal_start_time AND CURRENT_TIMESTAMP <= ev.rehearsal_end_time AND ee.used_for_rehearsal THEN ev.rehearsal_start_time
-        ELSE ev.start_time
-      END AS active_event_start_time,
-      CASE
-        WHEN ev.has_rehearsal AND CURRENT_TIMESTAMP >= ev.rehearsal_start_time AND CURRENT_TIMESTAMP <= ev.rehearsal_end_time AND ee.used_for_rehearsal THEN ev.rehearsal_end_time
-        ELSE ev.end_time
-      END AS active_event_end_time,
-      (ev.has_rehearsal AND CURRENT_TIMESTAMP >= ev.rehearsal_start_time AND CURRENT_TIMESTAMP <= ev.rehearsal_end_time AND ee.used_for_rehearsal) AS is_rehearsal
-    FROM equipment e
-    LEFT JOIN equipment_tags et ON et.equipment_id = e.id
-    LEFT JOIN tags t ON t.id = et.tag_id
-    LEFT JOIN checkouts c ON c.equipment_id = e.id AND c.returned_at IS NULL
-    LEFT JOIN event_equipment ee ON ee.equipment_id = e.id
-    LEFT JOIN events ev ON ev.id = ee.event_id AND (
-      (CURRENT_TIMESTAMP >= ev.start_time AND CURRENT_TIMESTAMP <= ev.end_time) OR
-      (ev.has_rehearsal AND CURRENT_TIMESTAMP >= ev.rehearsal_start_time AND CURRENT_TIMESTAMP <= ev.rehearsal_end_time AND ee.used_for_rehearsal)
-    )
-    GROUP BY e.id, c.id, c.checked_out_by, c.checked_out_by_name, c.checked_out_at, c.expected_return_at, c.checkout_location, ev.id, ev.name, ev.location, ev.start_time, ev.end_time, ev.has_rehearsal, ev.rehearsal_start_time, ev.rehearsal_end_time, ee.used_for_rehearsal
-    ORDER BY e.updated_at DESC
-  `;
+  const { rows } = await query<EquipmentRawRow>(`${EQUIPMENT_SELECT_SQL} ORDER BY e.updated_at DESC, e.id DESC`);
   return rows.map(formatEquipmentRow);
 }
 
 export async function getEquipmentById(id: number): Promise<EquipmentDetail | undefined> {
   if (!Number.isInteger(id) || id <= 0) return undefined;
   await ensureSchema();
-  const { rows: eqRows } = await sql<EquipmentRawRow>`
-    SELECT 
-      e.id, e.name, e.description, e.serial_number,
-      e.condition, e.location, e.status, e.created_at, e.updated_at,
-      COALESCE(
-        ARRAY_AGG(DISTINCT t.name) FILTER (WHERE t.name IS NOT NULL),
-        '{}'
-      ) AS tags,
-      c.id AS active_checkout_id,
-      c.checked_out_by,
-      c.checked_out_by_name,
-      c.checked_out_at,
-      c.expected_return_at,
-      c.checkout_location,
-      ev.id AS active_event_id,
-      ev.name AS active_event_name,
-      ev.location AS active_event_location,
-      CASE
-        WHEN ev.has_rehearsal AND CURRENT_TIMESTAMP >= ev.rehearsal_start_time AND CURRENT_TIMESTAMP <= ev.rehearsal_end_time AND ee.used_for_rehearsal THEN ev.rehearsal_start_time
-        ELSE ev.start_time
-      END AS active_event_start_time,
-      CASE
-        WHEN ev.has_rehearsal AND CURRENT_TIMESTAMP >= ev.rehearsal_start_time AND CURRENT_TIMESTAMP <= ev.rehearsal_end_time AND ee.used_for_rehearsal THEN ev.rehearsal_end_time
-        ELSE ev.end_time
-      END AS active_event_end_time,
-      (ev.has_rehearsal AND CURRENT_TIMESTAMP >= ev.rehearsal_start_time AND CURRENT_TIMESTAMP <= ev.rehearsal_end_time AND ee.used_for_rehearsal) AS is_rehearsal
-    FROM equipment e
-    LEFT JOIN equipment_tags et ON et.equipment_id = e.id
-    LEFT JOIN tags t ON t.id = et.tag_id
-    LEFT JOIN checkouts c ON c.equipment_id = e.id AND c.returned_at IS NULL
-    LEFT JOIN event_equipment ee ON ee.equipment_id = e.id
-    LEFT JOIN events ev ON ev.id = ee.event_id AND (
-      (CURRENT_TIMESTAMP >= ev.start_time AND CURRENT_TIMESTAMP <= ev.end_time) OR
-      (ev.has_rehearsal AND CURRENT_TIMESTAMP >= ev.rehearsal_start_time AND CURRENT_TIMESTAMP <= ev.rehearsal_end_time AND ee.used_for_rehearsal)
-    )
-    WHERE e.id = ${id}
-    GROUP BY e.id, c.id, c.checked_out_by, c.checked_out_by_name, c.checked_out_at, c.expected_return_at, c.checkout_location, ev.id, ev.name, ev.location, ev.start_time, ev.end_time, ev.has_rehearsal, ev.rehearsal_start_time, ev.rehearsal_end_time, ee.used_for_rehearsal
-  `;
+  const { rows: eqRows } = await query<EquipmentRawRow>(`${EQUIPMENT_SELECT_SQL} WHERE e.id = ?`, [id]);
 
   if (eqRows.length === 0) return undefined;
 
@@ -781,7 +851,7 @@ export async function getEquipmentById(id: number): Promise<EquipmentDetail | un
     ...eq,
     checkouts,
     active_checkout,
-    event_logs,
+    event_logs: event_logs.map((log) => ({ ...log, is_rehearsal: Boolean(log.is_rehearsal) })),
   };
 }
 
@@ -812,23 +882,22 @@ export async function createEquipment(params: {
     status = "Available";
   }
 
-  const { rows } = await sql<Equipment>`
-    INSERT INTO equipment (name, description, serial_number, condition, location, status)
-    VALUES (${params.name}, ${params.description ?? null}, ${params.serial_number ?? null}, ${condition}, ${params.location}, ${status})
-    RETURNING *
-  `;
+  // Tags are resolved (found case-insensitively or created) first; the equipment row and its tag
+  // links are then written atomically. Within the batch the new id is the table's MAX(id)
+  // (AUTOINCREMENT ids only grow, and the batch is one transaction).
+  const tagObjs = await findOrCreateTags(params.tags ?? []);
+  const results = await batch<{ id: number }>([
+    stmt`
+      INSERT INTO equipment (name, description, serial_number, condition, location, status)
+      VALUES (${params.name}, ${params.description ?? null}, ${params.serial_number ?? null}, ${condition}, ${params.location}, ${status})
+      RETURNING id
+    `,
+    ...tagObjs.map(
+      (t) => stmt`INSERT INTO equipment_tags (equipment_id, tag_id) VALUES ((SELECT MAX(id) FROM equipment), ${t.id}) ON CONFLICT DO NOTHING`
+    ),
+  ]);
 
-  const newId = rows[0].id;
-
-  if (params.tags && params.tags.length > 0) {
-    for (const tagName of params.tags) {
-      let tagObj = (await sql<Tag>`SELECT * FROM tags WHERE LOWER(name) = LOWER(${tagName})`).rows[0];
-      if (!tagObj) {
-        tagObj = (await sql<Tag>`INSERT INTO tags (name) VALUES (${tagName}) RETURNING *`).rows[0];
-      }
-      await sql`INSERT INTO equipment_tags (equipment_id, tag_id) VALUES (${newId}, ${tagObj.id}) ON CONFLICT DO NOTHING`;
-    }
-  }
+  const newId = results[0].rows[0].id;
 
   return (await getEquipmentById(newId)) as unknown as Equipment;
 }
@@ -850,16 +919,29 @@ export async function updateEquipment(
   if (!existing) return undefined;
 
   const { tags, ...scalars } = params;
+  const statements: BoundStatement[] = [];
+
+  // "In Event" / "In Event (Rehearsal)" are computed for display from active events
+  // (formatEquipmentRow); an edit form echoing them back must not persist them.
+  if (scalars.status === "In Event" || scalars.status === "In Event (Rehearsal)") {
+    delete scalars.status;
+  }
 
   if (Object.keys(scalars).length > 0) {
-    let nextCondition = scalars.condition ?? existing.condition;
-    let nextStatus = scalars.status ?? existing.status;
+    // Work from the stored row, not getEquipmentById's display-formatted status.
+    const stored = (
+      await sql<{ status: EquipmentStatus; condition: Condition }>`SELECT status, condition FROM equipment WHERE id = ${id}`
+    ).rows[0];
+    if (!stored) return undefined;
+    const storedStatus = stored.status;
+    let nextCondition = scalars.condition ?? stored.condition;
+    let nextStatus = scalars.status ?? storedStatus;
 
     // Condition / Status coupling for Missing
     const isMissingCond = (scalars.condition as string) === "Missing";
     const isMissingStatus = (scalars.status as string) === "Unavailable (Missing)";
-    const wasMissingCond = (existing.condition as string) === "Missing";
-    const wasMissingStatus = (existing.status as string) === "Unavailable (Missing)";
+    const wasMissingCond = (stored.condition as string) === "Missing";
+    const wasMissingStatus = (storedStatus as string) === "Unavailable (Missing)";
 
     if (isMissingCond || isMissingStatus) {
       nextCondition = "Missing";
@@ -879,8 +961,8 @@ export async function updateEquipment(
     // Condition / Status coupling for Retired
     const isRetiredCond = (scalars.condition as string) === "Retired";
     const isRetiredStatus = (scalars.status as string) === "Unavailable (Retired)";
-    const wasRetiredCond = (existing.condition as string) === "Retired";
-    const wasRetiredStatus = (existing.status as string) === "Unavailable (Retired)";
+    const wasRetiredCond = (stored.condition as string) === "Retired";
+    const wasRetiredStatus = (storedStatus as string) === "Unavailable (Retired)";
 
     if (isRetiredCond || isRetiredStatus) {
       nextCondition = "Retired";
@@ -905,30 +987,85 @@ export async function updateEquipment(
       nextStatus = "Available";
     }
 
-    if (scalars.name !== undefined) await sql`UPDATE equipment SET name = ${scalars.name} WHERE id = ${id}`;
-    if (scalars.description !== undefined) await sql`UPDATE equipment SET description = ${scalars.description} WHERE id = ${id}`;
-    if (scalars.serial_number !== undefined) await sql`UPDATE equipment SET serial_number = ${scalars.serial_number} WHERE id = ${id}`;
-    await sql`UPDATE equipment SET condition = ${nextCondition} WHERE id = ${id}`;
-    if (scalars.location !== undefined) await sql`UPDATE equipment SET location = ${scalars.location} WHERE id = ${id}`;
-    await sql`UPDATE equipment SET status = ${nextStatus} WHERE id = ${id}`;
-    await sql`UPDATE equipment SET updated_at = CURRENT_TIMESTAMP WHERE id = ${id}`;
+    // Single statement so a partial failure can't leave a half-updated row. The status is
+    // only changed if nobody else (e.g. a concurrent checkout/return) changed it since we read it.
+    statements.push(stmt`
+      UPDATE equipment SET
+        name = COALESCE(${scalars.name ?? null}, name),
+        description = COALESCE(${scalars.description ?? null}, description),
+        serial_number = COALESCE(${scalars.serial_number ?? null}, serial_number),
+        location = COALESCE(${scalars.location ?? null}, location),
+        condition = ${nextCondition},
+        status = CASE WHEN status = ${storedStatus} THEN ${nextStatus} ELSE status END,
+        updated_at = CURRENT_TIMESTAMP
+      WHERE id = ${id}
+    `);
   }
 
   if (tags !== undefined) {
-    await sql`DELETE FROM equipment_tags WHERE equipment_id = ${id}`;
-    for (const tagName of tags) {
-      let tagObj = (await sql<Tag>`SELECT * FROM tags WHERE LOWER(name) = LOWER(${tagName})`).rows[0];
-      if (!tagObj) {
-        tagObj = (await sql<Tag>`INSERT INTO tags (name) VALUES (${tagName}) RETURNING *`).rows[0];
-      }
-      await sql`INSERT INTO equipment_tags (equipment_id, tag_id) VALUES (${id}, ${tagObj.id}) ON CONFLICT DO NOTHING`;
+    // Resolve tags first (find case-insensitively or create), then replace the links atomically
+    // together with the scalar update, so the item can never be left with its tags wiped.
+    const tagObjs = await findOrCreateTags(tags);
+    statements.push(stmt`DELETE FROM equipment_tags WHERE equipment_id = ${id}`);
+    for (const t of tagObjs) {
+      statements.push(stmt`INSERT INTO equipment_tags (equipment_id, tag_id) VALUES (${id}, ${t.id}) ON CONFLICT DO NOTHING`);
     }
-    await sql`UPDATE equipment SET updated_at = CURRENT_TIMESTAMP WHERE id = ${id}`;
+    statements.push(stmt`UPDATE equipment SET updated_at = CURRENT_TIMESTAMP WHERE id = ${id}`);
   }
+
+  await batch(statements);
 
   return getEquipmentById(id);
 }
 
+export interface BatchUpsertFailure {
+  /** "item": an import row (`index` is its position in `items`); "delete": a deleteMissingIds entry. */
+  kind: "item" | "delete";
+  index: number;
+  /** Equipment id, when known (existing item matched, or the id that could not be deleted). */
+  id?: number;
+  name: string;
+  error: string;
+}
+
+export interface BatchUpsertResult {
+  createdCount: number;
+  updatedCount: number;
+  deletedCount: number;
+  retiredCount: number;
+  /** Number of import rows and deletions that failed (= failed.length). */
+  failedCount: number;
+  failed: BatchUpsertFailure[];
+  /** Informational messages (e.g. retired instead of deleted, status kept because the item is out). */
+  notices: string[];
+  /** Human-readable failures followed by notices (kept for backwards compatibility). */
+  errors: string[];
+  /** true when anything failed: the import was only partially applied. */
+  partial: boolean;
+}
+
+const UNAVAILABLE_CONDITIONS: ReadonlySet<Condition> = new Set<Condition>(["Missing", "Broken", "Retired"]);
+
+/** SQL: equipment row `alias` has an open checkout or is in an active event (julianday-based). */
+const EQUIPMENT_BUSY_SQL = (alias: string) => `(
+  EXISTS (SELECT 1 FROM checkouts bc WHERE bc.equipment_id = ${alias}.id AND bc.returned_at IS NULL)
+  OR EXISTS (
+    SELECT 1 FROM event_equipment bee JOIN events bev ON bev.id = bee.event_id
+    WHERE bee.equipment_id = ${alias}.id
+      AND (${EV_MAIN_ACTIVE("bev")} OR (${EV_REHEARSAL_ACTIVE("bev")} AND bee.used_for_rehearsal))
+  )
+)`;
+
+/**
+ * Imports equipment rows: matches by serial number (or by name when the row has no serial),
+ * updates matches and creates the rest. Each row is written atomically (equipment row + tag
+ * links in one batch); a failing row is reported in `failed` and the remaining rows continue.
+ *
+ * - A row without a serial number never clears an item's stored serial.
+ * - A row that sets condition Missing/Broken/Retired on an item that is checked out or in an
+ *   active event updates the condition only; the status is left alone (so the open checkout /
+ *   event stays consistent) and a notice is added.
+ */
 export async function batchUpsertEquipment(
   items: {
     name: string;
@@ -939,28 +1076,39 @@ export async function batchUpsertEquipment(
     location: string;
   }[],
   deleteMissingIds?: number[]
-): Promise<{ createdCount: number; updatedCount: number; deletedCount: number; errors: string[] }> {
+): Promise<BatchUpsertResult> {
   await ensureSchema();
   let createdCount = 0;
   let updatedCount = 0;
   let deletedCount = 0;
-  const errors: string[] = [];
+  let retiredCount = 0;
+  const failed: BatchUpsertFailure[] = [];
+  const notices: string[] = [];
 
-  // Fetch existing equipment and tags upfront to prevent hundreds of sequential roundtrips
-  const { rows: existingRows } = await sql<{ id: number; name: string; serial_number: string | null; status: EquipmentStatus; condition: Condition }>`
-    SELECT id, LOWER(TRIM(name)) as name, LOWER(TRIM(serial_number)) as serial_number, status, condition FROM equipment
-  `;
+  type ExistingRow = {
+    id: number;
+    name: string;
+    serial_number: string | null;
+    status: EquipmentStatus;
+    condition: Condition;
+    has_open_checkout: number | boolean;
+    busy: number | boolean;
+  };
 
-  const { rows: tagRows } = await sql<Tag>`
-    SELECT id, name FROM tags
-  `;
+  // Everything needed for matching is fetched up front (one query) instead of per row.
+  const { rows: existingRows } = await query<ExistingRow>(`
+    SELECT
+      e.id,
+      LOWER(TRIM(e.name)) AS name,
+      LOWER(TRIM(e.serial_number)) AS serial_number,
+      e.status,
+      e.condition,
+      EXISTS (SELECT 1 FROM checkouts c WHERE c.equipment_id = e.id AND c.returned_at IS NULL) AS has_open_checkout,
+      ${EQUIPMENT_BUSY_SQL("e")} AS busy
+    FROM equipment e
+  `);
 
-  const tagMap = new Map<string, number>();
-  for (const t of tagRows) {
-    if (t.name) tagMap.set(t.name.trim().toLowerCase(), t.id);
-  }
-
-  const existingMap = new Map<number, { id: number; name: string; serial_number: string | null; status: EquipmentStatus; condition: Condition }>();
+  const existingMap = new Map<number, ExistingRow>();
   const existingBySerial = new Map<string, number>();
   const existingByName = new Map<string, number>();
 
@@ -974,47 +1122,76 @@ export async function batchUpsertEquipment(
     }
   }
 
-  for (const item of items) {
+  // Validate every row's tag names, then resolve all distinct tags with a fixed number of queries.
+  const itemTagNames: (string[] | Error)[] = items.map((item) => {
     try {
-      let existingId: number | null = null;
+      const names: string[] = [];
+      for (const raw of item.tags ?? []) {
+        if (typeof raw !== "string" || !raw.trim()) continue;
+        names.push(normalizeTagName(raw));
+      }
+      return names;
+    } catch (err) {
+      return err instanceof Error ? err : new Error(String(err));
+    }
+  });
+  const tagIdByKey = new Map<string, number>();
+  const allTagNames = itemTagNames.flatMap((t) => (Array.isArray(t) ? t : []));
+  let tagResolveError: Error | null = null;
+  if (allTagNames.length > 0) {
+    try {
+      for (const t of await findOrCreateTags(allTagNames)) tagIdByKey.set(tagKey(t.name), t.id);
+    } catch (err) {
+      tagResolveError = err instanceof Error ? err : new Error(String(err));
+    }
+  }
 
-      const cleanSerial = item.serial_number ? item.serial_number.trim().toLowerCase() : "";
+  const tagLinkStatements = (idExpr: string, idValues: unknown[], tagIds: number[]): BoundStatement[] =>
+    chunk(tagIds, MAX_IN_PARAMS).map((part) =>
+      rawStmt(
+        `INSERT INTO equipment_tags (equipment_id, tag_id)
+         SELECT ${idExpr}, t.id FROM tags t WHERE t.id IN (${part.map(() => "?").join(", ")})
+         ON CONFLICT DO NOTHING`,
+        [...idValues, ...part]
+      )
+    );
+
+  for (let index = 0; index < items.length; index++) {
+    const item = items[index];
+    let matchedId: number | undefined;
+    try {
+      const tagNames = itemTagNames[index];
+      if (tagNames instanceof Error) throw tagNames;
+      if (tagNames.length > 0 && tagResolveError) throw tagResolveError;
+      const tagIds = [...new Set(tagNames.map((n) => tagIdByKey.get(tagKey(n))))].filter(
+        (id): id is number => typeof id === "number"
+      );
+
+      const serialRaw = typeof item.serial_number === "string" ? item.serial_number.trim() : "";
+      const cleanSerial = serialRaw.toLowerCase();
       const cleanName = item.name ? item.name.trim().toLowerCase() : "";
 
-      // 1. Match by serial_number if provided
+      // 1. Match by serial_number if provided; 2. only fall back to name if NO serial was given.
+      let existingId: number | undefined;
       if (cleanSerial) {
-        const matched = existingBySerial.get(cleanSerial);
-        if (matched) {
-          existingId = matched;
-        }
+        existingId = existingBySerial.get(cleanSerial);
       } else if (cleanName) {
-        // 2. Only fallback match by name if NO serial_number was provided!
-        const matched = existingByName.get(cleanName);
-        if (matched) {
-          existingId = matched;
-        }
+        existingId = existingByName.get(cleanName);
       }
-
-      let targetId: number;
+      matchedId = existingId;
 
       if (existingId) {
-        targetId = existingId;
         const current = existingMap.get(existingId);
-        const currentStatus = current ? current.status : "Available";
+        const currentStatus: EquipmentStatus = current ? current.status : "Available";
 
-        // Determine next status: preserve existing status, but enforce standard status-condition pairing
+        // Preserve the existing status, but enforce the standard status-condition pairing.
         let nextStatus: EquipmentStatus = currentStatus;
-
         if (item.condition === "Missing") {
           nextStatus = "Unavailable (Missing)";
         } else if (item.condition === "Retired") {
           nextStatus = "Unavailable (Retired)";
         } else if (item.condition === "Broken") {
-          if (currentStatus === "Unavailable (In Repairs)") {
-            nextStatus = "Unavailable (In Repairs)";
-          } else {
-            nextStatus = "Unavailable (Broken)";
-          }
+          nextStatus = currentStatus === "Unavailable (In Repairs)" ? "Unavailable (In Repairs)" : "Unavailable (Broken)";
         } else if (item.condition === "Impaired") {
           if (
             currentStatus === "Unavailable (Missing)" ||
@@ -1034,26 +1211,53 @@ export async function batchUpsertEquipment(
           }
         }
 
-        // Update ALL equipment information
-        await sql`
-          UPDATE equipment 
-          SET name = ${item.name},
-              description = ${item.description ?? null},
-              serial_number = ${item.serial_number ?? null},
-              condition = ${item.condition},
-              location = ${item.location},
-              status = ${nextStatus},
-              updated_at = CURRENT_TIMESTAMP
-          WHERE id = ${existingId}
-        `;
+        // An item that is out (open checkout) or in an active event keeps its status; only the
+        // condition is recorded. The same guard is repeated inside the UPDATE, so a checkout
+        // opened after the prefetch is protected too.
+        const protectStatus = UNAVAILABLE_CONDITIONS.has(item.condition);
+        const busy = Boolean(current?.busy);
+        if (protectStatus && busy && nextStatus !== currentStatus) {
+          const why = current?.has_open_checkout ? "is currently checked out" : "is in an active event";
+          notices.push(
+            `"${item.name}" ${why}: condition set to ${item.condition}, but its status was left as "${currentStatus}" (not "${nextStatus}") so the ${current?.has_open_checkout ? "open checkout" : "event"} stays consistent.`
+          );
+        }
+
+        await batch([
+          rawStmt(
+            `UPDATE equipment
+             SET name = ?,
+                 description = ?,
+                 serial_number = COALESCE(NULLIF(TRIM(?), ''), serial_number),
+                 condition = ?,
+                 location = ?,
+                 status = CASE WHEN ? AND ${EQUIPMENT_BUSY_SQL("equipment")} THEN status ELSE ? END,
+                 updated_at = CURRENT_TIMESTAMP
+             WHERE id = ?`,
+            [
+              item.name,
+              item.description ?? null,
+              serialRaw,
+              item.condition,
+              item.location,
+              protectStatus,
+              nextStatus,
+              existingId,
+            ]
+          ),
+          stmt`DELETE FROM equipment_tags WHERE equipment_id = ${existingId}`,
+          ...tagLinkStatements("?", [existingId], tagIds),
+        ]);
 
         if (current) {
-          current.status = nextStatus;
+          if (!(protectStatus && busy)) current.status = nextStatus;
           current.condition = item.condition;
+        }
+        if (cleanSerial && !existingBySerial.has(cleanSerial)) {
+          existingBySerial.set(cleanSerial, existingId);
         }
         updatedCount++;
       } else {
-        // Insert new equipment
         let initialStatus: EquipmentStatus = "Available";
         if (item.condition === "Missing") {
           initialStatus = "Unavailable (Missing)";
@@ -1063,12 +1267,25 @@ export async function batchUpsertEquipment(
           initialStatus = "Unavailable (Broken)";
         }
 
-        const { rows } = await sql<Equipment>`
-          INSERT INTO equipment (name, description, serial_number, condition, location, status)
-          VALUES (${item.name}, ${item.description ?? null}, ${item.serial_number ?? null}, ${item.condition}, ${item.location}, ${initialStatus})
-          RETURNING *
-        `;
-        targetId = rows[0].id;
+        // The new id is the table's MAX(id) inside the batch (one transaction, AUTOINCREMENT).
+        const results = await batch<{ id: number }>([
+          stmt`
+            INSERT INTO equipment (name, description, serial_number, condition, location, status)
+            VALUES (${item.name}, ${item.description ?? null}, ${serialRaw || null}, ${item.condition}, ${item.location}, ${initialStatus})
+            RETURNING id
+          `,
+          ...tagLinkStatements("(SELECT MAX(id) FROM equipment)", [], tagIds),
+        ]);
+        const targetId = results[0].rows[0].id;
+        existingMap.set(targetId, {
+          id: targetId,
+          name: cleanName,
+          serial_number: cleanSerial || null,
+          status: initialStatus,
+          condition: item.condition,
+          has_open_checkout: 0,
+          busy: 0,
+        });
         if (cleanSerial) {
           existingBySerial.set(cleanSerial, targetId);
         }
@@ -1077,53 +1294,63 @@ export async function batchUpsertEquipment(
         }
         createdCount++;
       }
-
-      // Update tags
-      await sql`DELETE FROM equipment_tags WHERE equipment_id = ${targetId}`;
-      if (item.tags && item.tags.length > 0) {
-        for (const tagName of item.tags) {
-          const tClean = tagName.trim();
-          if (!tClean) continue;
-          const tLower = tClean.toLowerCase();
-          let tagId = tagMap.get(tLower);
-          if (!tagId) {
-            let tagObj = (await sql<Tag>`SELECT * FROM tags WHERE LOWER(name) = LOWER(${tClean})`).rows[0];
-            if (!tagObj) {
-              tagObj = (await sql<Tag>`INSERT INTO tags (name) VALUES (${tClean}) RETURNING *`).rows[0];
-            }
-            if (tagObj) {
-              tagId = tagObj.id;
-              tagMap.set(tLower, tagId);
-            }
-          }
-          if (tagId) {
-            await sql`INSERT INTO equipment_tags (equipment_id, tag_id) VALUES (${targetId}, ${tagId}) ON CONFLICT DO NOTHING`;
-          }
-        }
-      }
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
-      errors.push(`Error processing "${item.name}": ${msg}`);
+      failed.push({ kind: "item", index, id: matchedId, name: item.name, error: msg });
     }
   }
 
   if (deleteMissingIds && deleteMissingIds.length > 0) {
-    for (const id of deleteMissingIds) {
-      const delResult = await deleteEquipment(id);
-      if (delResult.success) {
-        deletedCount++;
-      } else {
-        const current = existingMap.get(id);
-        const label = current ? `"${current.name}" (${current.serial_number || `ID ${current.id}`})` : `Equipment ID ${id}`;
-        errors.push(`Could not delete ${label}: ${delResult.error}`);
+    for (let index = 0; index < deleteMissingIds.length; index++) {
+      const id = deleteMissingIds[index];
+      const current = existingMap.get(id);
+      const label = current ? `"${current.name}" (${current.serial_number || `ID ${current.id}`})` : `Equipment ID ${id}`;
+      try {
+        const delResult = await deleteEquipment(id);
+        if (delResult.success && delResult.retired) {
+          // Items with checkout/reservation/audit/event history are retired, not deleted.
+          retiredCount++;
+          if (!delResult.alreadyRetired) {
+            notices.push(`${label} has usage history, so it was retired instead of deleted.`);
+          }
+        } else if (delResult.success) {
+          deletedCount++;
+        } else {
+          failed.push({ kind: "delete", index, id, name: label, error: `Could not delete ${label}: ${delResult.error}` });
+        }
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        failed.push({ kind: "delete", index, id, name: label, error: `Could not delete ${label}: ${msg}` });
       }
     }
   }
 
-  return { createdCount, updatedCount, deletedCount, errors };
+  const errors = [
+    ...failed.map((f) => (f.kind === "item" ? `Error processing "${f.name}": ${f.error}` : f.error)),
+    ...notices,
+  ];
+
+  return {
+    createdCount,
+    updatedCount,
+    deletedCount,
+    retiredCount,
+    failedCount: failed.length,
+    failed,
+    notices,
+    errors,
+    partial: failed.length > 0,
+  };
 }
 
-export async function deleteEquipment(id: number): Promise<{ success: boolean; error?: string }> {
+export async function deleteEquipment(id: number): Promise<{
+  success: boolean;
+  error?: string;
+  /** true when the item had history and was retired instead of hard-deleted. */
+  retired?: boolean;
+  /** true when the (retired) item was already retired before this call. */
+  alreadyRetired?: boolean;
+}> {
   await ensureSchema();
   if (!Number.isInteger(id) || id <= 0) {
     return { success: false, error: "Invalid equipment ID." };
@@ -1137,58 +1364,74 @@ export async function deleteEquipment(id: number): Promise<{ success: boolean; e
     SELECT ee.event_id, ev.name 
     FROM event_equipment ee 
     JOIN events ev ON ev.id = ee.event_id 
-    WHERE ee.equipment_id = ${id} AND ev.end_time > CURRENT_TIMESTAMP
+    WHERE ee.equipment_id = ${id} AND julianday(ev.end_time) > julianday('now')
     LIMIT 1
   `;
   if (activeEvents.rows.length > 0) {
     return { success: false, error: `Cannot delete equipment allocated to upcoming/ongoing event "${activeEvents.rows[0].name}".` };
   }
 
-  const { rowCount } = await sql`DELETE FROM equipment WHERE id = ${id}`;
-  if (!rowCount || rowCount === 0) {
+  const existing = (
+    await sql<{ id: number; condition: Condition; status: EquipmentStatus }>`
+      SELECT id, condition, status FROM equipment WHERE id = ${id}
+    `
+  ).rows[0];
+  if (!existing) {
     return { success: false, error: "Equipment not found." };
   }
-  return { success: true };
+
+  // Hard-delete only items with no history. Every table below cascades from equipment, so
+  // deleting an item that has been used would silently wipe checkout / reservation / audit /
+  // handover / event records. The history check is part of the DELETE itself, so history
+  // created concurrently still prevents the hard delete.
+  const { rowCount } = await sql`
+    DELETE FROM equipment
+    WHERE id = ${id}
+      AND NOT EXISTS (SELECT 1 FROM checkouts WHERE equipment_id = ${id})
+      AND NOT EXISTS (SELECT 1 FROM reservations WHERE equipment_id = ${id})
+      AND NOT EXISTS (SELECT 1 FROM audit_records WHERE equipment_id = ${id})
+      AND NOT EXISTS (SELECT 1 FROM handover_codes WHERE equipment_id = ${id})
+      AND NOT EXISTS (SELECT 1 FROM event_equipment WHERE equipment_id = ${id})
+  `;
+  if (rowCount === 1) {
+    return { success: true, retired: false };
+  }
+
+  // Has history: retire instead of deleting (condition/status coupling as in updateEquipment).
+  const alreadyRetired = existing.condition === "Retired" && existing.status === "Unavailable (Retired)";
+  const retire = await sql`
+    UPDATE equipment
+    SET condition = 'Retired', status = 'Unavailable (Retired)', updated_at = CURRENT_TIMESTAMP
+    WHERE id = ${id}
+      AND NOT EXISTS (SELECT 1 FROM checkouts WHERE equipment_id = ${id} AND returned_at IS NULL)
+  `;
+  if (retire.rowCount === 0) {
+    const stillThere = await sql`SELECT id FROM equipment WHERE id = ${id}`;
+    return {
+      success: false,
+      error: stillThere.rows.length > 0 ? "Cannot delete equipment with an active checkout." : "Equipment not found.",
+    };
+  }
+
+  // A retired item can't be lent out, so upcoming reservations for it are cancelled
+  // (previously the hard delete removed them outright).
+  await sql`
+    UPDATE reservations SET status = 'cancelled'
+    WHERE equipment_id = ${id} AND status = 'confirmed' AND julianday(end_time) > julianday('now')
+  `;
+
+  return { success: true, retired: true, alreadyRetired };
 }
 
 export async function getEquipmentByTagId(tagId: number): Promise<Equipment[]> {
   if (!Number.isInteger(tagId) || tagId <= 0) return [];
   await ensureSchema();
-  const { rows } = await sql<EquipmentRawRow>`
-    SELECT 
-      e.id, e.name, e.description, e.serial_number,
-      e.condition, e.location, e.status, e.created_at, e.updated_at,
-      GROUP_CONCAT(DISTINCT t.name) AS tags,
-      c.id AS active_checkout_id,
-      c.checked_out_by_name,
-      c.checked_out_at,
-      c.expected_return_at,
-      c.checkout_location,
-      ev.id AS active_event_id,
-      ev.name AS active_event_name,
-      ev.location AS active_event_location,
-      CASE
-        WHEN ev.has_rehearsal AND CURRENT_TIMESTAMP >= ev.rehearsal_start_time AND CURRENT_TIMESTAMP <= ev.rehearsal_end_time AND ee.used_for_rehearsal THEN ev.rehearsal_start_time
-        ELSE ev.start_time
-      END AS active_event_start_time,
-      CASE
-        WHEN ev.has_rehearsal AND CURRENT_TIMESTAMP >= ev.rehearsal_start_time AND CURRENT_TIMESTAMP <= ev.rehearsal_end_time AND ee.used_for_rehearsal THEN ev.rehearsal_end_time
-        ELSE ev.end_time
-      END AS active_event_end_time,
-      (ev.has_rehearsal AND CURRENT_TIMESTAMP >= ev.rehearsal_start_time AND CURRENT_TIMESTAMP <= ev.rehearsal_end_time AND ee.used_for_rehearsal) AS is_rehearsal
-    FROM equipment e
-    INNER JOIN equipment_tags ef ON ef.equipment_id = e.id AND ef.tag_id = ${tagId}
-    LEFT JOIN equipment_tags et ON et.equipment_id = e.id
-    LEFT JOIN tags t ON t.id = et.tag_id
-    LEFT JOIN checkouts c ON c.equipment_id = e.id AND c.returned_at IS NULL
-    LEFT JOIN event_equipment ee ON ee.equipment_id = e.id
-    LEFT JOIN events ev ON ev.id = ee.event_id AND (
-      (CURRENT_TIMESTAMP >= ev.start_time AND CURRENT_TIMESTAMP <= ev.end_time) OR
-      (ev.has_rehearsal AND CURRENT_TIMESTAMP >= ev.rehearsal_start_time AND CURRENT_TIMESTAMP <= ev.rehearsal_end_time AND ee.used_for_rehearsal)
-    )
-    GROUP BY e.id, c.id, c.checked_out_by_name, c.checked_out_at, c.expected_return_at, c.checkout_location, ev.id, ev.name, ev.location, ev.start_time, ev.end_time, ev.has_rehearsal, ev.rehearsal_start_time, ev.rehearsal_end_time, ee.used_for_rehearsal
-    ORDER BY e.name ASC
-  `;
+  const { rows } = await query<EquipmentRawRow>(
+    `${EQUIPMENT_SELECT_SQL}
+     WHERE EXISTS (SELECT 1 FROM equipment_tags ef WHERE ef.equipment_id = e.id AND ef.tag_id = ?)
+     ORDER BY e.name ASC, e.id ASC`,
+    [tagId]
+  );
   return rows.map(formatEquipmentRow);
 }
 
@@ -1222,6 +1465,58 @@ export async function removeTagFromEquipment(
 // Checkout helpers
 // ---------------------------------------------------------------------------
 
+/** Thrown by normalizeOccurredAt for a client-supplied action time that cannot be accepted. */
+export class InvalidOccurredAtError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "InvalidOccurredAtError";
+  }
+}
+
+/** Allowed station-clock skew: action times up to this far in the future are clamped to now. */
+export const OCCURRED_AT_MAX_FUTURE_SKEW_MS = 2 * 60 * 1000;
+/** Offline actions older than this are refused. */
+export const OCCURRED_AT_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
+
+const SQLITE_UTC_DATETIME_RE = /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/;
+
+/**
+ * Normalises an optional client-supplied event time (e.g. an offline NFC action
+ * replayed later) into SQLite's "YYYY-MM-DD HH:MM:SS" UTC format. Returns null when no
+ * time was given (caller uses "now").
+ *
+ * - Up to 2 minutes in the future (clock skew): clamped to now.
+ * - Invalid, more than 2 minutes in the future, or more than 7 days old: throws
+ *   InvalidOccurredAtError.
+ *
+ * Already-normalised "YYYY-MM-DD HH:MM:SS" values are treated as UTC, so the function
+ * is idempotent.
+ */
+export function normalizeOccurredAt(input?: string | null): string | null {
+  if (input === undefined || input === null || input === "") return null;
+  if (typeof input !== "string") throw new InvalidOccurredAtError("Invalid action timestamp.");
+  const trimmed = input.trim();
+  const d = new Date(
+    SQLITE_UTC_DATETIME_RE.test(trimmed) ? `${trimmed.replace(" ", "T")}Z` : trimmed
+  );
+  if (Number.isNaN(d.getTime())) {
+    throw new InvalidOccurredAtError(`Invalid action timestamp "${trimmed.slice(0, 40)}".`);
+  }
+  const now = Date.now();
+  if (d.getTime() > now + OCCURRED_AT_MAX_FUTURE_SKEW_MS) {
+    throw new InvalidOccurredAtError(
+      "Action timestamp is in the future. Check the station's clock and try again."
+    );
+  }
+  if (d.getTime() < now - OCCURRED_AT_MAX_AGE_MS) {
+    throw new InvalidOccurredAtError(
+      "Action timestamp is more than 7 days old; offline actions must be synced within 7 days."
+    );
+  }
+  const effective = d.getTime() > now ? new Date(now) : d;
+  return effective.toISOString().replace("T", " ").slice(0, 19);
+}
+
 export async function createCheckout(params: {
   equipment_id: number;
   checked_out_by: number | null;
@@ -1231,10 +1526,13 @@ export async function createCheckout(params: {
   checkout_location?: string;
   nfc_value?: string;
   nfc_id?: string;
+  /** Original time of the checkout (offline replay). Defaults to now. */
+  checked_out_at?: string | null;
 }): Promise<Checkout> {
   if (!Number.isInteger(params.equipment_id) || params.equipment_id <= 0) {
     throw new Error("Invalid equipment ID");
   }
+  const checkedOutAt = normalizeOccurredAt(params.checked_out_at);
   await ensureSchema();
   const eqRes = await sql<{ id: number; status: EquipmentStatus }>`
     SELECT id, status FROM equipment WHERE id = ${params.equipment_id}
@@ -1246,36 +1544,67 @@ export async function createCheckout(params: {
     throw new Error(`Equipment is not available for checkout (current status: ${eqRes.rows[0].status}).`);
   }
 
-  const active = await sql`SELECT id FROM checkouts WHERE equipment_id = ${params.equipment_id} AND returned_at IS NULL`;
-  if (active.rows.length > 0) {
+  // Atomically claim the item: this single conditional UPDATE only succeeds for one of
+  // several concurrent checkouts, so the same item can never be checked out twice.
+  const claim = await sql`
+    UPDATE equipment SET status = 'Checked Out', updated_at = CURRENT_TIMESTAMP
+    WHERE id = ${params.equipment_id}
+      AND LOWER(status) = 'available'
+      AND NOT EXISTS (SELECT 1 FROM checkouts WHERE equipment_id = ${params.equipment_id} AND returned_at IS NULL)
+  `;
+  if (claim.rowCount === 0) {
     throw new Error("Equipment is already checked out.");
   }
 
   const val = params.nfc_value ?? params.nfc_id ?? null;
-  const { rows } = await sql<Checkout>`
-    INSERT INTO checkouts (equipment_id, checked_out_by, checked_out_by_name, expected_return_at, notes, checkout_location, nfc_value, nfc_id)
-    VALUES (${params.equipment_id}, ${params.checked_out_by ?? null}, ${params.checked_out_by_name}, ${params.expected_return_at ?? null}, ${params.notes ?? null}, ${params.checkout_location ?? null}, ${val}, ${val})
-    RETURNING *
-  `;
-
-  await sql`UPDATE equipment SET status = 'Checked Out', updated_at = CURRENT_TIMESTAMP WHERE id = ${params.equipment_id}`;
-  return rows[0];
+  try {
+    const { rows } = await sql<Checkout>`
+      INSERT INTO checkouts (equipment_id, checked_out_by, checked_out_by_name, checked_out_at, expected_return_at, notes, checkout_location, nfc_value, nfc_id)
+      VALUES (${params.equipment_id}, ${params.checked_out_by ?? null}, ${params.checked_out_by_name}, COALESCE(${checkedOutAt}, datetime('now')), ${params.expected_return_at ?? null}, ${params.notes ?? null}, ${params.checkout_location ?? null}, ${val}, ${val})
+      RETURNING *
+    `;
+    return rows[0];
+  } catch (err) {
+    // Release the claim so the item doesn't stay stuck as "Checked Out" with no checkout row.
+    await sql`
+      UPDATE equipment SET status = 'Available', updated_at = CURRENT_TIMESTAMP
+      WHERE id = ${params.equipment_id} AND status = 'Checked Out'
+        AND NOT EXISTS (SELECT 1 FROM checkouts WHERE equipment_id = ${params.equipment_id} AND returned_at IS NULL)
+    `;
+    throw err;
+  }
 }
 
-export async function returnCheckout(equipment_id: number): Promise<Checkout> {
+export async function returnCheckout(
+  equipment_id: number,
+  options?: { returned_at?: string | null }
+): Promise<Checkout> {
   if (!Number.isInteger(equipment_id) || equipment_id <= 0) {
     throw new Error("Invalid equipment ID");
   }
+  const returnedAt = normalizeOccurredAt(options?.returned_at);
   await ensureSchema();
-  const active = await sql<Checkout>`SELECT * FROM checkouts WHERE equipment_id = ${equipment_id} AND returned_at IS NULL`;
-  if (active.rows.length === 0) {
+
+  // Conditional UPDATE: only one concurrent return can close the open checkout.
+  // A replayed (offline) return time is never allowed to precede the checkout time.
+  const { rows } = await sql<Checkout>`
+    UPDATE checkouts
+    SET returned_at = CASE
+      WHEN julianday(COALESCE(${returnedAt}, datetime('now'))) < julianday(checked_out_at) THEN checked_out_at
+      ELSE COALESCE(${returnedAt}, datetime('now'))
+    END
+    WHERE equipment_id = ${equipment_id} AND returned_at IS NULL
+    RETURNING *
+  `;
+  if (rows.length === 0) {
     throw new Error("No active checkout found for this equipment.");
   }
 
-  const checkoutId = active.rows[0].id;
-  const { rows } = await sql<Checkout>`
-    UPDATE checkouts SET returned_at = CURRENT_TIMESTAMP WHERE id = ${checkoutId} RETURNING *
-  `;
+  // Any outstanding handover codes for the closed checkout(s) can no longer be claimed.
+  await ensureHandoverTable();
+  for (const row of rows) {
+    await sql`UPDATE handover_codes SET status = 'revoked' WHERE checkout_id = ${row.id} AND status = 'active'`;
+  }
 
   const eqRes = await sql<{ condition: Condition }>`SELECT condition FROM equipment WHERE id = ${equipment_id}`;
   const cond = eqRes.rows[0]?.condition;
@@ -1370,6 +1699,13 @@ export async function nfcCheckout(params: {
   nfcId?: string;
   notes?: string;
   checkout_location?: string;
+  /** Original time of the action when replayed from the offline queue. */
+  occurredAt?: string | null;
+  /**
+   * Member the card belonged to when the action was queued offline. If the card has
+   * since been reassigned to someone else, the replay is rejected.
+   */
+  expectedMemberName?: string | null;
 }): Promise<Checkout> {
   await ensureSchema();
   const raw = params.nfcValue ?? params.nfcId ?? "";
@@ -1377,6 +1713,13 @@ export async function nfcCheckout(params: {
   const card = await getNfcCardByValue(trimmed);
   if (!card) {
     throw new Error("NFC card not found in database.");
+  }
+  assertCardMember(card, params.expectedMemberName);
+
+  // Idempotent replay: this exact checkout (same card, same original time) already exists.
+  if (params.occurredAt) {
+    const existing = await findReplayedNfcCheckout(params.equipmentId, trimmed, params.occurredAt);
+    if (existing) return existing;
   }
 
   return await createCheckout({
@@ -1387,11 +1730,103 @@ export async function nfcCheckout(params: {
     checkout_location: params.checkout_location,
     nfc_value: trimmed,
     nfc_id: trimmed,
+    checked_out_at: params.occurredAt,
   });
 }
 
-export async function nfcReturn(equipmentId: number): Promise<Checkout> {
-  return await returnCheckout(equipmentId);
+export async function nfcReturn(
+  equipmentId: number,
+  options?: { occurredAt?: string | null; nfcValue?: string | null }
+): Promise<Checkout> {
+  // Idempotent replay: this card already returned the item at the original time.
+  if (options?.occurredAt && options.nfcValue) {
+    const existing = await findReplayedNfcReturn(equipmentId, options.nfcValue, options.occurredAt);
+    if (existing) return existing;
+  }
+  return await returnCheckout(equipmentId, { returned_at: options?.occurredAt });
+}
+
+/**
+ * Window (seconds) within which an existing record is considered the same action as a
+ * replay. Covers a live request that reached the server but timed out on the station
+ * and was then queued with the station's time instead of the server's.
+ */
+const REPLAY_MATCH_TOLERANCE_SECONDS = 120;
+
+/**
+ * Replay idempotency for offline NFC checkouts: returns the item's open checkout when it
+ * is held by this card and started at `occurredAt` (within the tolerance), i.e. an
+ * earlier delivery of the same queued action already succeeded. Only an *open* checkout
+ * can match, so a later genuine checkout after a return is never mistaken for a replay.
+ */
+export async function findReplayedNfcCheckout(
+  equipmentId: number,
+  nfcValue: string,
+  occurredAt: string
+): Promise<Checkout | undefined> {
+  const occ = normalizeOccurredAt(occurredAt);
+  const val = nfcValue.trim();
+  if (!occ || !val) return undefined;
+  await ensureSchema();
+  const { rows } = await sql<Checkout>`
+    SELECT * FROM checkouts
+    WHERE equipment_id = ${equipmentId}
+      AND returned_at IS NULL
+      AND (LOWER(nfc_value) = LOWER(${val}) OR LOWER(nfc_id) = LOWER(${val}))
+      AND ABS(julianday(checked_out_at) - julianday(${occ})) * 86400 <= ${REPLAY_MATCH_TOLERANCE_SECONDS}
+    ORDER BY id DESC
+    LIMIT 1
+  `;
+  return rows[0];
+}
+
+/**
+ * Replay idempotency for offline NFC returns: returns a checkout of this item by this
+ * card that was already closed at exactly `occurredAt` (returnCheckout clamps a return
+ * time that precedes the checkout time to the checkout time, so that case matches too).
+ * When the item has no open checkout at all, a return by this card within the tolerance
+ * also matches (the replay would be a no-op anyway).
+ */
+export async function findReplayedNfcReturn(
+  equipmentId: number,
+  nfcValue: string,
+  occurredAt: string
+): Promise<Checkout | undefined> {
+  const occ = normalizeOccurredAt(occurredAt);
+  const val = nfcValue.trim();
+  if (!occ || !val) return undefined;
+  await ensureSchema();
+  const { rows } = await sql<Checkout>`
+    SELECT * FROM checkouts c
+    WHERE c.equipment_id = ${equipmentId}
+      AND c.returned_at IS NOT NULL
+      AND (LOWER(c.nfc_value) = LOWER(${val}) OR LOWER(c.nfc_id) = LOWER(${val}))
+      AND (
+        julianday(c.returned_at) = julianday(CASE
+          WHEN julianday(${occ}) < julianday(c.checked_out_at) THEN c.checked_out_at
+          ELSE ${occ}
+        END)
+        OR (
+          NOT EXISTS (
+            SELECT 1 FROM checkouts o WHERE o.equipment_id = ${equipmentId} AND o.returned_at IS NULL
+          )
+          AND ABS(julianday(c.returned_at) - julianday(${occ})) * 86400 <= ${REPLAY_MATCH_TOLERANCE_SECONDS}
+        )
+      )
+    ORDER BY c.id DESC
+    LIMIT 1
+  `;
+  return rows[0];
+}
+
+/** Throws if a queued NFC action's recorded member no longer owns the card. */
+export function assertCardMember(card: NFCCard, expectedMemberName?: string | null): void {
+  if (!expectedMemberName) return;
+  if (card.member_name.trim().toLowerCase() !== expectedMemberName.trim().toLowerCase()) {
+    throw new Error(
+      `This NFC card now belongs to ${card.member_name}, not ${expectedMemberName}. The queued action was not applied.`
+    );
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -1404,10 +1839,91 @@ export async function getAllTags(): Promise<Tag[]> {
   return rows;
 }
 
-export async function createTag(name: string): Promise<Tag> {
+export const TAG_NAME_MAX_LENGTH = 50;
+
+/**
+ * Canonical tag name: Unicode-normalised, trimmed, internal whitespace collapsed to one space.
+ * Throws InvalidTagNameError if the result is empty or longer than TAG_NAME_MAX_LENGTH.
+ */
+export function normalizeTagName(name: unknown): string {
+  const clean = typeof name === "string" ? name.normalize("NFC").replace(/\s+/g, " ").trim() : "";
+  if (!clean) throw new InvalidTagNameError("Tag name cannot be empty.");
+  if (clean.length > TAG_NAME_MAX_LENGTH) {
+    throw new InvalidTagNameError(`Tag name cannot exceed ${TAG_NAME_MAX_LENGTH} characters.`);
+  }
+  return clean;
+}
+
+/** D1 allows at most 100 bound parameters per statement. */
+const MAX_IN_PARAMS = 90;
+
+function chunk<T>(items: T[], size: number): T[][] {
+  const out: T[][] = [];
+  for (let i = 0; i < items.length; i += size) out.push(items.slice(i, i + size));
+  return out;
+}
+
+function tagKey(name: string): string {
+  return name.normalize("NFC").replace(/\s+/g, " ").trim().toLowerCase();
+}
+
+/**
+ * All tags keyed by normalised lower-case name (lowest id wins). The tag list is small, and
+ * matching in JS avoids SQLite's ASCII-only LOWER() for non-ASCII names.
+ */
+async function loadTagIndex(): Promise<Map<string, Tag>> {
+  const { rows } = await sql<Tag>`SELECT id, name FROM tags ORDER BY id ASC`;
+  const index = new Map<string, Tag>();
+  for (const t of rows) {
+    if (!t.name) continue;
+    const key = tagKey(t.name);
+    if (!index.has(key)) index.set(key, t);
+  }
+  return index;
+}
+
+/**
+ * Resolves tag names to tag rows, reusing an existing tag on a case-insensitive match and
+ * creating the rest. Blank names are skipped; duplicates (case-insensitive) collapse to one.
+ * Returns tags in first-seen order. Throws InvalidTagNameError for an over-long name.
+ */
+export async function findOrCreateTags(names: readonly unknown[]): Promise<Tag[]> {
+  const wanted: string[] = [];
+  const seen = new Set<string>();
+  for (const raw of names ?? []) {
+    if (typeof raw !== "string" || !raw.trim()) continue;
+    const clean = normalizeTagName(raw);
+    const key = tagKey(clean);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    wanted.push(clean);
+  }
+  if (wanted.length === 0) return [];
+
   await ensureSchema();
-  const { rows } = await sql<Tag>`INSERT INTO tags (name) VALUES (${name}) RETURNING *`;
-  return rows[0];
+  let found = await loadTagIndex();
+  const missing = wanted.filter((n) => !found.has(tagKey(n)));
+  if (missing.length > 0) {
+    // ON CONFLICT DO NOTHING: a concurrent request (or a case variant, via the unique
+    // LOWER(name) index from migration 0006) may have created the tag meanwhile.
+    await batch(missing.map((n) => stmt`INSERT INTO tags (name) VALUES (${n}) ON CONFLICT DO NOTHING`));
+    found = await loadTagIndex();
+  }
+  return wanted.map((n) => {
+    const t = found.get(tagKey(n));
+    if (!t) throw new Error(`Could not create tag "${n}".`);
+    return t;
+  });
+}
+
+/**
+ * Creates a tag, or returns the existing tag whose name matches case-insensitively (after
+ * trimming and collapsing whitespace). Throws InvalidTagNameError for an empty/over-long name.
+ */
+export async function createTag(name: string): Promise<Tag> {
+  const clean = normalizeTagName(name);
+  const [tag] = await findOrCreateTags([clean]);
+  return tag;
 }
 
 export async function deleteTag(id: number): Promise<{ success: boolean; error?: string }> {
@@ -1430,152 +1946,158 @@ export async function deleteTag(id: number): Promise<{ success: boolean; error?:
 // ---------------------------------------------------------------------------
 
 function computeEventStatus(startTime: string, endTime: string): EventStatus {
-  const now = new Date();
-  const start = new Date(startTime);
-  const end = new Date(endTime);
+  const now = Date.now();
+  const start = parseDbDate(startTime)?.getTime() ?? new Date(startTime).getTime();
+  const end = parseDbDate(endTime)?.getTime() ?? new Date(endTime).getTime();
 
   if (now < start) return "Upcoming";
   if (now >= start && now <= end) return "Ongoing";
   return "Completed";
 }
 
-export async function getAllEvents(): Promise<AppEvent[]> {
-  await ensureSchema();
-  const { rows: eventRows } = await sql<Omit<AppEvent, "oics" | "section_ics" | "section_equipment" | "section_deployments" | "section_rehearsals" | "status" | "ics" | "equipment">>`
-    SELECT id, name, description, start_time, end_time, location, created_by, has_rehearsal, rehearsal_start_time, rehearsal_end_time, created_at, updated_at
-    FROM events
-    ORDER BY start_time DESC
-  `;
+type EventBaseRow = Omit<
+  AppEvent,
+  "oics" | "section_ics" | "section_equipment" | "section_deployments" | "section_rehearsals" | "status" | "has_rehearsal"
+> & { has_rehearsal: boolean | number | null };
 
-  const events: AppEvent[] = [];
+const EVENT_BASE_COLUMNS =
+  "ev.id, ev.name, ev.description, ev.start_time, ev.end_time, ev.location, ev.created_by, ev.has_rehearsal, ev.rehearsal_start_time, ev.rehearsal_end_time, ev.created_at, ev.updated_at";
 
-  for (const ev of eventRows) {
-    const full = await getEventById(ev.id);
-    if (full) events.push(full);
+// Member columns embedded in event data. Event data is served to every logged-in user, so
+// email, google_id and the RSVP response_token are deliberately NOT selected.
+const EVENT_MEMBER_COLUMNS = "u.id, u.name, u.username, u.image, u.role, u.provider, u.created_at";
+
+/**
+ * Loads events and all their related rows with a fixed number of queries (6, regardless of how
+ * many events) and assembles them. `eventId` restricts everything to one event; otherwise all
+ * events are loaded. Shared by getEventById and getAllEvents so both produce identical output.
+ */
+async function loadAssembledEvents(eventId?: number): Promise<AppEvent[]> {
+  const one = eventId !== undefined;
+  const where = (col: string) => (one ? `WHERE ${col} = ?` : "");
+  const params = one ? [eventId] : [];
+
+  const { rows: eventRows } = await query<EventBaseRow>(
+    `SELECT ${EVENT_BASE_COLUMNS} FROM events ev ${where("ev.id")} ORDER BY ev.start_time DESC, ev.id DESC`,
+    params
+  );
+  if (eventRows.length === 0) return [];
+
+  const { rows: oicRows } = await query<EventMember & { event_id: number }>(
+    `SELECT eo.event_id, ${EVENT_MEMBER_COLUMNS}
+     FROM event_oics eo JOIN users u ON u.id = eo.user_id
+     ${where("eo.event_id")}
+     ORDER BY u.name ASC, u.id ASC`,
+    params
+  );
+
+  const { rows: icRows } = await query<EventMember & { event_id: number; section: EventSection }>(
+    `SELECT ei.event_id, ${EVENT_MEMBER_COLUMNS}, ei.section
+     FROM event_ics ei JOIN users u ON u.id = ei.user_id
+     ${where("ei.event_id")}
+     ORDER BY u.name ASC, u.id ASC`,
+    params
+  );
+
+  const { rows: eqRows } = await query<
+    EquipmentRawRow & { event_id: number; section: EventSection; used_for_rehearsal: boolean | number }
+  >(
+    `SELECT
+       ee.event_id,
+       e.id, e.name, e.description, e.serial_number,
+       e.condition, e.location, e.status, e.created_at, e.updated_at,
+       ee.section, ee.used_for_rehearsal,
+       (SELECT GROUP_CONCAT(t.name) FROM equipment_tags et JOIN tags t ON t.id = et.tag_id WHERE et.equipment_id = e.id) AS tags
+     FROM event_equipment ee JOIN equipment e ON e.id = ee.equipment_id
+     ${where("ee.event_id")}
+     ORDER BY e.name ASC, e.id ASC, ee.section ASC`,
+    params
+  );
+
+  const { rows: depRows } = await query<
+    EventMember & {
+      event_id: number;
+      section: EventSection;
+      attending_rehearsal: boolean | number;
+      response_status?: DeploymentResponseStatus;
+      responded_at?: string | null;
+    }
+  >(
+    `SELECT ed.event_id, ${EVENT_MEMBER_COLUMNS},
+       ed.section, ed.attending_rehearsal, ed.response_status, ed.responded_at
+     FROM event_deployments ed JOIN users u ON u.id = ed.user_id
+     ${where("ed.event_id")}
+     ORDER BY u.name ASC, u.id ASC`,
+    params
+  );
+
+  const { rows: rehRows } = await query<{ event_id: number; section: EventSection; participating: boolean | number }>(
+    `SELECT er.event_id, er.section, er.participating FROM event_section_rehearsals er ${where("er.event_id")}`,
+    params
+  );
+
+  const byId = new Map<number, AppEvent>();
+  const events: AppEvent[] = eventRows.map((ev) => {
+    const assembled: AppEvent = {
+      ...ev,
+      has_rehearsal: Boolean(ev.has_rehearsal),
+      oics: [],
+      section_ics: { photo: [], video: [], av: [] },
+      section_equipment: { photo: [], video: [], av: [] },
+      section_deployments: { photo: [], video: [], av: [] },
+      section_rehearsals: {
+        photo: { participating: false },
+        video: { participating: false },
+        av: { participating: false },
+      },
+      status: computeEventStatus(ev.start_time, ev.end_time),
+    };
+    byId.set(ev.id, assembled);
+    return assembled;
+  });
+
+  for (const { event_id, ...member } of oicRows) {
+    byId.get(event_id)?.oics.push(member);
+  }
+  for (const { event_id, ...ic } of icRows) {
+    const list = byId.get(event_id)?.section_ics[ic.section];
+    if (list) list.push(ic as EventMember & { section: EventSection });
+  }
+  for (const { event_id, ...item } of eqRows) {
+    const list = byId.get(event_id)?.section_equipment[item.section];
+    if (!list) continue;
+    const formatted = formatEquipmentRow(item) as SectionEquipmentItem;
+    formatted.used_for_rehearsal = Boolean(item.used_for_rehearsal);
+    list.push(formatted);
+  }
+  for (const { event_id, ...dep } of depRows) {
+    const list = byId.get(event_id)?.section_deployments[dep.section];
+    if (!list) continue;
+    list.push({
+      ...dep,
+      attending_rehearsal: Boolean(dep.attending_rehearsal),
+      response_status: dep.response_status || "pending",
+      responded_at: dep.responded_at || null,
+    } as SectionDeploymentItem);
+  }
+  for (const reh of rehRows) {
+    const cfg = byId.get(reh.event_id)?.section_rehearsals[reh.section];
+    if (cfg) cfg.participating = Boolean(reh.participating);
   }
 
   return events;
 }
 
+export async function getAllEvents(): Promise<AppEvent[]> {
+  await ensureSchema();
+  return loadAssembledEvents();
+}
+
 export async function getEventById(id: number): Promise<AppEvent | undefined> {
   if (!Number.isInteger(id) || id <= 0) return undefined;
   await ensureSchema();
-  const { rows } = await sql<Omit<AppEvent, "oics" | "section_ics" | "section_equipment" | "section_deployments" | "section_rehearsals" | "status" | "ics" | "equipment">>`
-    SELECT id, name, description, start_time, end_time, location, created_by, has_rehearsal, rehearsal_start_time, rehearsal_end_time, created_at, updated_at
-    FROM events
-    WHERE id = ${id}
-  `;
-
-  if (rows.length === 0) return undefined;
-  const ev = rows[0];
-
-  // Fetch OICs
-  const { rows: oics } = await sql<User>`
-    SELECT u.id, u.name, u.email, u.username, u.google_id, u.image, u.role, u.provider, u.created_at
-    FROM users u
-    JOIN event_oics eo ON eo.user_id = u.id
-    WHERE eo.event_id = ${id}
-    ORDER BY u.name ASC
-  `;
-
-  // Fetch Section ICs
-  const section_ics: SectionICMap = { photo: [], video: [], av: [] };
-  const { rows: icRows } = await sql<User & { section: EventSection }>`
-    SELECT u.id, u.name, u.email, u.username, u.google_id, u.image, u.role, u.provider, u.created_at, ei.section
-    FROM users u
-    JOIN event_ics ei ON ei.user_id = u.id
-    WHERE ei.event_id = ${id}
-    ORDER BY u.name ASC
-  `;
-  for (const ic of icRows) {
-    if (section_ics[ic.section]) {
-      section_ics[ic.section].push(ic);
-    }
-  }
-
-  // Fetch Section Equipment
-  const section_equipment: SectionEquipmentMap = { photo: [], video: [], av: [] };
-  const { rows: eqRows } = await sql<EquipmentRawRow & { section: EventSection; used_for_rehearsal: boolean }>`
-    SELECT 
-      e.id, e.name, e.description, e.serial_number,
-      e.condition, e.location, e.status, e.created_at, e.updated_at,
-      ee.section, ee.used_for_rehearsal,
-      COALESCE(
-        ARRAY_AGG(DISTINCT t.name) FILTER (WHERE t.name IS NOT NULL),
-        '{}'
-      ) AS tags
-    FROM equipment e
-    JOIN event_equipment ee ON ee.equipment_id = e.id
-    LEFT JOIN equipment_tags et ON et.equipment_id = e.id
-    LEFT JOIN tags t ON t.id = et.tag_id
-    WHERE ee.event_id = ${id}
-    GROUP BY e.id, ee.section, ee.used_for_rehearsal
-    ORDER BY e.name ASC
-  `;
-  for (const item of eqRows) {
-    const formatted = formatEquipmentRow(item) as SectionEquipmentItem;
-    formatted.used_for_rehearsal = Boolean(item.used_for_rehearsal);
-    if (section_equipment[item.section]) {
-      section_equipment[item.section].push(formatted);
-    }
-  }
-
-  // Fetch Section Deployments
-  const section_deployments: SectionDeploymentMap = { photo: [], video: [], av: [] };
-  const { rows: depRows } = await sql<
-    User & {
-      section: EventSection;
-      attending_rehearsal: boolean;
-      response_status?: DeploymentResponseStatus;
-      response_token?: string;
-      responded_at?: string | null;
-    }
-  >`
-    SELECT 
-      u.id, u.name, u.email, u.username, u.google_id, u.image, u.role, u.provider, u.created_at, 
-      ed.section, ed.attending_rehearsal, ed.response_status, ed.response_token, ed.responded_at
-    FROM users u
-    JOIN event_deployments ed ON ed.user_id = u.id
-    WHERE ed.event_id = ${id}
-    ORDER BY u.name ASC
-  `;
-  for (const dep of depRows) {
-    const item: SectionDeploymentItem = {
-      ...dep,
-      attending_rehearsal: Boolean(dep.attending_rehearsal),
-      response_status: dep.response_status || "pending",
-      response_token: dep.response_token || undefined,
-      responded_at: dep.responded_at || null,
-    };
-    if (section_deployments[dep.section]) {
-      section_deployments[dep.section].push(item);
-    }
-  }
-
-  // Fetch Section Rehearsals config
-  const section_rehearsals: SectionRehearsalMap = {
-    photo: { participating: false },
-    video: { participating: false },
-    av: { participating: false },
-  };
-  const { rows: rehRows } = await sql<{ section: EventSection; participating: boolean }>`
-    SELECT section, participating FROM event_section_rehearsals WHERE event_id = ${id}
-  `;
-  for (const reh of rehRows) {
-    if (section_rehearsals[reh.section]) {
-      section_rehearsals[reh.section].participating = Boolean(reh.participating);
-    }
-  }
-
-  return {
-    ...ev,
-    oics,
-    section_ics,
-    section_equipment,
-    section_deployments,
-    section_rehearsals,
-    status: computeEventStatus(ev.start_time, ev.end_time),
-  };
+  const [event] = await loadAssembledEvents(id);
+  return event;
 }
 
 export async function createEvent(params: {
@@ -1594,18 +2116,21 @@ export async function createEvent(params: {
   av_ic_ids?: number[];
 }): Promise<AppEvent> {
   await ensureSchema();
-  const { rows } = await sql<AppEvent>`
-    INSERT INTO events (name, description, start_time, end_time, location, created_by, has_rehearsal, rehearsal_start_time, rehearsal_end_time)
-    VALUES (${params.name}, ${params.description ?? null}, ${params.start_time}, ${params.end_time}, ${params.location}, ${params.created_by}, ${params.has_rehearsal ?? false}, ${params.rehearsal_start_time ?? null}, ${params.rehearsal_end_time ?? null})
-    RETURNING *
-  `;
+  // The event and its OIC / IC / rehearsal rows are created atomically. Inside the batch the new
+  // event's id is the table's MAX(id) (one transaction; AUTOINCREMENT ids only grow).
+  const newEventId = "(SELECT MAX(id) FROM events)";
+  const statements: BoundStatement[] = [
+    stmt`
+      INSERT INTO events (name, description, start_time, end_time, location, created_by, has_rehearsal, rehearsal_start_time, rehearsal_end_time)
+      VALUES (${params.name}, ${params.description ?? null}, ${params.start_time}, ${params.end_time}, ${params.location}, ${params.created_by}, ${params.has_rehearsal ?? false}, ${params.rehearsal_start_time ?? null}, ${params.rehearsal_end_time ?? null})
+      RETURNING id
+    `,
+  ];
 
-  const newId = rows[0].id;
-
-  if (params.oic_user_ids) {
-    for (const uid of params.oic_user_ids) {
-      await sql`INSERT INTO event_oics (event_id, user_id) VALUES (${newId}, ${uid}) ON CONFLICT DO NOTHING`;
-    }
+  for (const uid of params.oic_user_ids ?? []) {
+    statements.push(
+      rawStmt(`INSERT INTO event_oics (event_id, user_id) VALUES (${newEventId}, ?) ON CONFLICT DO NOTHING`, [uid])
+    );
   }
 
   const sectionMap: Record<EventSection, number[] | undefined> = {
@@ -1615,14 +2140,21 @@ export async function createEvent(params: {
   };
 
   for (const sec of ["photo", "video", "av"] as EventSection[]) {
-    const ids = sectionMap[sec];
-    if (ids) {
-      for (const uid of ids) {
-        await sql`INSERT INTO event_ics (event_id, user_id, section) VALUES (${newId}, ${uid}, ${sec}) ON CONFLICT DO NOTHING`;
-      }
+    for (const uid of sectionMap[sec] ?? []) {
+      statements.push(
+        rawStmt(`INSERT INTO event_ics (event_id, user_id, section) VALUES (${newEventId}, ?, ?) ON CONFLICT DO NOTHING`, [uid, sec])
+      );
     }
-    await sql`INSERT INTO event_section_rehearsals (event_id, section, participating) VALUES (${newId}, ${sec}, FALSE) ON CONFLICT DO NOTHING`;
+    statements.push(
+      rawStmt(
+        `INSERT INTO event_section_rehearsals (event_id, section, participating) VALUES (${newEventId}, ?, FALSE) ON CONFLICT DO NOTHING`,
+        [sec]
+      )
+    );
   }
+
+  const results = await batch<{ id: number }>(statements);
+  const newId = results[0].rows[0].id;
 
   return (await getEventById(newId))!;
 }
@@ -1650,22 +2182,26 @@ export async function updateEvent(
 
   const { oic_user_ids, photo_ic_ids, video_ic_ids, av_ic_ids, ...scalars } = params;
 
+  // All changes (event fields, OIC list, section IC lists) are applied atomically, so a failure
+  // can't leave the event with its OICs / ICs wiped but not re-inserted.
+  const statements: BoundStatement[] = [];
+
   if (Object.keys(scalars).length > 0) {
-    if (scalars.name !== undefined) await sql`UPDATE events SET name = ${scalars.name} WHERE id = ${id}`;
-    if (scalars.description !== undefined) await sql`UPDATE events SET description = ${scalars.description} WHERE id = ${id}`;
-    if (scalars.start_time !== undefined) await sql`UPDATE events SET start_time = ${scalars.start_time} WHERE id = ${id}`;
-    if (scalars.end_time !== undefined) await sql`UPDATE events SET end_time = ${scalars.end_time} WHERE id = ${id}`;
-    if (scalars.location !== undefined) await sql`UPDATE events SET location = ${scalars.location} WHERE id = ${id}`;
-    if (scalars.has_rehearsal !== undefined) await sql`UPDATE events SET has_rehearsal = ${scalars.has_rehearsal} WHERE id = ${id}`;
-    if (scalars.rehearsal_start_time !== undefined) await sql`UPDATE events SET rehearsal_start_time = ${scalars.rehearsal_start_time} WHERE id = ${id}`;
-    if (scalars.rehearsal_end_time !== undefined) await sql`UPDATE events SET rehearsal_end_time = ${scalars.rehearsal_end_time} WHERE id = ${id}`;
-    await sql`UPDATE events SET updated_at = CURRENT_TIMESTAMP WHERE id = ${id}`;
+    if (scalars.name !== undefined) statements.push(stmt`UPDATE events SET name = ${scalars.name} WHERE id = ${id}`);
+    if (scalars.description !== undefined) statements.push(stmt`UPDATE events SET description = ${scalars.description} WHERE id = ${id}`);
+    if (scalars.start_time !== undefined) statements.push(stmt`UPDATE events SET start_time = ${scalars.start_time} WHERE id = ${id}`);
+    if (scalars.end_time !== undefined) statements.push(stmt`UPDATE events SET end_time = ${scalars.end_time} WHERE id = ${id}`);
+    if (scalars.location !== undefined) statements.push(stmt`UPDATE events SET location = ${scalars.location} WHERE id = ${id}`);
+    if (scalars.has_rehearsal !== undefined) statements.push(stmt`UPDATE events SET has_rehearsal = ${scalars.has_rehearsal} WHERE id = ${id}`);
+    if (scalars.rehearsal_start_time !== undefined) statements.push(stmt`UPDATE events SET rehearsal_start_time = ${scalars.rehearsal_start_time} WHERE id = ${id}`);
+    if (scalars.rehearsal_end_time !== undefined) statements.push(stmt`UPDATE events SET rehearsal_end_time = ${scalars.rehearsal_end_time} WHERE id = ${id}`);
+    statements.push(stmt`UPDATE events SET updated_at = CURRENT_TIMESTAMP WHERE id = ${id}`);
   }
 
   if (oic_user_ids !== undefined) {
-    await sql`DELETE FROM event_oics WHERE event_id = ${id}`;
+    statements.push(stmt`DELETE FROM event_oics WHERE event_id = ${id}`);
     for (const uid of oic_user_ids) {
-      await sql`INSERT INTO event_oics (event_id, user_id) VALUES (${id}, ${uid}) ON CONFLICT DO NOTHING`;
+      statements.push(stmt`INSERT INTO event_oics (event_id, user_id) VALUES (${id}, ${uid}) ON CONFLICT DO NOTHING`);
     }
   }
 
@@ -1678,12 +2214,14 @@ export async function updateEvent(
   for (const sec of ["photo", "video", "av"] as EventSection[]) {
     const ids = sectionMap[sec];
     if (ids !== undefined) {
-      await sql`DELETE FROM event_ics WHERE event_id = ${id} AND section = ${sec}`;
+      statements.push(stmt`DELETE FROM event_ics WHERE event_id = ${id} AND section = ${sec}`);
       for (const uid of ids) {
-        await sql`INSERT INTO event_ics (event_id, user_id, section) VALUES (${id}, ${uid}, ${sec}) ON CONFLICT DO NOTHING`;
+        statements.push(stmt`INSERT INTO event_ics (event_id, user_id, section) VALUES (${id}, ${uid}, ${sec}) ON CONFLICT DO NOTHING`);
       }
     }
   }
+
+  await batch(statements);
 
   return getEventById(id);
 }
@@ -1708,11 +2246,14 @@ export async function attachEquipmentToEventSection(
   addedBy: number | null = null
 ): Promise<{ success: boolean; error?: string }> {
   await ensureSchema();
-  await sql`DELETE FROM event_equipment WHERE event_id = ${eventId} AND equipment_id = ${equipmentId} AND section = ${section}`;
-  await sql`
-    INSERT INTO event_equipment (event_id, equipment_id, section, used_for_rehearsal, added_by)
-    VALUES (${eventId}, ${equipmentId}, ${section}, ${usedForRehearsal}, ${addedBy})
-  `;
+  // Replace atomically: a failed insert must not leave the item detached.
+  await batch([
+    stmt`DELETE FROM event_equipment WHERE event_id = ${eventId} AND equipment_id = ${equipmentId} AND section = ${section}`,
+    stmt`
+      INSERT INTO event_equipment (event_id, equipment_id, section, used_for_rehearsal, added_by)
+      VALUES (${eventId}, ${equipmentId}, ${section}, ${usedForRehearsal}, ${addedBy})
+    `,
+  ]);
   return { success: true };
 }
 
@@ -1735,11 +2276,14 @@ export async function addDeploymentToEventSection(
 ): Promise<{ success: boolean; token: string; error?: string }> {
   await ensureSchema();
   const token = crypto.randomUUID();
-  await sql`DELETE FROM event_deployments WHERE event_id = ${eventId} AND user_id = ${userId} AND section = ${section}`;
-  await sql`
-    INSERT INTO event_deployments (event_id, user_id, section, attending_rehearsal, added_by, response_status, response_token)
-    VALUES (${eventId}, ${userId}, ${section}, ${attendingRehearsal}, ${addedBy}, 'pending', ${token})
-  `;
+  // Replace atomically: a failed insert must not silently remove the member's deployment.
+  await batch([
+    stmt`DELETE FROM event_deployments WHERE event_id = ${eventId} AND user_id = ${userId} AND section = ${section}`,
+    stmt`
+      INSERT INTO event_deployments (event_id, user_id, section, attending_rehearsal, added_by, response_status, response_token)
+      VALUES (${eventId}, ${userId}, ${section}, ${attendingRehearsal}, ${addedBy}, 'pending', ${token})
+    `,
+  ]);
   return { success: true, token };
 }
 
@@ -1791,14 +2335,24 @@ export async function updateDeploymentRSVP(
   status: "confirmed" | "declined"
 ): Promise<{ success: boolean; error?: string }> {
   await ensureSchema();
+  // Invitation links stop working once the event has ended.
   const { rowCount } = await sql`
     UPDATE event_deployments
-    SET 
+    SET
       response_status = ${status},
       responded_at = CURRENT_TIMESTAMP
     WHERE response_token = ${token}
+      AND EXISTS (
+        SELECT 1 FROM events ev
+        WHERE ev.id = event_deployments.event_id
+          AND julianday('now') <= julianday(ev.end_time)
+      )
   `;
   if (!rowCount || rowCount === 0) {
+    const exists = await sql`SELECT 1 FROM event_deployments WHERE response_token = ${token} LIMIT 1`;
+    if (exists.rows.length > 0) {
+      return { success: false, error: "This event has ended, so RSVP is closed." };
+    }
     return { success: false, error: "Invalid or expired invitation link" };
   }
   return { success: true };
@@ -1818,7 +2372,11 @@ export async function resendDeploymentEmail(
   const depItem = event.section_deployments[section]?.find((d) => d.id === userId);
   if (!depItem) return { success: false, error: "Deployment record not found" };
 
-  let token = depItem.response_token;
+  const { rows: tokenRows } = await sql<{ response_token: string | null }>`
+    SELECT response_token FROM event_deployments
+    WHERE event_id = ${eventId} AND user_id = ${userId} AND section = ${section}
+  `;
+  let token = tokenRows[0]?.response_token;
   if (!token) {
     token = crypto.randomUUID();
     await sql`
@@ -1866,42 +2424,46 @@ export async function updateSectionRehearsalConfig(
   rehearsalUserIds?: number[]
 ): Promise<{ success: boolean }> {
   await ensureSchema();
-  await sql`
-    INSERT INTO event_section_rehearsals (event_id, section, participating)
-    VALUES (${eventId}, ${section}, ${participating})
-    ON CONFLICT (event_id, section) DO UPDATE SET participating = EXCLUDED.participating
-  `;
+  // Applied atomically so the rehearsal flags can't be left half-reset.
+  const statements: BoundStatement[] = [
+    stmt`
+      INSERT INTO event_section_rehearsals (event_id, section, participating)
+      VALUES (${eventId}, ${section}, ${participating})
+      ON CONFLICT (event_id, section) DO UPDATE SET participating = EXCLUDED.participating
+    `,
+  ];
 
   if (rehearsalEquipmentIds !== undefined) {
-    await sql`
+    statements.push(stmt`
       UPDATE event_equipment
       SET used_for_rehearsal = FALSE
       WHERE event_id = ${eventId} AND section = ${section}
-    `;
+    `);
     for (const eqId of rehearsalEquipmentIds) {
-      await sql`
+      statements.push(stmt`
         UPDATE event_equipment
         SET used_for_rehearsal = TRUE
         WHERE event_id = ${eventId} AND equipment_id = ${eqId} AND section = ${section}
-      `;
+      `);
     }
   }
 
   if (rehearsalUserIds !== undefined) {
-    await sql`
+    statements.push(stmt`
       UPDATE event_deployments
       SET attending_rehearsal = FALSE
       WHERE event_id = ${eventId} AND section = ${section}
-    `;
+    `);
     for (const uId of rehearsalUserIds) {
-      await sql`
+      statements.push(stmt`
         UPDATE event_deployments
         SET attending_rehearsal = TRUE
         WHERE event_id = ${eventId} AND user_id = ${uId} AND section = ${section}
-      `;
+      `);
     }
   }
 
+  await batch(statements);
   return { success: true };
 }
 
@@ -2060,6 +2622,7 @@ export async function searchSOPDocuments(rawQuery: string): Promise<SOPDocument[
   if (!query) {
     return getAllSOPDocuments();
   }
+  // Backslash-escape LIKE wildcards; the ESCAPE '\' clauses below make SQLite honour it.
   const escaped = query.replace(/[%_\\]/g, "\\$&");
   const pattern = `%${escaped}%`;
   const { rows } = await sql<SOPDocument>`
@@ -2077,7 +2640,9 @@ export async function searchSOPDocuments(rawQuery: string): Promise<SOPDocument[
       s.updated_at
     FROM sop_documents s
     LEFT JOIN users u ON u.id = s.uploaded_by
-    WHERE s.title LIKE ${pattern} OR s.content LIKE ${pattern} OR s.category LIKE ${pattern}
+    WHERE s.title LIKE ${pattern} ESCAPE '\\'
+       OR s.content LIKE ${pattern} ESCAPE '\\'
+       OR s.category LIKE ${pattern} ESCAPE '\\'
     ORDER BY s.updated_at DESC
   `;
   return rows;
@@ -2087,39 +2652,81 @@ export async function searchSOPDocuments(rawQuery: string): Promise<SOPDocument[
 // Automated Overdue & Due-Soon Return Reminders
 // ---------------------------------------------------------------------------
 
+/**
+ * Kept for backwards compatibility. checkout_reminders is created by the migrations (D1) and by
+ * SCHEMA_SQL (better-sqlite3), so this no longer issues any DDL.
+ */
 export async function ensureRemindersTable(): Promise<void> {
   await ensureSchema();
-  try {
-    await sql`
-      CREATE TABLE IF NOT EXISTS checkout_reminders (
-        id            INTEGER PRIMARY KEY AUTOINCREMENT,
-        checkout_id   INTEGER NOT NULL REFERENCES checkouts(id) ON DELETE CASCADE,
-        reminder_type TEXT    NOT NULL CHECK(reminder_type IN ('due_soon', 'overdue')),
-        sent_to_email TEXT    NOT NULL,
-        sent_at       TEXT    NOT NULL DEFAULT (datetime('now'))
-      );
-    `;
-    await sql`
-      CREATE INDEX IF NOT EXISTS idx_reminders_checkout ON checkout_reminders(checkout_id, reminder_type);
-    `;
-  } catch {
-    // Table already exists
-  }
 }
 
+let warnedMissingWindowKey = false;
+
+function isMissingWindowKeyColumn(err: unknown): boolean {
+  return err instanceof Error && /window_key/i.test(err.message);
+}
+
+/**
+ * Records a reminder. `windowKey` identifies the reminder window; (checkout, type, window) is
+ * UNIQUE (migration 0006), so recording the same window twice throws a UNIQUE error. Prefer
+ * claimCheckoutReminder for the send path.
+ */
 export async function recordCheckoutReminder(
   checkoutId: number,
   reminderType: ReminderType,
-  sentToEmail: string
+  sentToEmail: string,
+  windowKey: string | null = null
 ): Promise<CheckoutReminder> {
   await ensureRemindersTable();
   const cleanEmail = sentToEmail.trim().toLowerCase();
   const { rows } = await sql<CheckoutReminder>`
-    INSERT INTO checkout_reminders (checkout_id, reminder_type, sent_to_email)
-    VALUES (${checkoutId}, ${reminderType}, ${cleanEmail})
+    INSERT INTO checkout_reminders (checkout_id, reminder_type, sent_to_email, window_key)
+    VALUES (${checkoutId}, ${reminderType}, ${cleanEmail}, ${windowKey})
     RETURNING *
   `;
   return rows[0];
+}
+
+/**
+ * Race-safe reminder claim: inserts the reminder record for (checkout, type, window) BEFORE the
+ * email is sent. Returns the new record, or null when another run already claimed/sent this
+ * window. On send failure the caller releases the claim with releaseCheckoutReminder.
+ */
+export async function claimCheckoutReminder(
+  checkoutId: number,
+  reminderType: ReminderType,
+  sentToEmail: string,
+  windowKey: string
+): Promise<CheckoutReminder | null> {
+  await ensureRemindersTable();
+  const cleanEmail = sentToEmail.trim().toLowerCase();
+  try {
+    const { rows } = await sql<CheckoutReminder>`
+      INSERT INTO checkout_reminders (checkout_id, reminder_type, sent_to_email, window_key)
+      VALUES (${checkoutId}, ${reminderType}, ${cleanEmail}, ${windowKey})
+      ON CONFLICT DO NOTHING
+      RETURNING *
+    `;
+    return rows[0] ?? null;
+  } catch (err) {
+    if (!isMissingWindowKeyColumn(err)) throw err;
+    // Migration 0006 not applied: fall back to a plain (not race-safe) insert.
+    if (!warnedMissingWindowKey) {
+      warnedMissingWindowKey = true;
+      console.error("[DB] checkout_reminders.window_key is missing; apply migration 0006_data_layer_fixes.sql.");
+    }
+    const { rows } = await sql<CheckoutReminder>`
+      INSERT INTO checkout_reminders (checkout_id, reminder_type, sent_to_email)
+      VALUES (${checkoutId}, ${reminderType}, ${cleanEmail})
+      RETURNING *
+    `;
+    return rows[0] ?? null;
+  }
+}
+
+/** Removes a reminder claim whose email could not be sent, so a later run can retry. */
+export async function releaseCheckoutReminder(reminderId: number): Promise<void> {
+  await sql`DELETE FROM checkout_reminders WHERE id = ${reminderId}`;
 }
 
 export async function getCheckoutReminders(checkoutId: number): Promise<CheckoutReminder[]> {
@@ -2127,7 +2734,7 @@ export async function getCheckoutReminders(checkoutId: number): Promise<Checkout
   const { rows } = await sql<CheckoutReminder>`
     SELECT * FROM checkout_reminders
     WHERE checkout_id = ${checkoutId}
-    ORDER BY sent_at DESC
+    ORDER BY julianday(sent_at) DESC, id DESC
   `;
   return rows;
 }
@@ -2144,15 +2751,23 @@ export interface PendingReturnReminderItem {
   checked_out_by: number | null;
   checked_out_by_name: string;
   borrower_name: string;
+  /** Email of the account in checked_out_by; null when the checkout has no linked account. */
   borrower_email: string | null;
+  /** Checkout made at the NFC station (no user account; never matched by name). */
+  is_nfc_checkout: boolean;
   last_due_soon_sent: string | null;
   last_overdue_sent: string | null;
 }
 
+/**
+ * Open checkouts with a due date, one row per checkout. The recipient is resolved ONLY through
+ * checkouts.checked_out_by (the account that made the checkout). NFC-station checkouts have no
+ * user link (nfc_cards has no user column) and are never matched to accounts by name.
+ */
 export async function getPendingReturnReminders(): Promise<PendingReturnReminderItem[]> {
   await ensureRemindersTable();
-  const { rows } = await sql<PendingReturnReminderItem>`
-    SELECT 
+  const { rows } = await sql<Omit<PendingReturnReminderItem, "is_nfc_checkout"> & { is_nfc_checkout: number | boolean }>`
+    SELECT
       c.id AS checkout_id,
       c.equipment_id,
       e.name AS equipment_name,
@@ -2163,119 +2778,130 @@ export async function getPendingReturnReminders(): Promise<PendingReturnReminder
       c.notes,
       c.checked_out_by,
       c.checked_out_by_name,
-      COALESCE(u.name, u2.name, c.checked_out_by_name) AS borrower_name,
-      COALESCE(u.email, u2.email) AS borrower_email,
-      (SELECT sent_at FROM checkout_reminders WHERE checkout_id = c.id AND reminder_type = 'due_soon' ORDER BY sent_at DESC LIMIT 1) AS last_due_soon_sent,
-      (SELECT sent_at FROM checkout_reminders WHERE checkout_id = c.id AND reminder_type = 'overdue' ORDER BY sent_at DESC LIMIT 1) AS last_overdue_sent
+      COALESCE(u.name, c.checked_out_by_name) AS borrower_name,
+      u.email AS borrower_email,
+      CASE WHEN c.nfc_value IS NOT NULL OR c.nfc_id IS NOT NULL THEN 1 ELSE 0 END AS is_nfc_checkout,
+      (SELECT r.sent_at FROM checkout_reminders r WHERE r.checkout_id = c.id AND r.reminder_type = 'due_soon' ORDER BY julianday(r.sent_at) DESC LIMIT 1) AS last_due_soon_sent,
+      (SELECT r.sent_at FROM checkout_reminders r WHERE r.checkout_id = c.id AND r.reminder_type = 'overdue' ORDER BY julianday(r.sent_at) DESC LIMIT 1) AS last_overdue_sent
     FROM checkouts c
     JOIN equipment e ON e.id = c.equipment_id
     LEFT JOIN users u ON u.id = c.checked_out_by
-    LEFT JOIN users u2 ON (LOWER(u2.name) = LOWER(c.checked_out_by_name) OR LOWER(u2.username) = LOWER(c.checked_out_by_name))
     WHERE c.returned_at IS NULL AND c.expected_return_at IS NOT NULL
-    ORDER BY c.expected_return_at ASC
+    GROUP BY c.id
+    ORDER BY julianday(c.expected_return_at) ASC, c.id ASC
   `;
-  return rows;
+  return rows.map((r) => ({ ...r, is_nfc_checkout: Boolean(r.is_nfc_checkout) }));
 }
+
+const DAY_MS = 24 * 60 * 60 * 1000;
 
 export async function processReturnReminders(options?: {
   origin?: string;
   force?: boolean;
 }): Promise<ReminderProcessResult> {
-  const pending = await getPendingReturnReminders();
-  const now = new Date();
-  const nowTime = now.getTime();
+  const pendingRows = await getPendingReturnReminders();
+  // At most one reminder per checkout per run, even if the query ever returned duplicates.
+  const seen = new Set<number>();
+  const pending = pendingRows.filter((p) => (seen.has(p.checkout_id) ? false : (seen.add(p.checkout_id), true)));
+  const nowTime = Date.now();
 
   let sentCount = 0;
   let skippedCount = 0;
   let errorCount = 0;
+  let noLinkedAccountCount = 0;
   const remindersResult: ReminderProcessResult["reminders"] = [];
 
+  const skip = (item: PendingReturnReminderItem, type: ReminderType, reason: string, email = item.borrower_email || "") => {
+    skippedCount++;
+    remindersResult.push({
+      checkoutId: item.checkout_id,
+      equipmentId: item.equipment_id,
+      equipmentName: item.equipment_name,
+      recipientName: item.borrower_name,
+      recipientEmail: email,
+      type,
+      status: "skipped",
+      reason,
+    });
+  };
+
   for (const item of pending) {
-    const expectedTime = new Date(item.expected_return_at).getTime();
+    const expected = parseDueDate(item.expected_return_at);
+    const expectedTime = expected ? expected.getTime() : NaN;
     if (isNaN(expectedTime)) {
-      skippedCount++;
-      remindersResult.push({
-        checkoutId: item.checkout_id,
-        equipmentId: item.equipment_id,
-        equipmentName: item.equipment_name,
-        recipientName: item.borrower_name,
-        recipientEmail: item.borrower_email || "",
-        type: "overdue",
-        status: "skipped",
-        reason: "Invalid expected_return_at timestamp",
-      });
+      skip(item, "overdue", "Invalid expected_return_at timestamp");
       continue;
     }
 
     const diffMs = expectedTime - nowTime;
-    let reminderType: ReminderType | null = null;
+    let reminderType: ReminderType;
+    let windowKey: string;
 
     if (diffMs < 0) {
-      // Past due date => OVERDUE
+      // Past due date => OVERDUE, at most once per 24 hours (one window per overdue day).
       reminderType = "overdue";
+      windowKey = `overdue:${item.expected_return_at}:${Math.floor(-diffMs / DAY_MS)}`;
       if (!options?.force && item.last_overdue_sent) {
-        const lastSentTime = new Date(item.last_overdue_sent).getTime();
-        // Only send overdue reminder at most once every 24 hours
-        if (!isNaN(lastSentTime) && nowTime - lastSentTime < 24 * 60 * 60 * 1000) {
-          skippedCount++;
-          remindersResult.push({
-            checkoutId: item.checkout_id,
-            equipmentId: item.equipment_id,
-            equipmentName: item.equipment_name,
-            recipientName: item.borrower_name,
-            recipientEmail: item.borrower_email || "",
-            type: "overdue",
-            status: "skipped",
-            reason: "Overdue reminder already sent in last 24 hours",
-          });
+        const lastSentTime = parseDbDate(item.last_overdue_sent)?.getTime() ?? NaN;
+        if (!isNaN(lastSentTime) && nowTime - lastSentTime < DAY_MS) {
+          skip(item, "overdue", "Overdue reminder already sent in last 24 hours");
           continue;
         }
       }
-    } else if (diffMs <= 24 * 60 * 60 * 1000) {
-      // Due within the next 24 hours => DUE SOON
+    } else if (diffMs <= DAY_MS) {
+      // Due within the next 24 hours => DUE SOON (once per due date).
       reminderType = "due_soon";
+      windowKey = `due_soon:${item.expected_return_at}`;
       if (!options?.force && item.last_due_soon_sent) {
-        skippedCount++;
-        remindersResult.push({
-          checkoutId: item.checkout_id,
-          equipmentId: item.equipment_id,
-          equipmentName: item.equipment_name,
-          recipientName: item.borrower_name,
-          recipientEmail: item.borrower_email || "",
-          type: "due_soon",
-          status: "skipped",
-          reason: "Due soon reminder already dispatched",
-        });
+        skip(item, "due_soon", "Due soon reminder already dispatched");
         continue;
       }
     } else {
-      // More than 24 hours in the future => skip
-      skippedCount++;
-      remindersResult.push({
-        checkoutId: item.checkout_id,
-        equipmentId: item.equipment_id,
-        equipmentName: item.equipment_name,
-        recipientName: item.borrower_name,
-        recipientEmail: item.borrower_email || "",
-        type: "due_soon",
-        status: "skipped",
-        reason: "Due date is more than 24 hours away",
-      });
+      skip(item, "due_soon", "Due date is more than 24 hours away");
       continue;
+    }
+    if (options?.force) {
+      windowKey = `manual:${new Date(nowTime).toISOString()}`;
     }
 
     if (!item.borrower_email) {
-      skippedCount++;
+      if (item.checked_out_by === null) {
+        // Not attributed to any account (NFC station or a guest name): never guess by name.
+        noLinkedAccountCount++;
+        skip(
+          item,
+          reminderType,
+          item.is_nfc_checkout
+            ? `No email address found: NFC checkout by "${item.checked_out_by_name}" has no linked account`
+            : `No email address found: checkout by "${item.checked_out_by_name}" has no linked account`,
+          ""
+        );
+      } else {
+        skip(item, reminderType, `No email address found for borrower "${item.borrower_name}"`, "");
+      }
+      continue;
+    }
+
+    // Claim the (checkout, type, window) slot first so a concurrent run can't send it too.
+    let claim: CheckoutReminder | null;
+    try {
+      claim = await claimCheckoutReminder(item.checkout_id, reminderType, item.borrower_email, windowKey);
+    } catch (err) {
+      errorCount++;
       remindersResult.push({
         checkoutId: item.checkout_id,
         equipmentId: item.equipment_id,
         equipmentName: item.equipment_name,
         recipientName: item.borrower_name,
-        recipientEmail: "",
+        recipientEmail: item.borrower_email,
         type: reminderType,
-        status: "skipped",
-        reason: `No email address found for borrower "${item.borrower_name}"`,
+        status: "failed",
+        reason: err instanceof Error ? err.message : "Could not record reminder",
       });
+      continue;
+    }
+    if (!claim) {
+      skip(item, reminderType, "Reminder for this window was already sent by another run");
       continue;
     }
 
@@ -2295,7 +2921,6 @@ export async function processReturnReminders(options?: {
       });
 
       if (emailRes.success) {
-        await recordCheckoutReminder(item.checkout_id, reminderType, item.borrower_email);
         sentCount++;
         remindersResult.push({
           checkoutId: item.checkout_id,
@@ -2307,6 +2932,7 @@ export async function processReturnReminders(options?: {
           status: "sent",
         });
       } else {
+        await releaseCheckoutReminder(claim.id).catch(() => undefined);
         errorCount++;
         remindersResult.push({
           checkoutId: item.checkout_id,
@@ -2320,6 +2946,7 @@ export async function processReturnReminders(options?: {
         });
       }
     } catch (err: unknown) {
+      await releaseCheckoutReminder(claim.id).catch(() => undefined);
       errorCount++;
       remindersResult.push({
         checkoutId: item.checkout_id,
@@ -2339,6 +2966,7 @@ export async function processReturnReminders(options?: {
     sent: sentCount,
     skipped: skippedCount,
     errors: errorCount,
+    noLinkedAccount: noLinkedAccountCount,
     reminders: remindersResult,
   };
 }
@@ -2347,10 +2975,55 @@ export async function processReturnReminders(options?: {
 // Reservations (Feature 2)
 // ---------------------------------------------------------------------------
 
+/** Kept for backwards compatibility; the table comes from migrations / SCHEMA_SQL (no DDL here). */
 export async function ensureReservationsTable(): Promise<void> {
   await ensureSchema();
 }
 
+/** Parses a reservation timestamp (ISO, or SQLite "YYYY-MM-DD HH:MM:SS" as UTC) to ISO-8601 UTC. */
+function parseReservationTime(value: unknown, field: string): { iso: string; ms: number } {
+  if (typeof value !== "string" && !(value instanceof Date)) {
+    throw new ReservationValidationError(`${field} must be a date/time string.`);
+  }
+  const d = parseDbDate(value);
+  if (!d) {
+    throw new ReservationValidationError(`${field} is not a valid date/time.`);
+  }
+  return { iso: d.toISOString(), ms: d.getTime() };
+}
+
+/** Reservations may start at most this far in the past (clock skew between client and server). */
+export const RESERVATION_PAST_SKEW_MS = 5 * 60 * 1000;
+/** Longest allowed reservation. */
+export const RESERVATION_MAX_DURATION_MS = 30 * 24 * 60 * 60 * 1000;
+/** Max length of reservation notes / purpose. */
+export const RESERVATION_NOTES_MAX_LENGTH = 1000;
+
+const UNRESERVABLE_CONDITIONS = ["Retired", "Missing", "Broken"] as const;
+
+/** SQL predicate (alias `e`): the item can be reserved (not retired/missing/broken/unavailable). */
+const RESERVABLE_EQUIPMENT_SQL =
+  "e.condition NOT IN ('Retired', 'Missing', 'Broken') AND e.status NOT LIKE 'Unavailable%'";
+
+async function assertReservableEquipment(equipmentId: number): Promise<{ id: number; name: string; condition: Condition; status: EquipmentStatus }> {
+  const { rows } = await sql<{ id: number; name: string; condition: Condition; status: EquipmentStatus }>`
+    SELECT id, name, condition, status FROM equipment WHERE id = ${equipmentId}
+  `;
+  const eq = rows[0];
+  if (!eq) throw new ReservationValidationError("Equipment not found.");
+  if ((UNRESERVABLE_CONDITIONS as readonly string[]).includes(eq.condition)) {
+    throw new ReservationValidationError(`"${eq.name}" cannot be reserved: its condition is ${eq.condition}.`);
+  }
+  if (eq.status.startsWith("Unavailable")) {
+    throw new ReservationValidationError(`"${eq.name}" cannot be reserved: it is ${eq.status}.`);
+  }
+  return eq;
+}
+
+/**
+ * Throws ReservationValidationError when the timestamps are invalid or the equipment id is not a
+ * positive integer / does not exist.
+ */
 export async function checkReservationConflict(
   equipmentId: number,
   startTime: string,
@@ -2358,32 +3031,29 @@ export async function checkReservationConflict(
   excludeReservationId?: number
 ): Promise<ReservationConflictCheck> {
   await ensureReservationsTable();
-
-  // 1. Conflicting active reservations
-  let query;
-  if (excludeReservationId) {
-    query = sql<Reservation>`
-      SELECT r.*, e.name AS equipment_name, e.serial_number AS equipment_serial_number, e.location AS equipment_location
-      FROM reservations r
-      JOIN equipment e ON e.id = r.equipment_id
-      WHERE r.equipment_id = ${equipmentId}
-        AND r.status = 'confirmed'
-        AND r.id != ${excludeReservationId}
-        AND (r.start_time < ${endTime} AND r.end_time > ${startTime})
-      ORDER BY r.start_time ASC
-    `;
-  } else {
-    query = sql<Reservation>`
-      SELECT r.*, e.name AS equipment_name, e.serial_number AS equipment_serial_number, e.location AS equipment_location
-      FROM reservations r
-      JOIN equipment e ON e.id = r.equipment_id
-      WHERE r.equipment_id = ${equipmentId}
-        AND r.status = 'confirmed'
-        AND (r.start_time < ${endTime} AND r.end_time > ${startTime})
-      ORDER BY r.start_time ASC
-    `;
+  if (!Number.isInteger(equipmentId) || equipmentId <= 0) {
+    throw new ReservationValidationError("Invalid equipment ID.");
   }
-  const { rows: conflictingReservations } = await query;
+  startTime = parseReservationTime(startTime, "start_time").iso;
+  endTime = parseReservationTime(endTime, "end_time").iso;
+  const exists = await sql`SELECT 1 FROM equipment WHERE id = ${equipmentId}`;
+  if (exists.rows.length === 0) {
+    throw new ReservationValidationError("Equipment not found.");
+  }
+
+  // 1. Conflicting active reservations. Timestamps are compared via julianday() so ISO
+  // ("...T10:00:00.000Z") and SQLite ("... 10:00:00") formats compare correctly.
+  const { rows: conflictingReservations } = await sql<Reservation>`
+    SELECT r.*, e.name AS equipment_name, e.serial_number AS equipment_serial_number, e.location AS equipment_location
+    FROM reservations r
+    JOIN equipment e ON e.id = r.equipment_id
+    WHERE r.equipment_id = ${equipmentId}
+      AND r.status = 'confirmed'
+      AND (${excludeReservationId ?? null} IS NULL OR r.id != ${excludeReservationId ?? null})
+      AND julianday(r.start_time) < julianday(${endTime})
+      AND julianday(r.end_time) > julianday(${startTime})
+    ORDER BY julianday(r.start_time) ASC
+  `;
 
   // 2. Active checkout check (if the reservation starts in the past or now, and item is currently out)
   const activeCheckoutRes = await sql<{
@@ -2415,7 +3085,8 @@ export async function checkReservationConflict(
             SELECT id FROM reservations
             WHERE equipment_id = ${candidate.id}
               AND status = 'confirmed'
-              AND (start_time < ${endTime} AND end_time > ${startTime})
+              AND julianday(start_time) < julianday(${endTime})
+              AND julianday(end_time) > julianday(${startTime})
             LIMIT 1
           `;
           if (candConf.rows.length === 0) {
@@ -2435,6 +3106,27 @@ export async function checkReservationConflict(
   };
 }
 
+function validateReservationText(value: unknown, field: string): string | null {
+  if (value === undefined || value === null) return null;
+  if (typeof value !== "string") {
+    throw new ReservationValidationError(`${field} must be a string.`);
+  }
+  const trimmed = value.trim();
+  if (trimmed.length > RESERVATION_NOTES_MAX_LENGTH) {
+    throw new ReservationValidationError(`${field} cannot exceed ${RESERVATION_NOTES_MAX_LENGTH} characters.`);
+  }
+  return trimmed || null;
+}
+
+/**
+ * Creates a confirmed reservation.
+ *
+ * Throws ReservationValidationError (subclass of Error; map to 400) when: the equipment/user ids
+ * are invalid, the equipment doesn't exist or is Retired/Missing/Broken/Unavailable, a timestamp
+ * is invalid, start >= end, start is more than 5 minutes in the past, the duration exceeds
+ * 30 days, or notes/purpose is not a string or is longer than 1000 characters.
+ * Throws a plain Error whose message contains "already reserved" on an overlap (map to 409).
+ */
 export async function createReservation(params: {
   equipment_id: number;
   reserved_by: number;
@@ -2442,41 +3134,101 @@ export async function createReservation(params: {
   start_time: string;
   end_time: string;
   notes?: string | null;
+  /** Optional alias for notes (used when notes is empty). Same validation as notes. */
+  purpose?: string | null;
 }): Promise<Reservation> {
   await ensureReservationsTable();
-  const startMs = new Date(params.start_time).getTime();
-  const endMs = new Date(params.end_time).getTime();
-
-  if (isNaN(startMs) || isNaN(endMs) || startMs >= endMs) {
-    throw new Error("Invalid timeframe: start_time must be strictly before end_time.");
+  if (!Number.isInteger(params.equipment_id) || params.equipment_id <= 0) {
+    throw new ReservationValidationError("Invalid equipment ID.");
   }
+  if (!Number.isInteger(params.reserved_by) || params.reserved_by <= 0) {
+    throw new ReservationValidationError("Invalid user ID.");
+  }
+  const reservedByName =
+    typeof params.reserved_by_name === "string" ? params.reserved_by_name.trim().slice(0, 200) : "";
+  if (!reservedByName) {
+    throw new ReservationValidationError("reserved_by_name is required.");
+  }
+  const notes = validateReservationText(params.notes, "notes") ?? validateReservationText(params.purpose, "purpose");
 
-  const conflict = await checkReservationConflict(params.equipment_id, params.start_time, params.end_time);
-  if (conflict.hasConflict) {
-    throw new Error(
-      `Equipment already reserved between ${conflict.conflictingReservations[0].start_time} and ${conflict.conflictingReservations[0].end_time}.`
+  const start = parseReservationTime(params.start_time, "start_time");
+  const end = parseReservationTime(params.end_time, "end_time");
+  if (start.ms >= end.ms) {
+    throw new ReservationValidationError("Invalid timeframe: start_time must be strictly before end_time.");
+  }
+  if (start.ms < Date.now() - RESERVATION_PAST_SKEW_MS) {
+    throw new ReservationValidationError("Reservations cannot start in the past.");
+  }
+  if (end.ms - start.ms > RESERVATION_MAX_DURATION_MS) {
+    throw new ReservationValidationError("Reservations cannot be longer than 30 days.");
+  }
+  // Always store ISO-8601 UTC so every reservation timestamp has the same format.
+  const startIso = start.iso;
+  const endIso = end.iso;
+
+  await assertReservableEquipment(params.equipment_id);
+
+  const conflictError = (c: Reservation) =>
+    new Error(
+      `Equipment already reserved between ${formatLongDateTime(c.start_time)} and ${formatLongDateTime(c.end_time)}.`
     );
+
+  const conflict = await checkReservationConflict(params.equipment_id, startIso, endIso);
+  if (conflict.hasConflict) {
+    throw conflictError(conflict.conflictingReservations[0]);
   }
 
-  const { rows } = await sql<Reservation>`
-    INSERT INTO reservations (equipment_id, reserved_by, reserved_by_name, start_time, end_time, status, notes)
-    VALUES (${params.equipment_id}, ${params.reserved_by}, ${params.reserved_by_name}, ${params.start_time}, ${params.end_time}, 'confirmed', ${params.notes ?? null})
-    RETURNING *
-  `;
+  // The overlap and availability checks are repeated inside the INSERT itself, so two
+  // concurrent requests for overlapping slots can't both pass the checks above and both be
+  // inserted, and an item retired meanwhile can't be reserved.
+  const { rows } = await query<Reservation>(
+    `INSERT INTO reservations (equipment_id, reserved_by, reserved_by_name, start_time, end_time, status, notes)
+     SELECT ?, ?, ?, ?, ?, 'confirmed', ?
+     WHERE EXISTS (SELECT 1 FROM equipment e WHERE e.id = ? AND ${RESERVABLE_EQUIPMENT_SQL})
+       AND NOT EXISTS (
+         SELECT 1 FROM reservations r
+         WHERE r.equipment_id = ?
+           AND r.status = 'confirmed'
+           AND julianday(r.start_time) < julianday(?)
+           AND julianday(r.end_time) > julianday(?)
+       )
+     RETURNING *`,
+    [
+      params.equipment_id,
+      params.reserved_by,
+      reservedByName,
+      startIso,
+      endIso,
+      notes,
+      params.equipment_id,
+      params.equipment_id,
+      endIso,
+      startIso,
+    ]
+  );
+
+  if (rows.length === 0) {
+    await assertReservableEquipment(params.equipment_id);
+    const recheck = await checkReservationConflict(params.equipment_id, startIso, endIso);
+    if (recheck.conflictingReservations.length > 0) {
+      throw conflictError(recheck.conflictingReservations[0]);
+    }
+    throw new Error("Equipment already reserved for an overlapping timeframe.");
+  }
 
   const newRes = rows[0];
   const eq = await getEquipmentById(params.equipment_id);
 
-  // Send webhook notification
+  // Send webhook notification (times in the club's time zone, not the Worker's UTC).
   await sendClubWebhook({
     event: "reservation.created",
     title: `📅 New Reservation: ${eq?.name || "Equipment"}`,
-    description: `**${params.reserved_by_name}** has reserved **${eq?.name || "Equipment"}** from ${new Date(params.start_time).toLocaleString()} to ${new Date(params.end_time).toLocaleString()}.`,
+    description: `**${reservedByName}** has reserved **${eq?.name || "Equipment"}** from ${formatLongDateTime(startIso)} to ${formatLongDateTime(endIso)}.`,
     fields: [
       { name: "Equipment", value: eq?.name || "N/A" },
       { name: "Location", value: eq?.location || "Media Room" },
-      { name: "Reserved By", value: params.reserved_by_name },
-      { name: "Notes", value: params.notes || "None" },
+      { name: "Reserved By", value: reservedByName },
+      { name: "Notes", value: notes || "None" },
     ],
   });
 
@@ -2542,14 +3294,22 @@ export async function cancelReservation(
 ): Promise<{ success: boolean; error?: string }> {
   const res = await getReservationById(id);
   if (!res) return { success: false, error: "Reservation not found." };
-  if (!isAdmin && userId && res.reserved_by !== userId) {
-    return { success: false, error: "Forbidden: You can only cancel your own reservations." };
+  // Fail closed: a non-admin must supply a valid user id that owns the reservation
+  // (a missing / NaN / 0 id used to skip the ownership check entirely).
+  if (!isAdmin) {
+    if (typeof userId !== "number" || !Number.isInteger(userId) || userId <= 0 || res.reserved_by !== userId) {
+      return { success: false, error: "Forbidden: You can only cancel your own reservations." };
+    }
   }
   if (res.status !== "confirmed") {
     return { success: false, error: `Cannot cancel reservation in ${res.status} status.` };
   }
 
-  await sql`UPDATE reservations SET status = 'cancelled' WHERE id = ${id}`;
+  // Atomic transition: fails if another request cancelled/fulfilled it meanwhile.
+  const transition = await sql`UPDATE reservations SET status = 'cancelled' WHERE id = ${id} AND status = 'confirmed'`;
+  if (transition.rowCount !== 1) {
+    return { success: false, error: "Reservation is no longer confirmed." };
+  }
 
   await sendClubWebhook({
     event: "reservation.cancelled",
@@ -2569,6 +3329,12 @@ export async function fulfillReservation(
     return { success: false, error: `Reservation is already ${res.status}.` };
   }
 
+  // Claim the reservation first so two concurrent fulfils can't both create a checkout.
+  const transition = await sql`UPDATE reservations SET status = 'fulfilled' WHERE id = ${id} AND status = 'confirmed'`;
+  if (transition.rowCount !== 1) {
+    return { success: false, error: "Reservation is no longer confirmed." };
+  }
+
   try {
     const checkout = await createCheckout({
       equipment_id: res.equipment_id,
@@ -2577,10 +3343,10 @@ export async function fulfillReservation(
       expected_return_at: res.end_time,
       notes: res.notes ? `[Fulfilled Reservation #${id}] ${res.notes}` : `Fulfilled Reservation #${id}`,
     });
-
-    await sql`UPDATE reservations SET status = 'fulfilled' WHERE id = ${id}`;
     return { success: true, checkout };
   } catch (err) {
+    // Checkout failed: put the reservation back so it can be fulfilled later.
+    await sql`UPDATE reservations SET status = 'confirmed' WHERE id = ${id} AND status = 'fulfilled'`;
     return { success: false, error: err instanceof Error ? err.message : "Failed to convert reservation to checkout." };
   }
 }
@@ -2589,17 +3355,35 @@ export async function fulfillReservation(
 // Handover Protocol (Feature 3)
 // ---------------------------------------------------------------------------
 
+/** Kept for backwards compatibility; the table comes from migrations / SCHEMA_SQL (no DDL here). */
 export async function ensureHandoverTable(): Promise<void> {
   await ensureSchema();
 }
 
+/** "HD-" followed by 6 cryptographically random digits, e.g. "HD-048213". */
 function generateRandomHandoverCode(): string {
-  const chars = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
-  let token = "HD-";
-  for (let i = 0; i < 4; i++) {
-    token += chars.charAt(Math.floor(Math.random() * chars.length));
+  const buf = new Uint32Array(1);
+  // Rejection sampling keeps every 6-digit value equally likely.
+  const limit = Math.floor(0x100000000 / 1_000_000) * 1_000_000;
+  do {
+    crypto.getRandomValues(buf);
+  } while (buf[0] >= limit);
+  return `HD-${String(buf[0] % 1_000_000).padStart(6, "0")}`;
+}
+
+/**
+ * Handovers are only allowed for checkouts made under an admin account, and never for
+ * NFC-station checkouts. Returns an error message, or null if the checkout qualifies.
+ */
+async function getHandoverIneligibility(checkout: Checkout): Promise<string | null> {
+  if (checkout.nfc_value || checkout.nfc_id || checkout.checked_out_by === null) {
+    return "Handover is not available for equipment checked out through the NFC station.";
   }
-  return token;
+  const borrower = await getUserById(checkout.checked_out_by);
+  if (borrower?.role !== "admin") {
+    return "Handover is only available for equipment checked out under an admin account.";
+  }
+  return null;
 }
 
 export async function createHandoverCode(
@@ -2614,48 +3398,67 @@ export async function createHandoverCode(
     throw new Error("Cannot create handover: Active loan not found.");
   }
   const checkout = chRes.rows[0];
-  if (checkout.checked_out_by && checkout.checked_out_by !== fromUserId) {
+  const ineligible = await getHandoverIneligibility(checkout);
+  if (ineligible) throw new Error(ineligible);
+  if (checkout.checked_out_by !== fromUserId) {
     const userRes = await getUserById(fromUserId);
     if (userRes?.role !== "admin") {
       throw new Error("Forbidden: You can only handover equipment checked out to you.");
     }
   }
 
-  // Revoke any existing active handover codes for this checkout
-  await sql`UPDATE handover_codes SET status = 'revoked' WHERE checkout_id = ${checkoutId} AND status = 'active'`;
-
-  const code = generateRandomHandoverCode();
   const expiresAt = new Date(Date.now() + 15 * 60 * 1000).toISOString();
-  const qrPayload = JSON.stringify({
-    type: "MEDIAHUB_HANDOVER",
-    code,
-    checkout_id: checkoutId,
-    equipment_id: checkout.equipment_id,
-    exp: expiresAt,
-  });
+  let inserted: HandoverCode | undefined;
+  // Codes are UNIQUE across all historical rows, so retry on the rare collision.
+  for (let attempt = 0; attempt < 8 && !inserted; attempt++) {
+    const code = generateRandomHandoverCode();
+    const qrPayload = JSON.stringify({
+      type: "MEDIAHUB_HANDOVER",
+      code,
+      checkout_id: checkoutId,
+      equipment_id: checkout.equipment_id,
+      exp: expiresAt,
+    });
+    try {
+      const { rows } = await sql<HandoverCode>`
+        INSERT INTO handover_codes (checkout_id, equipment_id, from_user_id, code, qr_payload, expires_at, status)
+        VALUES (${checkoutId}, ${checkout.equipment_id}, ${fromUserId}, ${code}, ${qrPayload}, ${expiresAt}, 'active')
+        RETURNING *
+      `;
+      inserted = rows[0];
+    } catch (err) {
+      if (!(err instanceof Error) || !/UNIQUE/i.test(err.message)) throw err;
+    }
+  }
+  if (!inserted) {
+    throw new Error("Could not generate a unique handover code. Please try again.");
+  }
 
-  const { rows } = await sql<HandoverCode>`
-    INSERT INTO handover_codes (checkout_id, equipment_id, from_user_id, code, qr_payload, expires_at, status)
-    VALUES (${checkoutId}, ${checkout.equipment_id}, ${fromUserId}, ${code}, ${qrPayload}, ${expiresAt}, 'active')
-    RETURNING *
-  `;
+  // Only one code per loan: revoke any earlier active codes now that the new one exists.
+  await sql`UPDATE handover_codes SET status = 'revoked' WHERE checkout_id = ${checkoutId} AND status = 'active' AND id != ${inserted.id}`;
 
   const eq = await getEquipmentById(checkout.equipment_id);
   const fromUser = await getUserById(fromUserId);
 
   return {
-    ...rows[0],
+    ...inserted,
     equipment_name: eq?.name,
     equipment_serial_number: eq?.serial_number,
     from_user_name: fromUser?.name ?? checkout.checked_out_by_name,
   };
 }
 
+/** Accepts "HD-123456", "hd-123456" or just "123456". */
+export function normalizeHandoverCode(code: string): string {
+  const clean = code.trim().toUpperCase();
+  return /^\d{6}$/.test(clean) ? `HD-${clean}` : clean;
+}
+
 export async function getHandoverCodeByCode(code: string): Promise<HandoverCode | undefined> {
   await ensureHandoverTable();
-  const cleanCode = code.trim().toUpperCase();
+  const cleanCode = normalizeHandoverCode(code);
   const { rows } = await sql<HandoverCode>`
-    SELECT 
+    SELECT
       h.*,
       e.name AS equipment_name,
       e.serial_number AS equipment_serial_number,
@@ -2698,46 +3501,83 @@ export async function claimHandoverCode(params: {
   }
 
   if (new Date() > new Date(handover.expires_at)) {
-    await sql`UPDATE handover_codes SET status = 'expired' WHERE id = ${handover.id}`;
+    await sql`UPDATE handover_codes SET status = 'expired' WHERE id = ${handover.id} AND status = 'active'`;
     return { success: false, error: "Handover code has expired. Please ask the borrower to generate a fresh code." };
   }
 
-  if (handover.from_user_id === params.claimed_by_id) {
+  const chRes = await sql<Checkout>`SELECT * FROM checkouts WHERE id = ${handover.checkout_id}`;
+  const oldCheckout = chRes.rows[0];
+  if (!oldCheckout || oldCheckout.returned_at) {
+    await sql`UPDATE handover_codes SET status = 'revoked' WHERE id = ${handover.id} AND status = 'active'`;
+    return { success: false, error: "This loan has already ended, so the handover code is no longer valid." };
+  }
+
+  if (handover.from_user_id === params.claimed_by_id || oldCheckout.checked_out_by === params.claimed_by_id) {
     return { success: false, error: "Cannot handover equipment to yourself." };
   }
 
-  // 1. Close old checkout with transfer note
-  const nowStr = new Date().toISOString();
-  await sql`
-    UPDATE checkouts 
-    SET returned_at = ${nowStr},
-        notes = COALESCE(notes || ' | ', '') || 'Handed over to ' || ${params.claimed_by_name}
-    WHERE id = ${handover.checkout_id}
-  `;
+  const ineligible = await getHandoverIneligibility(oldCheckout);
+  if (ineligible) {
+    await sql`UPDATE handover_codes SET status = 'revoked' WHERE id = ${handover.id} AND status = 'active'`;
+    return { success: false, error: ineligible };
+  }
 
-  // 2. Open new checkout for recipient
+  // 1. Atomically consume the code. Only one concurrent claim can win this UPDATE, and
+  //    once claimed the code can never be used again.
+  const claim = await sql`
+    UPDATE handover_codes
+    SET status = 'claimed',
+        claimed_by = ${params.claimed_by_id},
+        claimed_at = datetime('now')
+    WHERE id = ${handover.id}
+      AND status = 'active'
+      AND julianday(expires_at) > julianday('now')
+  `;
+  if (claim.rowCount === 0) {
+    return { success: false, error: "Handover code is no longer valid." };
+  }
+
+  // 2. Close the old checkout with a transfer note (only if it is still open).
+  const closed = await sql`
+    UPDATE checkouts
+    SET returned_at = datetime('now'),
+        notes = COALESCE(notes || ' | ', '') || 'Handed over to ' || ${params.claimed_by_name}
+    WHERE id = ${handover.checkout_id} AND returned_at IS NULL
+  `;
+  if (closed.rowCount === 0) {
+    await sql`UPDATE handover_codes SET status = 'revoked' WHERE id = ${handover.id}`;
+    return { success: false, error: "This loan has already ended, so the handover code is no longer valid." };
+  }
+
+  // 3. Cancel any other outstanding codes for the loan that was just handed over.
+  await sql`UPDATE handover_codes SET status = 'revoked' WHERE checkout_id = ${handover.checkout_id} AND status = 'active'`;
+
+  // 4. Open new checkout for recipient
   const expectedReturn = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
   const notesText = params.notes
     ? `[Handover from ${handover.from_user_name || "previous borrower"}] ${params.notes}`
     : `Handover from ${handover.from_user_name || "previous borrower"}`;
 
-  const { rows } = await sql<Checkout>`
-    INSERT INTO checkouts (equipment_id, checked_out_by, checked_out_by_name, expected_return_at, notes, checkout_location)
-    VALUES (${handover.equipment_id}, ${params.claimed_by_id}, ${params.claimed_by_name}, ${expectedReturn}, ${notesText}, 'Direct Handover')
-    RETURNING *
-  `;
-  const newCheckout = rows[0];
+  let newCheckout: Checkout;
+  try {
+    const { rows } = await sql<Checkout>`
+      INSERT INTO checkouts (equipment_id, checked_out_by, checked_out_by_name, expected_return_at, notes, checkout_location)
+      VALUES (${handover.equipment_id}, ${params.claimed_by_id}, ${params.claimed_by_name}, ${expectedReturn}, ${notesText}, 'Direct Handover')
+      RETURNING *
+    `;
+    newCheckout = rows[0];
+  } catch (err) {
+    // Couldn't open the recipient's loan: give the item back to the original borrower so it
+    // isn't left "Checked Out" with no open checkout. The code stays consumed.
+    await sql`UPDATE checkouts SET returned_at = NULL, notes = ${oldCheckout.notes ?? null} WHERE id = ${handover.checkout_id}`;
+    await sql`UPDATE handover_codes SET status = 'revoked' WHERE id = ${handover.id}`;
+    throw err;
+  }
+  // The item stays out on loan, now to the recipient.
+  await sql`UPDATE equipment SET status = 'Checked Out', updated_at = CURRENT_TIMESTAMP WHERE id = ${handover.equipment_id}`;
 
-  // 3. Mark handover code as claimed
-  await sql`
-    UPDATE handover_codes 
-    SET status = 'claimed',
-        claimed_by = ${params.claimed_by_id},
-        claimed_at = ${nowStr}
-    WHERE id = ${handover.id}
-  `;
 
-  // 4. Send club webhook alert
+  // 5. Send club webhook alert
   await sendClubWebhook({
     event: "handover.completed",
     title: `🤝 Equipment Handover: ${handover.equipment_name || "Equipment"}`,
@@ -2746,7 +3586,7 @@ export async function claimHandoverCode(params: {
       { name: "Equipment", value: handover.equipment_name || "N/A" },
       { name: "From", value: handover.from_user_name || "N/A" },
       { name: "To", value: params.claimed_by_name },
-      { name: "Expected Return", value: new Date(expectedReturn).toLocaleString() },
+      { name: "Expected Return", value: formatLongDateTime(expectedReturn) },
     ],
   });
 
@@ -2757,6 +3597,7 @@ export async function claimHandoverCode(params: {
 // Physical Inventory Audit Mode (Feature 5)
 // ---------------------------------------------------------------------------
 
+/** Kept for backwards compatibility; the tables come from migrations / SCHEMA_SQL (no DDL here). */
 export async function ensureAuditTables(): Promise<void> {
   await ensureSchema();
 }
@@ -2771,48 +3612,47 @@ export async function startAuditSession(params: {
   // Cancel any existing in_progress audit session to prevent overlap
   await sql`UPDATE audit_sessions SET status = 'cancelled' WHERE status = 'in_progress'`;
 
+  // Keep the starter's name on the session so it survives the user being deleted.
+  const starter = await getUserById(params.started_by);
   const { rows } = await sql<AuditSession>`
-    INSERT INTO audit_sessions (name, started_by, status, notes)
-    VALUES (${params.name}, ${params.started_by}, 'in_progress', ${params.notes ?? null})
+    INSERT INTO audit_sessions (name, started_by, started_by_name, status, notes)
+    VALUES (${params.name}, ${params.started_by}, ${starter?.name ?? null}, 'in_progress', ${params.notes ?? null})
     RETURNING *
   `;
   const session = rows[0];
 
-  const eqList = await sql<{ id: number }>`
-    SELECT id FROM equipment 
-    WHERE condition != 'Retired' AND status != 'Unavailable (Retired)'
-  `;
-
-  for (const eq of eqList.rows) {
-    await sql`
-      INSERT INTO audit_records (session_id, equipment_id, status)
-      VALUES (${session.id}, ${eq.id}, 'missing')
-      ON CONFLICT DO NOTHING
-    `;
-  }
-
-  const total = eqList.rows.length;
   await sql`
-    UPDATE audit_sessions 
-    SET total_items = ${total}, missing_count = ${total}, found_count = 0 
-    WHERE id = ${session.id}
+    INSERT INTO audit_records (session_id, equipment_id, status)
+    SELECT ${session.id}, id, 'missing' FROM equipment
+    WHERE condition != 'Retired' AND status != 'Unavailable (Retired)'
+    ON CONFLICT DO NOTHING
   `;
 
-  return {
-    ...session,
-    total_items: total,
-    missing_count: total,
-    found_count: 0,
-  };
+  await recountAuditSession(session.id);
+  const updated = (await sql<AuditSession>`SELECT * FROM audit_sessions WHERE id = ${session.id}`).rows[0];
+
+  return updated ?? session;
+}
+
+/** Recomputes a session's counters from its audit_records in one statement (race-safe). */
+async function recountAuditSession(sessionId: number): Promise<void> {
+  await sql`
+    UPDATE audit_sessions
+    SET
+      total_items = (SELECT COUNT(*) FROM audit_records WHERE session_id = ${sessionId}),
+      found_count = (SELECT COUNT(*) FROM audit_records WHERE session_id = ${sessionId} AND status = 'exists'),
+      missing_count = (SELECT COUNT(*) FROM audit_records WHERE session_id = ${sessionId} AND status = 'missing')
+    WHERE id = ${sessionId}
+  `;
 }
 
 export async function getActiveAuditSession(): Promise<AuditSession | null> {
   await ensureAuditTables();
   try {
     const { rows } = await sql<AuditSession>`
-      SELECT a.*, u.name AS started_by_name
+      SELECT a.*, COALESCE(u.name, a.started_by_name) AS started_by_name
       FROM audit_sessions a
-      JOIN users u ON u.id = a.started_by
+      LEFT JOIN users u ON u.id = a.started_by
       WHERE a.status = 'in_progress'
       ORDER BY a.started_at DESC
       LIMIT 1
@@ -2834,6 +3674,16 @@ export async function recordAuditScan(params: {
   const rawId = params.equipment_identifier.trim();
   if (!rawId) return { success: false, error: "Empty equipment identifier." };
 
+  const sessionCheck = await sql<{ status: AuditSessionStatus }>`
+    SELECT status FROM audit_sessions WHERE id = ${params.session_id}
+  `;
+  if (sessionCheck.rows.length === 0) {
+    return { success: false, error: "Audit session not found." };
+  }
+  if (sessionCheck.rows[0].status !== "in_progress") {
+    return { success: false, error: `Audit session is ${sessionCheck.rows[0].status}; scans are no longer accepted.` };
+  }
+
   let eq: { id: number; name: string; serial_number: string | null; location: string; condition: Condition; status: EquipmentStatus } | undefined;
   if (/^\d+$/.test(rawId)) {
     const detail = await getEquipmentById(Number(rawId));
@@ -2851,22 +3701,25 @@ export async function recordAuditScan(params: {
     return { success: false, error: `Equipment "${rawId}" not found in inventory.` };
   }
 
-  const recRes = await sql<AuditRecord>`
-    SELECT * FROM audit_records WHERE session_id = ${params.session_id} AND equipment_id = ${eq.id}
+  // Single upsert: marks the item found only while the session is still in progress, and
+  // only if it wasn't already found (changes = 0 in both of those cases).
+  const upsert = await sql`
+    INSERT INTO audit_records (session_id, equipment_id, status, scanned_at, scanned_by, method)
+    SELECT ${params.session_id}, ${eq.id}, 'exists', CURRENT_TIMESTAMP, ${params.scanned_by}, ${params.method}
+    WHERE EXISTS (SELECT 1 FROM audit_sessions WHERE id = ${params.session_id} AND status = 'in_progress')
+    ON CONFLICT(session_id, equipment_id) DO UPDATE SET
+      status = 'exists',
+      scanned_at = excluded.scanned_at,
+      scanned_by = excluded.scanned_by,
+      method = excluded.method
+    WHERE audit_records.status <> 'exists'
   `;
-  if (recRes.rows.length === 0) {
-    await sql`
-      INSERT INTO audit_records (session_id, equipment_id, status, scanned_at, scanned_by, method)
-      VALUES (${params.session_id}, ${eq.id}, 'exists', CURRENT_TIMESTAMP, ${params.scanned_by}, ${params.method})
-    `;
-    await sql`
-      UPDATE audit_sessions 
-      SET total_items = total_items + 1, found_count = found_count + 1 
-      WHERE id = ${params.session_id}
-    `;
-  } else {
-    const existing = recRes.rows[0];
-    if (existing.status === "exists") {
+
+  if (upsert.rowCount === 0) {
+    const existing = (
+      await sql<AuditRecord>`SELECT * FROM audit_records WHERE session_id = ${params.session_id} AND equipment_id = ${eq.id}`
+    ).rows[0];
+    if (existing?.status === "exists") {
       return {
         success: true,
         alreadyScanned: true,
@@ -2878,18 +3731,13 @@ export async function recordAuditScan(params: {
         },
       };
     }
-
-    await sql`
-      UPDATE audit_records 
-      SET status = 'exists', scanned_at = CURRENT_TIMESTAMP, scanned_by = ${params.scanned_by}, method = ${params.method}
-      WHERE session_id = ${params.session_id} AND equipment_id = ${eq.id}
-    `;
-    await sql`
-      UPDATE audit_sessions 
-      SET found_count = found_count + 1, missing_count = CASE WHEN missing_count > 0 THEN missing_count - 1 ELSE 0 END
-      WHERE id = ${params.session_id}
-    `;
+    // The session was completed/cancelled between the check above and the upsert.
+    return { success: false, error: "Audit session is no longer in progress; scans are no longer accepted." };
   }
+
+  // Recompute counters from the records instead of incrementing, so concurrent scans
+  // can never drift the totals.
+  await recountAuditSession(params.session_id);
 
   const updatedRec = (await sql<AuditRecord>`
     SELECT a.*, u.name AS scanned_by_name
@@ -2919,18 +3767,31 @@ export async function completeAuditSession(
   const sessionRes = await sql<AuditSession>`SELECT * FROM audit_sessions WHERE id = ${sessionId}`;
   if (sessionRes.rows.length === 0) return { success: false, error: "Audit session not found." };
   const session = sessionRes.rows[0];
-  if (session.status === "completed") return { success: true, session };
+  if (session.status !== "in_progress") {
+    return { success: false, error: `Audit session is already ${session.status}.` };
+  }
 
+  // Atomic transition: only one of several concurrent completes can win, so the
+  // "mark missing" side effects below are applied at most once.
+  await recountAuditSession(sessionId);
   const nowStr = new Date().toISOString();
-  await sql`
-    UPDATE audit_sessions 
+  const transition = await sql`
+    UPDATE audit_sessions
     SET status = 'completed', completed_at = ${nowStr}
-    WHERE id = ${sessionId}
+    WHERE id = ${sessionId} AND status = 'in_progress'
   `;
+  if (transition.rowCount !== 1) {
+    return { success: false, error: "Audit session is no longer in progress." };
+  }
 
   if (options?.markMissingAsCatalogMissing) {
+    // Items that are currently checked out are accounted for, so they are not marked missing.
     const missingItems = await sql<{ equipment_id: number }>`
-      SELECT equipment_id FROM audit_records WHERE session_id = ${sessionId} AND status = 'missing'
+      SELECT ar.equipment_id FROM audit_records ar
+      WHERE ar.session_id = ${sessionId} AND ar.status = 'missing'
+        AND NOT EXISTS (
+          SELECT 1 FROM checkouts c WHERE c.equipment_id = ar.equipment_id AND c.returned_at IS NULL
+        )
     `;
     for (const item of missingItems.rows) {
       await updateEquipment(item.equipment_id, {
@@ -2962,9 +3823,9 @@ export async function getAuditSessionDetails(sessionId: number): Promise<{
 } | null> {
   await ensureAuditTables();
   const sessionRes = await sql<AuditSession>`
-    SELECT a.*, u.name AS started_by_name
+    SELECT a.*, COALESCE(u.name, a.started_by_name) AS started_by_name
     FROM audit_sessions a
-    JOIN users u ON u.id = a.started_by
+    LEFT JOIN users u ON u.id = a.started_by
     WHERE a.id = ${sessionId}
   `;
   if (sessionRes.rows.length === 0) return null;
@@ -2992,32 +3853,184 @@ export async function getAuditSessionDetails(sessionId: number): Promise<{
 }
 
 // ---------------------------------------------------------------------------
+// Storage Map (Feature 8)
+// ---------------------------------------------------------------------------
 // Storage Map (Feature 8 & Drag-and-Drop Designer)
 // ---------------------------------------------------------------------------
 
+export const STORAGE_MAP_MAX_CABINETS = 50;
+export const STORAGE_MAP_MAX_SHELVES = 50;
+export const STORAGE_MAP_NAME_MAX_LENGTH = 60;
+export const STORAGE_MAP_DESCRIPTION_MAX_LENGTH = 200;
+
+function slugId(name: string): string {
+  return name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "") || "cabinet";
+}
+
+function cleanMapText(value: unknown): string {
+  return typeof value === "string" ? value.normalize("NFC").replace(/\s+/g, " ").trim() : "";
+}
+
+/**
+ * Validates and normalises a cabinets configuration. Throws StorageMapConfigError when it is not
+ * an array of at most 50 `{ name, shelves }` objects where name is a non-empty string of at most
+ * 60 characters and shelves is an array of at most 50 non-empty strings of at most 60
+ * characters. Cabinet names (and shelf names within a cabinet) must be unique case-insensitively.
+ * Names are trimmed with whitespace collapsed; ids default to a slug of the name.
+ */
+export function normalizeStorageMapConfig(input: unknown): StorageMapConfigCabinet[] {
+  if (!Array.isArray(input)) {
+    throw new StorageMapConfigError("Cabinets configuration must be an array.");
+  }
+  if (input.length > STORAGE_MAP_MAX_CABINETS) {
+    throw new StorageMapConfigError(`A storage map can have at most ${STORAGE_MAP_MAX_CABINETS} cabinets.`);
+  }
+  const seenNames = new Set<string>();
+  const seenIds = new Set<string>();
+  return input.map((raw, i) => {
+    const label = `Cabinet ${i + 1}`;
+    if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+      throw new StorageMapConfigError(`${label} must be an object with a name and shelves.`);
+    }
+    const cab = raw as Record<string, unknown>;
+    const name = cleanMapText(cab.name);
+    if (!name) throw new StorageMapConfigError(`${label} needs a name.`);
+    if (name.length > STORAGE_MAP_NAME_MAX_LENGTH) {
+      throw new StorageMapConfigError(`Cabinet name "${name.slice(0, 20)}…" exceeds ${STORAGE_MAP_NAME_MAX_LENGTH} characters.`);
+    }
+    if (seenNames.has(name.toLowerCase())) {
+      throw new StorageMapConfigError(`Duplicate cabinet name "${name}".`);
+    }
+    seenNames.add(name.toLowerCase());
+
+    if (!Array.isArray(cab.shelves)) {
+      throw new StorageMapConfigError(`Cabinet "${name}" must have a shelves array.`);
+    }
+    if (cab.shelves.length > STORAGE_MAP_MAX_SHELVES) {
+      throw new StorageMapConfigError(`Cabinet "${name}" can have at most ${STORAGE_MAP_MAX_SHELVES} shelves.`);
+    }
+    const seenShelves = new Set<string>();
+    const shelves = cab.shelves.map((s, j) => {
+      if (typeof s !== "string") {
+        throw new StorageMapConfigError(`Shelf ${j + 1} of cabinet "${name}" must be a string.`);
+      }
+      const shelf = cleanMapText(s);
+      if (!shelf) throw new StorageMapConfigError(`Shelf ${j + 1} of cabinet "${name}" needs a name.`);
+      if (shelf.length > STORAGE_MAP_NAME_MAX_LENGTH) {
+        throw new StorageMapConfigError(
+          `Shelf name "${shelf.slice(0, 20)}…" in cabinet "${name}" exceeds ${STORAGE_MAP_NAME_MAX_LENGTH} characters.`
+        );
+      }
+      if (seenShelves.has(shelf.toLowerCase())) {
+        throw new StorageMapConfigError(`Duplicate shelf "${shelf}" in cabinet "${name}".`);
+      }
+      seenShelves.add(shelf.toLowerCase());
+      return shelf;
+    });
+
+    if (cab.description !== undefined && cab.description !== null && typeof cab.description !== "string") {
+      throw new StorageMapConfigError(`Description of cabinet "${name}" must be a string.`);
+    }
+    const description = cleanMapText(cab.description).slice(0, STORAGE_MAP_DESCRIPTION_MAX_LENGTH);
+
+    let id = typeof cab.id === "string" ? cab.id.trim().slice(0, 100) : "";
+    if (!id || seenIds.has(id)) {
+      const base = slugId(name);
+      id = base;
+      for (let n = 2; seenIds.has(id); n++) id = `${base}-${n}`;
+    }
+    seenIds.add(id);
+
+    const out: StorageMapConfigCabinet = { id, name, shelves };
+    if (description) out.description = description;
+    return out;
+  });
+}
+
+/**
+ * Lenient version for data already stored: skips malformed cabinets/shelves (and duplicates or
+ * anything beyond the limits) instead of throwing.
+ */
+function sanitizeStoredStorageMapConfig(input: unknown): StorageMapConfigCabinet[] {
+  if (!Array.isArray(input)) return [];
+  const result: StorageMapConfigCabinet[] = [];
+  const seenNames = new Set<string>();
+  const seenIds = new Set<string>();
+  for (const raw of input) {
+    if (result.length >= STORAGE_MAP_MAX_CABINETS) break;
+    if (!raw || typeof raw !== "object" || Array.isArray(raw)) continue;
+    const cab = raw as Record<string, unknown>;
+    const name = cleanMapText(cab.name).slice(0, STORAGE_MAP_NAME_MAX_LENGTH);
+    if (!name || seenNames.has(name.toLowerCase())) continue;
+    seenNames.add(name.toLowerCase());
+
+    const shelves: string[] = [];
+    const seenShelves = new Set<string>();
+    for (const s of Array.isArray(cab.shelves) ? cab.shelves : []) {
+      if (shelves.length >= STORAGE_MAP_MAX_SHELVES) break;
+      const shelf = cleanMapText(s).slice(0, STORAGE_MAP_NAME_MAX_LENGTH);
+      if (!shelf || seenShelves.has(shelf.toLowerCase())) continue;
+      seenShelves.add(shelf.toLowerCase());
+      shelves.push(shelf);
+    }
+
+    let id = typeof cab.id === "string" ? cab.id.trim().slice(0, 100) : "";
+    if (!id || seenIds.has(id)) {
+      const base = slugId(name);
+      id = base;
+      for (let n = 2; seenIds.has(id); n++) id = `${base}-${n}`;
+    }
+    seenIds.add(id);
+
+    const description = cleanMapText(cab.description).slice(0, STORAGE_MAP_DESCRIPTION_MAX_LENGTH);
+    const out: StorageMapConfigCabinet = { id, name, shelves };
+    if (description) out.description = description;
+    result.push(out);
+  }
+  return result;
+}
+
+/**
+ * Returns the saved cabinets layout, or null when none is saved. Stored data that is malformed
+ * (bad JSON, bad entries) is sanitised: bad entries are skipped, never thrown.
+ */
 export async function getStorageMapConfig(): Promise<StorageMapConfigCabinet[] | null> {
   await ensureSchema();
+  let raw: string | undefined;
   try {
     const { rows } = await sql<{ value: string }>`
       SELECT value FROM storage_map_layout WHERE key = 'cabinets' LIMIT 1
     `;
-    if (rows.length > 0 && rows[0].value) {
-      return JSON.parse(rows[0].value) as StorageMapConfigCabinet[];
-    }
-  } catch {
-    // Return null if table or config not yet initialized
+    raw = rows[0]?.value;
+  } catch (err) {
+    console.error("[DB] Could not read storage_map_layout:", err);
+    return null;
   }
-  return null;
+  if (!raw) return null;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    console.error("[DB] storage_map_layout 'cabinets' value is not valid JSON; ignoring it.");
+    return null;
+  }
+  return sanitizeStoredStorageMapConfig(parsed);
 }
 
-export async function saveStorageMapConfig(cabinets: StorageMapConfigCabinet[]): Promise<void> {
+/**
+ * Validates, normalises and saves the cabinets layout (an empty array resets to defaults).
+ * Throws StorageMapConfigError (subclass of Error; map to 400) for an invalid configuration.
+ */
+export async function saveStorageMapConfig(cabinets: StorageMapConfigCabinet[]): Promise<StorageMapConfigCabinet[]> {
+  const normalized = normalizeStorageMapConfig(cabinets);
   await ensureSchema();
-  const val = JSON.stringify(cabinets);
+  const val = JSON.stringify(normalized);
   await sql`
     INSERT INTO storage_map_layout (key, value)
     VALUES ('cabinets', ${val})
     ON CONFLICT (key) DO UPDATE SET value = ${val}, updated_at = CURRENT_TIMESTAMP
   `;
+  return normalized;
 }
 
 export async function getStorageMapData(): Promise<StorageCabinet[]> {
@@ -3027,15 +4040,18 @@ export async function getStorageMapData(): Promise<StorageCabinet[]> {
 
   const cabinetsMap = new Map<string, { description?: string; shelvesMap: Map<string, Equipment[]> }>();
 
+  // getStorageMapConfig already drops malformed entries; stay defensive anyway.
   if (customConfig && customConfig.length > 0) {
     for (const cab of customConfig) {
+      if (!cab || typeof cab.name !== "string" || !cab.name || cabinetsMap.has(cab.name)) continue;
       const shelvesMap = new Map<string, Equipment[]>();
-      for (const s of cab.shelves) {
-        shelvesMap.set(s, []);
+      for (const s of Array.isArray(cab.shelves) ? cab.shelves : []) {
+        if (typeof s === "string" && s) shelvesMap.set(s, []);
       }
       cabinetsMap.set(cab.name, { description: cab.description, shelvesMap });
     }
-  } else {
+  }
+  if (cabinetsMap.size === 0) {
     const defaultCabinets = [
       "Cabinet 1 (Cameras & Video)",
       "Cabinet 2 (Lenses & Glass)",

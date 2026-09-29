@@ -47,6 +47,9 @@ import type { SOPDocument, SOPCitation, AIChatMessage, Role } from "@/lib/types"
 import JSZip from "jszip";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
+import { safeMarkdownComponents } from "@/components/safe-markdown";
+import { formatDate } from "@/lib/timezone";
+import { readErrorMessage } from "@/lib/fetch-error";
 
 interface SOPManagerProps {
   initialDocuments: SOPDocument[];
@@ -80,7 +83,34 @@ const DOC_CATEGORIES = ["General", "Photo", "Video", "Audio/AV", "Safety & Handl
 
 const SESSION_STORAGE_KEY = "mediahub_ai_chat_session";
 
-function getWelcomeMessage(name: string): AIChatMessage {
+// Limits enforced by POST /api/sop/chat (history <= 50 messages, each <= 4000 chars).
+// Send only the most recent turns, well under the server cap.
+const MAX_HISTORY_MESSAGES = 20;
+const MAX_MESSAGE_CHARS = 4000;
+
+/** Chat message as held in the UI. `isError` marks local error bubbles that must never be sent as history. */
+type ChatMessage = AIChatMessage & { isError?: boolean };
+
+function isLocalOnlyMessage(m: ChatMessage): boolean {
+  // Legacy sessions stored error bubbles without the flag, so also check the id prefix.
+  return m.isError === true || m.id === "welcome" || m.id.startsWith("error-");
+}
+
+/** Builds the history payload: user/assistant turns only, newest N, each truncated to the server limit. */
+function buildHistoryPayload(messages: ChatMessage[]): { role: "user" | "assistant"; content: string }[] {
+  return messages
+    .filter(
+      (m): m is ChatMessage & { role: "user" | "assistant" } =>
+        (m.role === "user" || m.role === "assistant") && !isLocalOnlyMessage(m) && m.content.trim().length > 0
+    )
+    .slice(-MAX_HISTORY_MESSAGES)
+    .map((m) => ({
+      role: m.role,
+      content: m.content.length > MAX_MESSAGE_CHARS ? m.content.slice(0, MAX_MESSAGE_CHARS) : m.content,
+    }));
+}
+
+function getWelcomeMessage(name: string): ChatMessage {
   return {
     id: "welcome",
     role: "assistant",
@@ -93,21 +123,10 @@ export function SOPManager({ initialDocuments, role, userName }: SOPManagerProps
   const [documents, setDocuments] = useState<SOPDocument[]>(initialDocuments);
   const [activeTab, setActiveTab] = useState<"assistant" | "library">("assistant");
 
-  // Chat State initialized from sessionStorage for current browser tab
-  const [messages, setMessages] = useState<AIChatMessage[]>(() => {
-    if (typeof window !== "undefined") {
-      try {
-        const saved = sessionStorage.getItem(SESSION_STORAGE_KEY);
-        if (saved) {
-          const parsed = JSON.parse(saved);
-          if (Array.isArray(parsed) && parsed.length > 0) return parsed;
-        }
-      } catch (e) {
-        console.warn("Could not parse chat from sessionStorage", e);
-      }
-    }
-    return [getWelcomeMessage(userName)];
-  });
+  // Chat state. The server render and the first client render must match, so the
+  // sessionStorage copy for this tab is restored in an effect after mount.
+  const [messages, setMessages] = useState<ChatMessage[]>(() => [getWelcomeMessage(userName)]);
+  const [chatHydrated, setChatHydrated] = useState(false);
 
   const [inputQuery, setInputQuery] = useState("");
   const [chatLoading, setChatLoading] = useState(false);
@@ -151,16 +170,32 @@ export function SOPManager({ initialDocuments, role, userName }: SOPManagerProps
 
   const isAdmin = role === "admin";
 
-  // Auto-save chat messages to sessionStorage on every change
+  // Restore this tab's chat from sessionStorage after mount (avoids hydration mismatch).
   useEffect(() => {
-    if (typeof window !== "undefined") {
-      try {
-        sessionStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify(messages));
-      } catch (e) {
-        console.warn("Could not save chat to sessionStorage", e);
+    try {
+      const saved = sessionStorage.getItem(SESSION_STORAGE_KEY);
+      if (saved) {
+        const parsed: unknown = JSON.parse(saved);
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          setMessages(parsed as ChatMessage[]);
+        }
       }
+    } catch (e) {
+      console.warn("Could not parse chat from sessionStorage", e);
     }
-  }, [messages]);
+    setChatHydrated(true);
+  }, []);
+
+  // Auto-save chat messages to sessionStorage on every change (only after restoring,
+  // so the initial welcome message never overwrites a saved conversation).
+  useEffect(() => {
+    if (!chatHydrated) return;
+    try {
+      sessionStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify(messages));
+    } catch (e) {
+      console.warn("Could not save chat to sessionStorage", e);
+    }
+  }, [messages, chatHydrated]);
 
   useEffect(() => {
     chatBottomRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -182,8 +217,8 @@ export function SOPManager({ initialDocuments, role, userName }: SOPManagerProps
     try {
       const res = await fetch("/api/sop");
       if (res.ok) {
-        const data = await res.json();
-        setDocuments(data);
+        const data: unknown = await res.json();
+        if (Array.isArray(data)) setDocuments(data as SOPDocument[]);
       }
     } catch (e) {
       console.error("Failed to refresh SOP documents", e);
@@ -294,11 +329,17 @@ export function SOPManager({ initialDocuments, role, userName }: SOPManagerProps
       setQueueNotice(null);
 
       const duplicatesInQueue: string[] = [];
+      const unsupported: string[] = [];
       const seenNames = new Set<string>();
       const incomingFiltered: File[] = [];
 
       for (const file of incoming) {
         const nameLower = file.name.toLowerCase();
+        // Legacy Office formats can't be parsed (drag & drop bypasses the input's accept list).
+        if (/\.(doc|xls|xlsx|ppt|pptx)$/.test(nameLower)) {
+          unsupported.push(file.name);
+          continue;
+        }
         // Check if already in staged queue or already in current batch
         if (
           stagedFiles.some((f) => f.file.name.toLowerCase() === nameLower) ||
@@ -311,11 +352,16 @@ export function SOPManager({ initialDocuments, role, userName }: SOPManagerProps
         }
       }
 
+      const notices: string[] = [];
       if (duplicatesInQueue.length > 0) {
-        setQueueNotice(
-          `Duplicate file(s) skipped (already in upload queue): ${duplicatesInQueue.join(", ")}`
+        notices.push(`Duplicate file(s) skipped (already in upload queue): ${duplicatesInQueue.join(", ")}`);
+      }
+      if (unsupported.length > 0) {
+        notices.push(
+          `Unsupported file(s) skipped: ${unsupported.join(", ")}. Please save as .docx or PDF and try again.`
         );
       }
+      if (notices.length > 0) setQueueNotice(notices.join(" "));
 
       if (incomingFiltered.length === 0) return;
 
@@ -670,7 +716,21 @@ export function SOPManager({ initialDocuments, role, userName }: SOPManagerProps
     const q = (textToSend || inputQuery).trim();
     if (!q || chatLoading) return;
 
-    const userMsg: AIChatMessage = {
+    if (q.length > MAX_MESSAGE_CHARS) {
+      setMessages((prev) => [
+        ...prev,
+        {
+          id: `error-${Date.now()}`,
+          role: "assistant",
+          content: `⚠️ **Error**: Your message is ${q.length} characters long. Please keep it under ${MAX_MESSAGE_CHARS} characters.`,
+          created_at: new Date().toISOString(),
+          isError: true,
+        },
+      ]);
+      return;
+    }
+
+    const userMsg: ChatMessage = {
       id: `user-${Date.now()}`,
       role: "user",
       content: q,
@@ -685,10 +745,8 @@ export function SOPManager({ initialDocuments, role, userName }: SOPManagerProps
     setChatLoading(true);
 
     try {
-      const historyPayload = messages.map((m) => ({
-        role: m.role,
-        content: m.content,
-      }));
+      // Only the most recent real turns (no welcome / error bubbles), truncated to the server limits.
+      const historyPayload = buildHistoryPayload(messages);
 
       const res = await fetch("/api/sop/chat", {
         method: "POST",
@@ -718,7 +776,7 @@ export function SOPManager({ initialDocuments, role, userName }: SOPManagerProps
 
       const data = await res.json();
       const botContent = data.reply || data.answer || "No response received from AI assistant.";
-      const botMsg: AIChatMessage = {
+      const botMsg: ChatMessage = {
         id: `assistant-${Date.now()}`,
         role: "assistant",
         content: botContent,
@@ -728,13 +786,14 @@ export function SOPManager({ initialDocuments, role, userName }: SOPManagerProps
 
       setMessages((prev) => [...prev, botMsg]);
     } catch (err: unknown) {
-      const errMsg: AIChatMessage = {
+      const errMsg: ChatMessage = {
         id: `error-${Date.now()}`,
         role: "assistant",
         content: `⚠️ **Error**: ${
           err instanceof Error ? err.message : "An unexpected error occurred while communicating with Gemini."
         }`,
         created_at: new Date().toISOString(),
+        isError: true,
       };
       setMessages((prev) => [...prev, errMsg]);
     } finally {
@@ -749,8 +808,7 @@ export function SOPManager({ initialDocuments, role, userName }: SOPManagerProps
     try {
       const res = await fetch(`/api/sop/${docId}`, { method: "DELETE" });
       if (!res.ok) {
-        const err = await res.json();
-        throw new Error(err.error || "Failed to delete document");
+        throw new Error(await readErrorMessage(res, "Failed to delete document"));
       }
       setDocuments((prev) => prev.filter((d) => d.id !== docId));
     } catch (e) {
@@ -921,6 +979,8 @@ export function SOPManager({ initialDocuments, role, userName }: SOPManagerProps
                             ),
                             th: ({ children }) => <th className="px-3 py-2 font-semibold bg-muted/60 border-b">{children}</th>,
                             td: ({ children }) => <td className="px-3 py-2 border-b border-muted/40">{children}</td>,
+                            // Images in AI answers are rendered normally; links keep the hardened renderer.
+                            a: safeMarkdownComponents.a,
                           }}
                         >
                           {m.content}
@@ -1124,7 +1184,7 @@ export function SOPManager({ initialDocuments, role, userName }: SOPManagerProps
                     <div className="flex items-center justify-between">
                       <span className="flex items-center gap-1">
                         <Clock className="h-3 w-3" />
-                        {new Date(doc.created_at).toLocaleDateString()}
+                        {formatDate(doc.created_at)}
                       </span>
                       {doc.uploaded_by_name && (
                         <span className="flex items-center gap-1">
@@ -1247,7 +1307,7 @@ export function SOPManager({ initialDocuments, role, userName }: SOPManagerProps
                   ref={fileInputRef}
                   type="file"
                   multiple
-                  accept=".docx,.doc,.pdf,.txt,.md,.markdown"
+                  accept=".docx,.pdf,.txt,.md,.markdown"
                   onChange={(e) => {
                     if (e.target.files) {
                       handleFilesAdded(e.target.files);
@@ -1266,7 +1326,8 @@ export function SOPManager({ initialDocuments, role, userName }: SOPManagerProps
                       Click to choose files, or drag & drop multiple files here
                     </p>
                     <p className="text-[11px] text-muted-foreground mt-0.5">
-                      Supports Word (<strong>.docx</strong>), <strong>.pdf</strong>, <strong>.md</strong>, <strong>.txt</strong>
+                      Supports Word (<strong>.docx</strong>), <strong>.pdf</strong>, <strong>.md</strong>, <strong>.txt</strong>.
+                      Legacy <strong>.doc</strong> files must be saved as .docx or PDF first.
                     </p>
                   </div>
                 </div>
@@ -1617,7 +1678,7 @@ export function SOPManager({ initialDocuments, role, userName }: SOPManagerProps
                 <div className="flex items-center gap-2 text-[10px] text-muted-foreground">
                   <span>File: {currentConflictExisting.file_name || "Manual Entry"}</span>
                   <span>•</span>
-                  <span>Updated: {new Date(currentConflictExisting.updated_at).toLocaleDateString()}</span>
+                  <span>Updated: {formatDate(currentConflictExisting.updated_at)}</span>
                 </div>
               </div>
 

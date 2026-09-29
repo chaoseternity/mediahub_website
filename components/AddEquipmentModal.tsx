@@ -22,6 +22,7 @@ import {
 } from "@/components/ui/select";
 import { TagMultiSelect } from "@/components/TagMultiSelect";
 import type { Tag } from "@/lib/types";
+import { readErrorMessage, networkErrorMessage } from "@/lib/fetch-error";
 
 const AddSchema = z.object({
   name: z.string().min(1),
@@ -30,7 +31,7 @@ const AddSchema = z.object({
   serial_number: z.string().optional(),
   condition: z.enum(["Working", "Impaired", "Broken", "Missing", "Retired"]),
   location: z.enum(["Media Room", "Showroom", "Control Room"]),
-  status: z.enum(["Available", "Checked Out", "Unavailable (In Repairs)", "Unavailable (Broken)", "Unavailable (Missing)", "Unavailable (Retired)"]),
+  status: z.enum(["Available", "Unavailable (In Repairs)", "Unavailable (Broken)", "Unavailable (Missing)", "Unavailable (Retired)"]),
 });
 
 type AddFormValues = z.infer<typeof AddSchema>;
@@ -43,11 +44,21 @@ interface AddEquipmentModalProps {
 
 export function AddEquipmentModal({ open, onClose, onCreated }: AddEquipmentModalProps) {
   const [availableTags, setAvailableTags] = useState<string[]>([]);
+  const [submitError, setSubmitError] = useState<string | null>(null);
 
   useEffect(() => {
+    let cancelled = false;
     fetch("/api/tags")
-      .then((r) => r.json())
-      .then((data: Tag[]) => setAvailableTags(data.map((t) => t.name)));
+      .then((r) => (r.ok ? r.json() : []))
+      .then((data: unknown) => {
+        if (!cancelled && Array.isArray(data)) setAvailableTags((data as Tag[]).map((t) => t.name));
+      })
+      .catch(() => {
+        /* tag suggestions are optional */
+      });
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   const {
@@ -103,8 +114,9 @@ export function AddEquipmentModal({ open, onClose, onCreated }: AddEquipmentModa
   // - If condition is Missing: only 'Unavailable (Missing)'
   // - If condition is Retired: only 'Unavailable (Retired)'
   // - If condition is Broken: 'Unavailable (Broken)', 'Unavailable (In Repairs)'
-  // - If condition is Impaired: 'Available', 'Checked Out', 'Unavailable (In Repairs)', 'Unavailable (Missing)'
-  // - If condition is Working: 'Available', 'Checked Out', 'Unavailable (Missing)'
+  // - If condition is Impaired: 'Available', 'Unavailable (In Repairs)', 'Unavailable (Missing)'
+  // - If condition is Working: 'Available', 'Unavailable (Missing)'
+  // ("Checked Out" / "In Event" are derived from checkouts/events and can't be picked.)
   const statusOptions: AddFormValues["status"][] =
     watchedCondition === "Missing"
       ? ["Unavailable (Missing)"]
@@ -113,22 +125,26 @@ export function AddEquipmentModal({ open, onClose, onCreated }: AddEquipmentModa
       : watchedCondition === "Broken"
       ? ["Unavailable (Broken)", "Unavailable (In Repairs)"]
       : watchedCondition === "Impaired"
-      ? ["Available", "Checked Out", "Unavailable (In Repairs)", "Unavailable (Missing)"]
-      : ["Available", "Checked Out", "Unavailable (Missing)"];
+      ? ["Available", "Unavailable (In Repairs)", "Unavailable (Missing)"]
+      : ["Available", "Unavailable (Missing)"];
 
   async function onSubmit(data: AddFormValues) {
-    const res = await fetch("/api/equipment", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(data),
-    });
-    if (res.ok) {
+    setSubmitError(null);
+    try {
+      const res = await fetch("/api/equipment", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(data),
+      });
+      if (!res.ok) {
+        setSubmitError(await readErrorMessage(res, "Failed to create equipment"));
+        return;
+      }
       reset({ condition: "Working", status: "Available", location: "Media Room", tags: [] });
       await onCreated();
       onClose();
-    } else {
-      const json = await res.json();
-      alert(json.error ?? "Failed to create equipment");
+    } catch (err) {
+      setSubmitError(networkErrorMessage(err));
     }
   }
 
@@ -198,6 +214,11 @@ export function AddEquipmentModal({ open, onClose, onCreated }: AddEquipmentModa
               </Select>
             </div>
           </div>
+          {submitError && (
+            <p role="alert" className="text-sm text-destructive">
+              {submitError}
+            </p>
+          )}
           <Button type="submit" disabled={isSubmitting} className="w-full">
             {isSubmitting ? "Creating…" : "Create Equipment"}
           </Button>

@@ -6,6 +6,7 @@ import { ReservationsClient } from "./ReservationsClient";
 export default async function ReservationsPage() {
   const session = await auth();
   if (!session) redirect("/login");
+  if (session.user.role !== "admin") redirect("/dashboard");
 
   const [equipmentList, reservations, currentUser] = await Promise.all([
     getAllEquipment(),

@@ -1,6 +1,8 @@
 import { auth } from "@/lib/auth";
 import { updateUsername } from "@/lib/db";
 import { NextRequest, NextResponse } from "next/server";
+import { validationErrorResponse } from "@/lib/api-errors";
+import { usernameErrorResponse } from "../username-errors";
 import { z } from "zod";
 
 const UsernameSchema = z.object({
@@ -25,7 +27,7 @@ export async function PATCH(req: NextRequest) {
 
   const parsed = UsernameSchema.safeParse(body);
   if (!parsed.success) {
-    return NextResponse.json({ error: parsed.error.flatten() }, { status: 400 });
+    return validationErrorResponse(parsed.error);
   }
 
   const userId = Number(session.user?.id);
@@ -37,7 +39,8 @@ export async function PATCH(req: NextRequest) {
     await updateUsername(userId, parsed.data.username);
     return NextResponse.json({ success: true });
   } catch (err: unknown) {
-    const msg = err instanceof Error ? err.message : "Failed to update profile";
-    return NextResponse.json({ error: msg }, { status: 400 });
+    // Name collisions with another user's username/display name → 409 with the data layer's
+    // message; invalid names → 400; anything unexpected → generic 500.
+    return usernameErrorResponse(err, "Failed to update profile");
   }
 }

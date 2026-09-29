@@ -29,10 +29,37 @@ export const authConfig = {
       clientId: process.env.AZURE_AD_CLIENT_ID!,
       clientSecret: process.env.AZURE_AD_CLIENT_SECRET!,
       issuer: `https://login.microsoftonline.com/${process.env.AZURE_AD_TENANT_ID ?? "common"}/v2.0`,
+      authorization: {
+        params: {
+          scope: "openid profile email User.Read",
+          prompt: "select_account",
+        },
+      },
+      profile(profile) {
+        // Prefer the sign-in name (UPN): its domain must be verified by the tenant,
+        // whereas the `email`/`mail` claims can be set freely by any tenant admin.
+        const email =
+          profile.preferred_username ||
+          (profile as Record<string, any>).upn ||
+          profile.email ||
+          (profile as Record<string, any>).mail ||
+          "";
+        return {
+          id: profile.sub,
+          name: profile.name || profile.preferred_username || email,
+          email: email ? email.toLowerCase() : "",
+          image: null,
+        };
+      },
     }),
     Google({
       clientId: process.env.GOOGLE_CLIENT_ID!,
       clientSecret: process.env.GOOGLE_CLIENT_SECRET!,
+      authorization: {
+        params: {
+          prompt: "select_account",
+        },
+      },
     }),
   ],
   pages: {
@@ -54,6 +81,23 @@ export const authConfig = {
         // Fallback below
       }
       return effectiveBaseUrl;
+    },
+    async jwt({ token, user }) {
+      if (user?.email) {
+        token.email = user.email.toLowerCase();
+        token.name = user.name;
+        if (user.image) token.picture = user.image;
+        token.userId = user.id;
+      }
+      return token;
+    },
+    async session({ session, token }) {
+      if (session.user && token) {
+        session.user.role = (token.role as import("./lib/types").Role) ?? "viewer";
+        session.user.id = (token.userId as string) ?? "";
+        session.user.username = (token.username as string | null) ?? null;
+      }
+      return session;
     },
     authorized({ auth, request: { nextUrl } }) {
       const isLoggedIn = !!auth?.user;

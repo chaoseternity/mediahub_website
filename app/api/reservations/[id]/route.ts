@@ -1,6 +1,12 @@
 import { auth } from "@/lib/auth";
 import { getReservationById, cancelReservation, fulfillReservation } from "@/lib/db";
 import { NextRequest, NextResponse } from "next/server";
+import { z } from "zod";
+import { readJsonBody, resultErrorResponse, toErrorResponse, zodErrorMessage, errorResponse } from "@/lib/api-errors";
+
+const PatchReservationSchema = z.object({
+  action: z.enum(["fulfill"], { error: "Unsupported action." }).optional(),
+});
 
 export async function GET(
   _req: NextRequest,
@@ -10,6 +16,9 @@ export async function GET(
   if (!session?.user) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
+  if (session.user.role !== "admin") {
+    return NextResponse.json({ error: "Forbidden: Reservations are admin-only." }, { status: 403 });
+  }
 
   const { id } = await params;
   const resId = Number(id);
@@ -17,12 +26,15 @@ export async function GET(
     return NextResponse.json({ error: "Invalid reservation ID." }, { status: 400 });
   }
 
-  const reservation = await getReservationById(resId);
-  if (!reservation) {
-    return NextResponse.json({ error: "Reservation not found." }, { status: 404 });
+  try {
+    const reservation = await getReservationById(resId);
+    if (!reservation) {
+      return NextResponse.json({ error: "Reservation not found." }, { status: 404 });
+    }
+    return NextResponse.json(reservation);
+  } catch (err: unknown) {
+    return toErrorResponse(err, "Failed to load reservation.");
   }
-
-  return NextResponse.json(reservation);
 }
 
 export async function DELETE(
@@ -32,6 +44,9 @@ export async function DELETE(
   const session = await auth();
   if (!session?.user) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  }
+  if (session.user.role !== "admin") {
+    return NextResponse.json({ error: "Forbidden: Reservations are admin-only." }, { status: 403 });
   }
 
   const { id } = await params;
@@ -43,12 +58,16 @@ export async function DELETE(
   const userId = Number(session.user.id);
   const isAdmin = session.user.role === "admin";
 
-  const result = await cancelReservation(resId, userId, isAdmin);
-  if (!result.success) {
-    return NextResponse.json({ error: result.error }, { status: 400 });
+  try {
+    const result = await cancelReservation(resId, userId, isAdmin);
+    if (!result.success) {
+      // "Forbidden: ..." → 403, "Reservation not found." → 404, already cancelled/fulfilled → 409.
+      return resultErrorResponse(result.error, "Failed to cancel reservation.");
+    }
+    return NextResponse.json({ success: true });
+  } catch (err: unknown) {
+    return toErrorResponse(err, "Failed to cancel reservation.");
   }
-
-  return NextResponse.json({ success: true });
 }
 
 export async function PATCH(
@@ -59,6 +78,9 @@ export async function PATCH(
   if (!session?.user) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
+  if (session.user.role !== "admin") {
+    return NextResponse.json({ error: "Forbidden: Reservations are admin-only." }, { status: 403 });
+  }
 
   const { id } = await params;
   const resId = Number(id);
@@ -66,15 +88,25 @@ export async function PATCH(
     return NextResponse.json({ error: "Invalid reservation ID." }, { status: 400 });
   }
 
-  const body = await req.json().catch(() => ({}));
-  const action = body.action || "fulfill";
+  const body = await readJsonBody(req, { allowEmpty: true });
+  if (!body.ok) return body.response;
+  const parsed = PatchReservationSchema.safeParse(body.data);
+  if (!parsed.success) {
+    return errorResponse(400, zodErrorMessage(parsed.error));
+  }
+  const action = parsed.data.action ?? "fulfill";
 
   if (action === "fulfill") {
-    const result = await fulfillReservation(resId);
-    if (!result.success) {
-      return NextResponse.json({ error: result.error }, { status: 400 });
+    try {
+      const result = await fulfillReservation(resId);
+      if (!result.success) {
+        // Includes checkout failures such as "Equipment is not available for checkout (...)" → 409.
+        return resultErrorResponse(result.error, "Failed to fulfil reservation.");
+      }
+      return NextResponse.json({ success: true, checkout: result.checkout });
+    } catch (err: unknown) {
+      return toErrorResponse(err, "Failed to fulfil reservation.");
     }
-    return NextResponse.json({ success: true, checkout: result.checkout });
   }
 
   return NextResponse.json({ error: "Unsupported action." }, { status: 400 });

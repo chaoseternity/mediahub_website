@@ -2,6 +2,7 @@ import { auth } from "@/lib/auth";
 import { getAllEvents, createEvent, getUserByEmail } from "@/lib/db";
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
+import { toErrorResponse, validationErrorResponse } from "@/lib/api-errors";
 
 const CreateEventSchema = z
   .object({
@@ -35,19 +36,23 @@ const CreateEventSchema = z
     av_ic_ids: z.array(z.number().int().positive()).max(20).optional().default([]),
   })
   .refine(
-    (data) => new Date(data.end_time).getTime() >= new Date(data.start_time).getTime(),
+    (data) => new Date(data.end_time).getTime() > new Date(data.start_time).getTime(),
     {
-      message: "Event end time cannot be earlier than start time",
+      message: "Event end time must be after the start time",
       path: ["end_time"],
     }
   )
+  .refine((data) => !data.has_rehearsal || Boolean(data.rehearsal_start_time && data.rehearsal_end_time), {
+    message: "Rehearsal start and end times are required when the event has a rehearsal",
+    path: ["rehearsal_start_time"],
+  })
   .refine(
     (data) => {
       if (!data.has_rehearsal || !data.rehearsal_start_time || !data.rehearsal_end_time) return true;
-      return new Date(data.rehearsal_end_time).getTime() >= new Date(data.rehearsal_start_time).getTime();
+      return new Date(data.rehearsal_end_time).getTime() > new Date(data.rehearsal_start_time).getTime();
     },
     {
-      message: "Rehearsal end time cannot be earlier than rehearsal start time",
+      message: "Rehearsal end time must be after the rehearsal start time",
       path: ["rehearsal_end_time"],
     }
   );
@@ -56,8 +61,12 @@ export async function GET() {
   const session = await auth();
   if (!session) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
-  const events = await getAllEvents();
-  return NextResponse.json(events);
+  try {
+    const events = await getAllEvents();
+    return NextResponse.json(events);
+  } catch (err: unknown) {
+    return toErrorResponse(err, "Failed to load events");
+  }
 }
 
 export async function POST(req: NextRequest) {
@@ -77,11 +86,10 @@ export async function POST(req: NextRequest) {
 
   const parsed = CreateEventSchema.safeParse(body);
   if (!parsed.success) {
-    return NextResponse.json({ error: parsed.error.flatten() }, { status: 400 });
+    return validationErrorResponse(parsed.error);
   }
 
   try {
-
     const currentUser = await getUserByEmail(session.user.email!);
     const newEvent = await createEvent({
       name: parsed.data.name,
@@ -101,7 +109,6 @@ export async function POST(req: NextRequest) {
 
     return NextResponse.json(newEvent, { status: 201 });
   } catch (err: unknown) {
-    const msg = err instanceof Error ? err.message : "Failed to create event";
-    return NextResponse.json({ error: msg }, { status: 400 });
+    return toErrorResponse(err, "Failed to create event");
   }
 }

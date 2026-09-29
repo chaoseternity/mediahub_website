@@ -1,6 +1,7 @@
 import { auth } from "@/lib/auth";
 import { removeTagFromEquipment } from "@/lib/db";
 import { NextRequest, NextResponse } from "next/server";
+import { resultErrorResponse, toErrorResponse } from "@/lib/api-errors";
 
 export async function DELETE(
   _req: NextRequest,
@@ -20,11 +21,9 @@ export async function DELETE(
 
   try {
     const result = await removeTagFromEquipment(eqId, tagId);
-    if (!result.success)
-      return NextResponse.json({ error: result.error }, { status: 409 });
+    if (!result.success) return resultErrorResponse(result.error, "Failed to remove tag from equipment", 409);
     return NextResponse.json({ success: true });
   } catch (err: unknown) {
-    const msg = err instanceof Error ? err.message : "Failed to remove tag from equipment";
-    return NextResponse.json({ error: msg }, { status: 500 });
+    return toErrorResponse(err, "Failed to remove tag from equipment");
   }
 }

@@ -10,7 +10,6 @@ import {
   XCircle,
   Clock,
   Package,
-  Search,
   Radio,
   Sparkles,
   ArrowDownLeft,
@@ -41,14 +40,19 @@ import {
   processSyncQueue,
   getCachedCards,
   setCachedCards,
-  getCachedEquipment,
   setCachedEquipment,
   getCachedMemberData,
   setCachedMemberData,
   applyOptimisticCheckout,
   applyOptimisticReturn,
   applyOptimisticCardRegistration,
+  setOfflineUser,
+  getRejectedActions,
+  acknowledgeRejectedActions,
+  sendLiveRequest,
   type QueuedAction,
+  type RejectedAction,
+  type SyncResult,
 } from "@/lib/offlineSync";
 import {
   Card,
@@ -67,6 +71,7 @@ import {
 } from "@/components/ui/dialog";
 import type { Equipment, NFCCard, NFCMemberData, NFCCheckoutItem, Role } from "@/lib/types";
 import { cn } from "@/lib/utils";
+import { formatDate, formatDateTime } from "@/lib/timezone";
 
 // Web Audio API Synthesizer
 function playSound(type: "success" | "warning" | "error" | "scan" | "return") {
@@ -157,14 +162,27 @@ interface NFCStationClientProps {
   initialCards: NFCCard[];
   currentRole: Role;
   currentUserName: string;
+  /** Logged-in station account. The offline queue, rejections and member cache are scoped to it. */
+  currentUserId: string;
 }
 
 type StationMode = "awaiting_nfc" | "card_active";
 type ScanPopupMode = "checkout" | "return" | null;
+type SyncTrigger = "auto" | "manual" | "before-action";
+
+/** Periodic retry of queued offline actions while online. */
+const AUTO_SYNC_INTERVAL_MS = 45_000;
+/** Keystrokes closer together than this belong to the same scanner burst. */
+const SCAN_BURST_GAP_MS = 100;
+
+function formatActionTime(ms: number): string {
+  return formatDateTime(ms, "unknown time");
+}
 
 export function NFCStationClient({
   allEquipment: initialEquipment,
   initialCards,
+  currentUserId,
 }: NFCStationClientProps) {
   const [equipmentList, setEquipmentList] = useState<Equipment[]>(initialEquipment);
   const [cardsList, setCardsList] = useState<NFCCard[]>(initialCards);
@@ -182,7 +200,13 @@ export function NFCStationClient({
   // Inputs & Scanning
   const [nfcInput, setNfcInput] = useState("");
   const [popupBarcode, setPopupBarcode] = useState("");
-  const [isProcessing, setIsProcessing] = useState(false);
+  const [isProcessing, setIsProcessingState] = useState(false);
+  // Mirrored in a ref so the sync engine can synchronously see a live request in flight.
+  const isProcessingRef = useRef(false);
+  const setIsProcessing = useCallback((value: boolean) => {
+    isProcessingRef.current = value;
+    setIsProcessingState(value);
+  }, []);
 
   // Status banners
   const [statusMessage, setStatusMessage] = useState<{
@@ -221,8 +245,25 @@ export function NFCStationClient({
   const [isSyncing, setIsSyncing] = useState(false);
   const [isOfflineQueueOpen, setIsOfflineQueueOpen] = useState(false);
   const [offlineQueueList, setOfflineQueueList] = useState<QueuedAction[]>([]);
+  // While true the whole station is locked (overlay + all input ignored).
+  const isSyncingRef = useRef(false);
+  const [syncProgress, setSyncProgress] = useState<{
+    processed: number;
+    total: number;
+    current?: string;
+  } | null>(null);
+  // Offline actions the server refused; shown until acknowledged (persisted in storage).
+  const [rejectedActions, setRejectedActions] = useState<RejectedAction[]>([]);
+  const rejectedOpenRef = useRef(false);
+  rejectedOpenRef.current = rejectedActions.length > 0;
 
   useEffect(() => {
+    // 0. Scope the offline queue / rejections / member cache to this station account
+    //    (migrates a legacy un-scoped queue on first load). Must run before reading them.
+    setOfflineUser(currentUserId);
+    setRejectedActions(getRejectedActions());
+    const updateRejected = () => setRejectedActions(getRejectedActions());
+
     // 1. Hydrate offline cache with initial server data
     if (initialEquipment && initialEquipment.length > 0) {
       setCachedEquipment(initialEquipment);
@@ -256,10 +297,8 @@ export function NFCStationClient({
       setDeferredPrompt(e);
     };
 
-    const handleOnline = () => {
-      setIsOnlineState(true);
-      void runAutoSync();
-    };
+    // (Coming back online triggers a sync from the auto-sync effect below.)
+    const handleOnline = () => setIsOnlineState(true);
 
     const handleOffline = () => {
       setIsOnlineState(false);
@@ -275,6 +314,7 @@ export function NFCStationClient({
     window.addEventListener("online", handleOnline);
     window.addEventListener("offline", handleOffline);
     window.addEventListener("mediahub-offline-queue-changed", updateQueue);
+    window.addEventListener("mediahub-offline-rejections-changed", updateRejected);
 
     return () => {
       window.removeEventListener("beforeinstallprompt", handleBeforeInstall);
@@ -282,8 +322,9 @@ export function NFCStationClient({
       window.removeEventListener("online", handleOnline);
       window.removeEventListener("offline", handleOffline);
       window.removeEventListener("mediahub-offline-queue-changed", updateQueue);
+      window.removeEventListener("mediahub-offline-rejections-changed", updateRejected);
     };
-  }, [initialEquipment, initialCards]);
+  }, [initialEquipment, initialCards, currentUserId]);
 
   async function handleInstallApp() {
     if (deferredPrompt) {
@@ -310,12 +351,13 @@ export function NFCStationClient({
 
   // Auto focus appropriate input
   useEffect(() => {
+    if (isSyncing) return; // inputs are disabled while the station is locked
     if (popupMode !== null) {
       popupInputRef.current?.focus();
     } else if (stationMode === "awaiting_nfc") {
       nfcInputRef.current?.focus();
     }
-  }, [popupMode, stationMode, collisionPrompt, unregisteredCard]);
+  }, [popupMode, stationMode, collisionPrompt, unregisteredCard, isSyncing]);
 
   // Keep references for event listener
   const cardDataRef = useRef(cardData);
@@ -376,6 +418,7 @@ export function NFCStationClient({
       const res = await fetch("/api/equipment");
       if (res.ok) {
         const data = await res.json();
+        if (!Array.isArray(data)) return;
         setEquipmentList(data);
         setCachedEquipment(data);
       }
@@ -390,6 +433,7 @@ export function NFCStationClient({
       const res = await fetch("/api/nfc/cards");
       if (res.ok) {
         const data = await res.json();
+        if (!Array.isArray(data)) return;
         setCardsList(data);
         setCachedCards(data);
       }
@@ -398,42 +442,190 @@ export function NFCStationClient({
     }
   }, []);
 
-  // Background auto-sync for pending offline transactions
-  const runAutoSync = useCallback(async () => {
-    const q = getOfflineQueue();
-    if (q.length === 0) return;
+  // Replays queued offline actions. While replaying, the whole station is locked: a
+  // full-screen overlay covers it, every handler bails out and all keyboard / NFC reader
+  // input is swallowed (not buffered). The lock is taken synchronously in `canStart`
+  // (right before the first replay request) and always released in `finally`; every
+  // replay request has a timeout, so the lock cannot get stuck.
+  const runSync = useCallback(
+    async (trigger: SyncTrigger): Promise<SyncResult | null> => {
+      if (isSyncingRef.current) return null;
+      if (getOfflineQueue().length === 0) return null;
 
-    setIsSyncing(true);
-    try {
-      const result = await processSyncQueue();
-      if (result.success > 0) {
-        playSound("success");
-        setStatusMessage({
-          text: `[Reconnected] Synchronized ${result.success} offline transaction(s) to the database!`,
-          type: "success",
+      let locked = false;
+      let result: SyncResult | null = null;
+      try {
+        result = await processSyncQueue(undefined, {
+          canStart: () => {
+            // Automatic retries never interrupt an operator mid-flow; they try again later.
+            if (
+              trigger === "auto" &&
+              (isProcessingRef.current ||
+                popupModeRef.current !== null ||
+                unregisteredCardRef.current !== null ||
+                collisionPromptRef.current !== null)
+            ) {
+              return false;
+            }
+            if (trigger === "manual" && isProcessingRef.current) return false;
+            locked = true;
+            isSyncingRef.current = true;
+            setIsSyncing(true);
+            setSyncProgress({ processed: 0, total: getOfflineQueue().length });
+            if (typeof document !== "undefined" && document.activeElement instanceof HTMLElement) {
+              document.activeElement.blur();
+            }
+            return true;
+          },
         });
-        await refreshEquipmentList();
-        await refreshCardsList();
-        if (cardDataRef.current) {
-          await refreshCardData(cardDataRef.current.card.nfc_value);
+      } catch (err) {
+        console.error("Offline sync failed unexpectedly:", err);
+      } finally {
+        if (locked) {
+          isSyncingRef.current = false;
+          setIsSyncing(false);
+          setSyncProgress(null);
         }
-      } else if (result.failed > 0) {
-        setStatusMessage({
-          text: `Could not sync ${result.failed} offline item(s). Network may still be unstable. Will retry automatically.`,
-          type: "warning",
-        });
+        const updated = getOfflineQueue();
+        setOfflineQueueList(updated);
+        setPendingOfflineCount(updated.length);
       }
-    } finally {
-      setIsSyncing(false);
-      const updated = getOfflineQueue();
-      setOfflineQueueList(updated);
-      setPendingOfflineCount(updated.length);
+
+      if (!result) return null;
+      const rejectedCount = result.rejected.length;
+      const remaining = result.remaining;
+
+      if (result.success > 0 || rejectedCount > 0) {
+        // Server state is the truth now; refresh after unlocking (never inside the lock).
+        void refreshEquipmentList();
+        void refreshCardsList();
+        if (cardDataRef.current) void refreshCardData(cardDataRef.current.card.nfc_value);
+      }
+      if (rejectedCount > 0) {
+        playSound("error");
+        setRejectedActions(getRejectedActions());
+      } else if (result.success > 0) {
+        playSound("success");
+      }
+
+      const rejectedNote =
+        rejectedCount > 0 ? ` ${rejectedCount} action(s) were rejected — see the popup.` : "";
+      const syncedNote =
+        result.success > 0 ? `Synced ${result.success} offline action(s) to the database.` : "";
+
+      switch (result.stoppedReason) {
+        case null:
+          if (result.success > 0 || rejectedCount > 0) {
+            setStatusMessage({
+              text: `${syncedNote || "Offline sync finished."}${rejectedNote}`,
+              type: rejectedCount > 0 ? "warning" : "success",
+            });
+          }
+          break;
+        case "auth":
+          setStatusMessage({
+            text: `${syncedNote} Station session expired or not authorised (${result.stopMessage ?? "sign-in required"}). Sign in again to sync the remaining ${remaining} queued action(s).${rejectedNote}`.trim(),
+            type: "error",
+          });
+          break;
+        case "server":
+          if (trigger !== "auto" || result.success > 0 || rejectedCount > 0) {
+            setStatusMessage({
+              text: `${syncedNote} Server error while syncing (${result.stopMessage ?? "unknown error"}). ${remaining} action(s) kept on this device — retrying automatically.${rejectedNote}`.trim(),
+              type: "warning",
+            });
+          }
+          break;
+        case "offline":
+        case "network":
+          if (trigger !== "auto" || result.success > 0 || rejectedCount > 0) {
+            setStatusMessage({
+              text: `${syncedNote} Network unavailable (${result.stopMessage ?? "offline"}). ${remaining} action(s) kept on this device — will sync automatically when the connection is back.${rejectedNote}`.trim(),
+              type: "warning",
+            });
+          }
+          break;
+        case "busy":
+          if (trigger === "manual") {
+            setStatusMessage({
+              text: "A sync is already running (possibly in another window). Please wait a moment.",
+              type: "info",
+            });
+          }
+          break;
+      }
+      return result;
+    },
+    [refreshEquipmentList, refreshCardsList, refreshCardData]
+  );
+
+  // Auto-retry queued actions: on load, when the network comes back, when the page
+  // becomes visible again, and every ~45s while online.
+  useEffect(() => {
+    const trigger = () => {
+      if (isOnline() && getOfflineQueue().length > 0) void runSync("auto");
+    };
+    const onVisibility = () => {
+      if (document.visibilityState === "visible") trigger();
+    };
+    window.addEventListener("online", trigger);
+    document.addEventListener("visibilitychange", onVisibility);
+    const interval = window.setInterval(trigger, AUTO_SYNC_INTERVAL_MS);
+    trigger();
+    return () => {
+      window.removeEventListener("online", trigger);
+      document.removeEventListener("visibilitychange", onVisibility);
+      window.clearInterval(interval);
+    };
+  }, [runSync]);
+
+  // Live replay progress for the lock overlay.
+  useEffect(() => {
+    const onStatus = (e: Event) => {
+      const detail = (e as CustomEvent).detail as
+        | { isSyncing?: boolean; processed?: number; total?: number; currentDescription?: string }
+        | undefined;
+      if (!isSyncingRef.current || !detail?.isSyncing) return;
+      setSyncProgress({
+        processed: detail.processed ?? 0,
+        total: detail.total ?? 0,
+        current: detail.currentDescription,
+      });
+    };
+    window.addEventListener("mediahub-sync-status-changed", onStatus);
+    return () => window.removeEventListener("mediahub-sync-status-changed", onStatus);
+  }, []);
+
+  // Station lock: while syncing, swallow ALL keyboard input (typing, Enter, Escape and
+  // keyboard-wedge NFC/barcode scans) before anything else sees it. Scans are dropped,
+  // not buffered; a scanner burst that straddles the unlock is dropped entirely.
+  useEffect(() => {
+    let lastBlockedAt = 0;
+    function blockWhileSyncing(e: KeyboardEvent) {
+      const now = Date.now();
+      if (isSyncingRef.current || now - lastBlockedAt < SCAN_BURST_GAP_MS) {
+        lastBlockedAt = now;
+        e.preventDefault();
+        e.stopImmediatePropagation();
+      }
     }
-  }, [refreshEquipmentList, refreshCardsList, refreshCardData]);
+    window.addEventListener("keydown", blockWhileSyncing, true);
+    return () => window.removeEventListener("keydown", blockWhileSyncing, true);
+  }, []);
+
+  /** Wraps a dialog's onOpenChange so no dialog opens or closes while the station is locked. */
+  const lockedOpenChange = useCallback(
+    (handler: (open: boolean) => void) => (open: boolean) => {
+      if (isSyncingRef.current) return;
+      handler(open);
+    },
+    []
+  );
 
   // 1. NFC CARD RECOGNITION HANDLER (WITH OFFLINE CACHE FALLBACK)
   const handleNfcScanned = useCallback(
     async (rawCardValue: string) => {
+      if (isSyncingRef.current) return; // station locked while syncing
       const val = rawCardValue.trim();
       if (!val) return;
 
@@ -441,8 +633,8 @@ export function NFCStationClient({
       setStatusMessage({ text: `Recognizing NFC card: ${val}...`, type: "info" });
       playSound("scan");
 
-      // Direct offline mode check
-      if (typeof navigator !== "undefined" && !navigator.onLine) {
+      // Offline fallback: recognise the card from this station's local cache.
+      const recognizeFromCache = () => {
         const cachedMember = getCachedMemberData(val);
         if (cachedMember) {
           setCardData(cachedMember);
@@ -453,12 +645,12 @@ export function NFCStationClient({
             type: "info",
           });
           playSound("success");
-          setIsProcessing(false);
           return;
         }
 
-        const cachedCards = getCachedCards();
-        const foundCard = cachedCards.find((c) => c.nfc_value.toLowerCase() === val.toLowerCase());
+        const foundCard = getCachedCards().find(
+          (c) => c.nfc_value.toLowerCase() === val.toLowerCase()
+        );
         if (foundCard) {
           const memberObj: NFCMemberData = {
             card: foundCard,
@@ -474,7 +666,6 @@ export function NFCStationClient({
             type: "info",
           });
           playSound("success");
-          setIsProcessing(false);
           return;
         }
 
@@ -487,14 +678,26 @@ export function NFCStationClient({
           text: `[Offline Mode] NFC Card "${val}" not recognized. Register it below.`,
           type: "warning",
         });
-        setIsProcessing(false);
-        return;
-      }
+      };
 
       try {
-        const res = await fetch(`/api/nfc?nfc_value=${encodeURIComponent(val)}`);
-        const json = await res.json();
+        const result = await sendLiveRequest(`/api/nfc?nfc_value=${encodeURIComponent(val)}`);
 
+        if (result.kind === "offline") {
+          // Only a genuine network failure falls back to the offline cache.
+          recognizeFromCache();
+          return;
+        }
+        if (result.kind === "error") {
+          playSound("error");
+          setStatusMessage({
+            text: `Could not look up NFC card "${val}": ${result.message}`,
+            type: "error",
+          });
+          return;
+        }
+
+        const json = result.data;
         if (json.found) {
           const memberObj: NFCMemberData = {
             card: json.card,
@@ -520,56 +723,16 @@ export function NFCStationClient({
             type: "warning",
           });
         }
-      } catch {
-        // Network drop during request -> fallback to local offline cache
-        const cachedMember = getCachedMemberData(val);
-        if (cachedMember) {
-          setCardData(cachedMember);
-          setStationMode("card_active");
-          setNfcInput("");
-          setStatusMessage({
-            text: `[Offline Mode] Recognized Card: ${cachedMember.card.member_name} (${cachedMember.card.nfc_value})`,
-            type: "info",
-          });
-          playSound("success");
-        } else {
-          const cachedCards = getCachedCards();
-          const foundCard = cachedCards.find((c) => c.nfc_value.toLowerCase() === val.toLowerCase());
-          if (foundCard) {
-            const memberObj: NFCMemberData = {
-              card: foundCard,
-              activeCheckouts: [],
-              history: [],
-            };
-            setCardData(memberObj);
-            setCachedMemberData(val, memberObj);
-            setStationMode("card_active");
-            setNfcInput("");
-            setStatusMessage({
-              text: `[Offline Mode] Recognized Card: ${foundCard.member_name}`,
-              type: "info",
-            });
-            playSound("success");
-          } else {
-            playSound("error");
-            setUnregisteredCard(val);
-            setNewMemberName("");
-            setNewCardNotes("");
-            setStatusMessage({
-              text: `[Offline Mode] NFC Card "${val}" not recognized. Register it below.`,
-              type: "warning",
-            });
-          }
-        }
       } finally {
         setIsProcessing(false);
       }
     },
-    []
+    [setIsProcessing]
   );
 
   // 2. OPEN SCANNING POPUP PAGE
   function openPopup(mode: "checkout" | "return") {
+    if (isSyncingRef.current) return;
     setPopupMode(mode);
     setStagedItems([]);
     setPopupBarcode("");
@@ -578,6 +741,7 @@ export function NFCStationClient({
   }
 
   function closePopup() {
+    if (isSyncingRef.current) return;
     setPopupMode(null);
     setStagedItems([]);
     setPopupBarcode("");
@@ -587,6 +751,7 @@ export function NFCStationClient({
   // 3. BARCODE SCANNED INSIDE POPUP (Appears One-by-One)
   const handleBarcodeInPopup = useCallback(
     (rawBarcode: string) => {
+      if (isSyncingRef.current) return; // station locked while syncing
       const code = rawBarcode.trim();
       if (!code || !cardDataRef.current) return;
       setPopupBarcode("");
@@ -677,65 +842,49 @@ export function NFCStationClient({
 
   // 4. CONFIRM / FINISH STAGED ITEMS (BATCH SUBMIT)
   async function handleFinishBatch() {
+    if (isSyncingRef.current) return;
     if (!cardData || stagedItems.length === 0 || !popupMode) return;
     setIsProcessing(true);
 
+    const mode = popupMode;
     const equipmentIds = stagedItems.map((e) => e.id);
+    const equipmentNames = stagedItems.map((e) => e.name);
     const nfcVal = cardData.card.nfc_value;
     const memberName = cardData.card.member_name;
     const count = stagedItems.length;
 
-    // Helper: Execute offline fallback for batch checkout
-    const applyOfflineCheckout = () => {
+    // Offline fallback (genuine network failure only): queue + optimistic local update.
+    const applyOffline = (occurredAt?: number) => {
       enqueueOfflineAction({
-        type: "checkout",
+        type: mode,
         payload: {
           nfc_value: nfcVal,
           equipment_ids: equipmentIds,
         },
-        description: `Checkout ${count} item(s) to ${memberName}`,
+        description:
+          mode === "checkout"
+            ? `Checkout ${count} item(s) to ${memberName}`
+            : `Return ${count} item(s) from ${memberName}`,
+        nfcValue: nfcVal,
+        memberName,
+        equipmentNames,
+        occurredAt,
       });
 
-      const { updatedEquipment, updatedCardData } = applyOptimisticCheckout(
-        equipmentList,
-        cardData,
-        equipmentIds
-      );
+      const { updatedEquipment, updatedCardData } =
+        mode === "checkout"
+          ? applyOptimisticCheckout(equipmentList, cardData, equipmentIds)
+          : applyOptimisticReturn(equipmentList, cardData, equipmentIds);
       setEquipmentList(updatedEquipment);
       setCardData(updatedCardData);
       setPendingOfflineCount(getOfflineQueue().length);
 
-      playSound("success");
+      playSound(mode === "checkout" ? "success" : "return");
       setStatusMessage({
-        text: `[Offline Mode] Checked out ${count} item(s) to ${memberName}. Stored locally — will sync automatically when WiFi reconnects.`,
-        type: "success",
-      });
-      closePopup();
-    };
-
-    // Helper: Execute offline fallback for batch return
-    const applyOfflineReturn = () => {
-      enqueueOfflineAction({
-        type: "return",
-        payload: {
-          nfc_value: nfcVal,
-          equipment_ids: equipmentIds,
-        },
-        description: `Return ${count} item(s) from ${memberName}`,
-      });
-
-      const { updatedEquipment, updatedCardData } = applyOptimisticReturn(
-        equipmentList,
-        cardData,
-        equipmentIds
-      );
-      setEquipmentList(updatedEquipment);
-      setCardData(updatedCardData);
-      setPendingOfflineCount(getOfflineQueue().length);
-
-      playSound("return");
-      setStatusMessage({
-        text: `[Offline Mode] Returned ${count} item(s) from ${memberName}. Stored locally — will sync automatically when WiFi reconnects.`,
+        text:
+          mode === "checkout"
+            ? `[Offline Mode] Checked out ${count} item(s) to ${memberName}. Stored locally — will sync automatically when WiFi reconnects.`
+            : `[Offline Mode] Returned ${count} item(s) from ${memberName}. Stored locally — will sync automatically when WiFi reconnects.`,
         type: "success",
       });
       closePopup();
@@ -744,85 +893,75 @@ export function NFCStationClient({
     try {
       // If client is already offline, save locally without waiting for fetch timeout
       if (!isOnline()) {
-        if (popupMode === "checkout") {
-          applyOfflineCheckout();
-        } else {
-          applyOfflineReturn();
-        }
+        applyOffline();
         return;
       }
 
-      if (popupMode === "checkout") {
-        const res = await fetch("/api/nfc/checkout", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            nfc_value: nfcVal,
-            equipment_ids: equipmentIds,
-          }),
-        });
-
-        const json = await res.json();
-        if (res.ok) {
-          playSound("success");
-          setStatusMessage({
-            text: `Successfully checked out ${count} item(s) to ${memberName}!`,
-            type: "success",
-          });
-          closePopup();
-          await refreshCardData(nfcVal);
-          await refreshEquipmentList();
-        } else {
-          playSound("error");
-          setPopupMessage({ text: json.error || "Batch checkout failed.", type: "error" });
-        }
-      } else if (popupMode === "return") {
-        const res = await fetch("/api/nfc/return", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            nfc_value: nfcVal,
-            equipment_ids: equipmentIds,
-          }),
-        });
-
-        const json = await res.json();
-        if (res.ok) {
-          playSound("return");
-          setStatusMessage({
-            text: `Successfully returned ${count} item(s) from ${memberName}!`,
-            type: "success",
-          });
-          closePopup();
-          await refreshCardData(nfcVal);
-          await refreshEquipmentList();
-        } else {
-          playSound("error");
-          setPopupMessage({ text: json.error || "Batch return failed.", type: "error" });
-        }
+      // Keep server-side order: deliver earlier offline actions before this live one.
+      if (getOfflineQueue().length > 0) {
+        await runSync("before-action");
       }
-    } catch {
-      // Network cut out mid-request — seamlessly store locally
-      if (popupMode === "checkout") {
-        applyOfflineCheckout();
-      } else {
-        applyOfflineReturn();
+
+      const startedAt = Date.now();
+      const result = await sendLiveRequest(
+        mode === "checkout" ? "/api/nfc/checkout" : "/api/nfc/return",
+        { body: { nfc_value: nfcVal, equipment_ids: equipmentIds } }
+      );
+
+      if (result.kind === "offline") {
+        // Network cut out mid-request — store locally with the time it was attempted.
+        applyOffline(startedAt);
+        return;
       }
+      if (result.kind === "error") {
+        // Server answered (4xx/5xx/non-JSON): show it, never queue it.
+        playSound("error");
+        setPopupMessage({
+          text: `${mode === "checkout" ? "Batch checkout" : "Batch return"} failed: ${result.message}${
+            result.status >= 500 ? " Nothing was saved — please try again." : ""
+          }`,
+          type: "error",
+        });
+        return;
+      }
+
+      playSound(mode === "checkout" ? "success" : "return");
+      setStatusMessage({
+        text:
+          mode === "checkout"
+            ? `Successfully checked out ${count} item(s) to ${memberName}!`
+            : `Successfully returned ${count} item(s) from ${memberName}!`,
+        type: "success",
+      });
+      closePopup();
+      await refreshCardData(nfcVal);
+      await refreshEquipmentList();
     } finally {
       setIsProcessing(false);
     }
   }
 
   // 5. GLOBAL KEYSTROKE SCANNER LISTENER (USB/Bluetooth HID)
+  // (While syncing, the capture-phase station lock above swallows every key first.)
   useEffect(() => {
     let buffer = "";
     let lastKeyTime = Date.now();
 
     function onKeyDown(e: KeyboardEvent) {
-      if (unregisteredCardRef.current !== null || collisionPromptRef.current !== null) return;
+      if (isSyncingRef.current) {
+        buffer = "";
+        return;
+      }
+      if (
+        unregisteredCardRef.current !== null ||
+        collisionPromptRef.current !== null ||
+        rejectedOpenRef.current
+      ) {
+        return;
+      }
 
       const now = Date.now();
-      if (now - lastKeyTime > 100) {
+      if (now - lastKeyTime > SCAN_BURST_GAP_MS) {
         buffer = "";
       }
       lastKeyTime = now;
@@ -850,6 +989,7 @@ export function NFCStationClient({
 
   // Register New NFC Card (Independent from User Accounts)
   async function handleRegisterCard() {
+    if (isSyncingRef.current) return;
     if (!unregisteredCard || !newMemberName.trim()) return;
     setIsProcessing(true);
 
@@ -857,7 +997,7 @@ export function NFCStationClient({
     const rawName = newMemberName.trim();
     const rawNotes = newCardNotes.trim() || undefined;
 
-    const applyOfflineRegistration = async () => {
+    const applyOfflineRegistration = async (occurredAt?: number) => {
       const newCard: NFCCard = {
         id: Date.now(),
         nfc_value: rawNfc,
@@ -874,6 +1014,9 @@ export function NFCStationClient({
           notes: rawNotes,
         },
         description: `Register card "${rawName}" (${rawNfc})`,
+        nfcValue: rawNfc,
+        memberName: rawName,
+        occurredAt,
       });
 
       const updated = applyOptimisticCardRegistration(cardsList, newCard);
@@ -897,36 +1040,43 @@ export function NFCStationClient({
         return;
       }
 
-      const res = await fetch("/api/nfc/card", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
+      const startedAt = Date.now();
+      const result = await sendLiveRequest("/api/nfc/card", {
+        body: {
           nfc_value: rawNfc,
           member_name: rawName,
           notes: rawNotes,
-        }),
+        },
       });
 
-      const json = await res.json();
-      if (res.ok) {
-        playSound("success");
-        await refreshCardsList();
-        setUnregisteredCard(null);
-        setNewMemberName("");
-        setNewCardNotes("");
-        await handleNfcScanned(rawNfc);
-      } else {
-        playSound("error");
-        setStatusMessage({ text: json.error || "Failed to register card.", type: "error" });
+      if (result.kind === "offline") {
+        await applyOfflineRegistration(startedAt);
+        return;
       }
-    } catch {
-      await applyOfflineRegistration();
+      if (result.kind === "error") {
+        playSound("error");
+        setStatusMessage({
+          text: `Failed to register card: ${result.message}${
+            result.status >= 500 ? " Nothing was saved — please try again." : ""
+          }`,
+          type: "error",
+        });
+        return;
+      }
+
+      playSound("success");
+      await refreshCardsList();
+      setUnregisteredCard(null);
+      setNewMemberName("");
+      setNewCardNotes("");
+      await handleNfcScanned(rawNfc);
     } finally {
       setIsProcessing(false);
     }
   }
 
   function handleSwitchCard() {
+    if (isSyncingRef.current) return;
     playSound("scan");
     setCardData(null);
     setStationMode("awaiting_nfc");
@@ -937,9 +1087,93 @@ export function NFCStationClient({
   }
 
   function removeItemFromStaged(id: number) {
+    if (isSyncingRef.current) return;
     playSound("scan");
     setStagedItems((prev) => prev.filter((e) => e.id !== id));
   }
+
+  // Single-item return from the "already checked out" collision prompt.
+  async function handleCollisionReturn() {
+    if (isSyncingRef.current) return;
+    if (!collisionPrompt || !cardData) return;
+    const eq = collisionPrompt.equipment;
+    const nfcVal = cardData.card.nfc_value;
+    const memberName = cardData.card.member_name;
+    setCollisionPrompt(null);
+    setIsProcessing(true);
+
+    const applyOfflineReturnSingle = (occurredAt?: number) => {
+      enqueueOfflineAction({
+        type: "return",
+        payload: {
+          equipment_id: eq.id,
+          nfc_value: nfcVal,
+        },
+        description: `Return single item "${eq.name}" from ${memberName}`,
+        nfcValue: nfcVal,
+        memberName,
+        equipmentNames: [eq.name],
+        occurredAt,
+      });
+      const { updatedEquipment, updatedCardData } = applyOptimisticReturn(
+        equipmentList,
+        cardData,
+        [eq.id]
+      );
+      setEquipmentList(updatedEquipment);
+      setCardData(updatedCardData);
+      setPendingOfflineCount(getOfflineQueue().length);
+      playSound("return");
+      setPopupMessage({
+        text: `[Offline Mode] Returned "${eq.name}" locally. Will sync when WiFi reconnects.`,
+        type: "success",
+      });
+    };
+
+    try {
+      if (!isOnline()) {
+        applyOfflineReturnSingle();
+        return;
+      }
+
+      // Keep server-side order: deliver earlier offline actions before this live one.
+      if (getOfflineQueue().length > 0) {
+        await runSync("before-action");
+      }
+
+      const startedAt = Date.now();
+      const result = await sendLiveRequest("/api/nfc/return", {
+        body: { equipment_id: eq.id, nfc_value: nfcVal },
+      });
+      if (result.kind === "offline") {
+        applyOfflineReturnSingle(startedAt);
+        return;
+      }
+      if (result.kind === "error") {
+        playSound("error");
+        setPopupMessage({
+          text: `Could not return "${eq.name}": ${result.message}${
+            result.status >= 500 ? " Nothing was saved — please try again." : ""
+          }`,
+          type: "error",
+        });
+        return;
+      }
+
+      playSound("return");
+      setPopupMessage({
+        text: `Successfully returned "${eq.name}"!`,
+        type: "success",
+      });
+      await refreshCardData(nfcVal);
+      await refreshEquipmentList();
+    } finally {
+      setIsProcessing(false);
+      popupInputRef.current?.focus();
+    }
+  }
+
+  const syncTotal = syncProgress?.total ?? pendingOfflineCount;
 
   return (
     <div className="space-y-6 max-w-6xl mx-auto w-full pb-12">
@@ -1055,8 +1289,8 @@ export function NFCStationClient({
             <Button
               variant="outline"
               size="sm"
-              onClick={() => void runAutoSync()}
-              disabled={isSyncing}
+              onClick={() => void runSync("manual")}
+              disabled={isSyncing || isProcessing}
               className="gap-1.5 text-xs font-semibold border-amber-500/40 text-amber-600 dark:text-amber-400 hover:bg-amber-500/10"
               title="Upload queued offline actions to database now"
             >
@@ -1154,12 +1388,12 @@ export function NFCStationClient({
                 value={nfcInput}
                 onChange={(e) => setNfcInput(e.target.value)}
                 placeholder="Or type NFC Card Value manually..."
-                disabled={isProcessing}
+                disabled={isProcessing || isSyncing}
                 className="h-11 rounded-xl text-sm font-mono"
               />
               <Button
                 type="submit"
-                disabled={isProcessing || !nfcInput.trim()}
+                disabled={isProcessing || isSyncing || !nfcInput.trim()}
                 className="h-11 rounded-xl px-4 font-semibold"
               >
                 Scan
@@ -1260,7 +1494,7 @@ export function NFCStationClient({
                     <p className="text-xs text-muted-foreground mt-0.5">{cardData.card.notes}</p>
                   )}
                   <div className="text-[11px] text-muted-foreground mt-1">
-                    Card Registered: {new Date(cardData.card.created_at).toLocaleDateString()}
+                    Card Registered: {formatDate(cardData.card.created_at)}
                   </div>
                 </div>
               </div>
@@ -1381,7 +1615,7 @@ export function NFCStationClient({
                           <p>
                             Checked out:{" "}
                             <span className="font-medium text-foreground">
-                              {new Date(item.checked_out_at).toLocaleString()}
+                              {formatDateTime(item.checked_out_at)}
                             </span>
                           </p>
                           {item.notes && <p className="italic text-[10px]">Note: {item.notes}</p>}
@@ -1427,11 +1661,11 @@ export function NFCStationClient({
                               {record.equipment_serial_number || "N/A"}
                             </td>
                             <td className="p-3 text-muted-foreground">
-                              {new Date(record.checked_out_at).toLocaleDateString()}
+                              {formatDate(record.checked_out_at)}
                             </td>
                             <td className="p-3 text-muted-foreground">
                               {record.returned_at
-                                ? new Date(record.returned_at).toLocaleDateString()
+                                ? formatDate(record.returned_at)
                                 : "—"}
                             </td>
                             <td className="p-3">
@@ -1531,13 +1765,14 @@ export function NFCStationClient({
                     type="text"
                     value={popupBarcode}
                     onChange={(e) => setPopupBarcode(e.target.value)}
+                    disabled={isSyncing}
                     placeholder="Scan equipment barcode with connected scanner..."
                     className="pl-12 h-14 text-base font-semibold bg-neutral-900/90 text-white rounded-2xl border-neutral-700 focus-visible:ring-2 focus-visible:ring-primary shadow-inner"
                   />
                 </div>
                 <Button
                   type="submit"
-                  disabled={!popupBarcode.trim()}
+                  disabled={isSyncing || !popupBarcode.trim()}
                   className="h-14 px-6 rounded-2xl font-bold"
                 >
                   Add Item
@@ -1683,9 +1918,9 @@ export function NFCStationClient({
       {/* DIALOG 1: ALREADY CHECKED OUT COLLISION PROMPT */}
       <Dialog
         open={collisionPrompt !== null}
-        onOpenChange={(open) => {
+        onOpenChange={lockedOpenChange((open) => {
           if (!open) setCollisionPrompt(null);
-        }}
+        })}
       >
         <DialogContent className="sm:max-w-md rounded-2xl">
           <DialogHeader>
@@ -1724,69 +1959,8 @@ export function NFCStationClient({
 
             <Button
               type="button"
-              onClick={async () => {
-                if (collisionPrompt && cardData) {
-                  const eq = collisionPrompt.equipment;
-                  const nfcVal = cardData.card.nfc_value;
-                  const memberName = cardData.card.member_name;
-                  setCollisionPrompt(null);
-
-                  const applyOfflineReturnSingle = () => {
-                    enqueueOfflineAction({
-                      type: "return",
-                      payload: {
-                        equipment_id: eq.id,
-                        nfc_value: nfcVal,
-                      },
-                      description: `Return single item "${eq.name}" from ${memberName}`,
-                    });
-                    const { updatedEquipment, updatedCardData } = applyOptimisticReturn(
-                      equipmentList,
-                      cardData,
-                      [eq.id]
-                    );
-                    setEquipmentList(updatedEquipment);
-                    setCardData(updatedCardData);
-                    setPendingOfflineCount(getOfflineQueue().length);
-                    playSound("return");
-                    setPopupMessage({
-                      text: `[Offline Mode] Returned "${eq.name}" locally. Will sync when WiFi reconnects.`,
-                      type: "success",
-                    });
-                  };
-
-                  if (!isOnline()) {
-                    applyOfflineReturnSingle();
-                    popupInputRef.current?.focus();
-                    return;
-                  }
-
-                  try {
-                    const res = await fetch("/api/nfc/return", {
-                      method: "POST",
-                      headers: { "Content-Type": "application/json" },
-                      body: JSON.stringify({
-                        equipment_id: eq.id,
-                        nfc_value: nfcVal,
-                      }),
-                    });
-                    if (res.ok) {
-                      playSound("return");
-                      setPopupMessage({
-                        text: `Successfully returned "${eq.name}"!`,
-                        type: "success",
-                      });
-                      await refreshCardData(nfcVal);
-                      await refreshEquipmentList();
-                    } else {
-                      playSound("error");
-                    }
-                  } catch {
-                    applyOfflineReturnSingle();
-                  }
-                  popupInputRef.current?.focus();
-                }
-              }}
+              disabled={isProcessing}
+              onClick={() => void handleCollisionReturn()}
               className="rounded-xl bg-blue-600 hover:bg-blue-700 text-white font-semibold gap-1.5"
             >
               <ArrowDownLeft className="h-4 w-4" />
@@ -1799,9 +1973,9 @@ export function NFCStationClient({
       {/* DIALOG 2: REGISTER UNREGISTERED NFC CARD (SEPARATE FROM USERS) */}
       <Dialog
         open={unregisteredCard !== null}
-        onOpenChange={(open) => {
+        onOpenChange={lockedOpenChange((open) => {
           if (!open) setUnregisteredCard(null);
-        }}
+        })}
       >
         <DialogContent className="sm:max-w-md rounded-2xl">
           <DialogHeader>
@@ -1862,7 +2036,7 @@ export function NFCStationClient({
       </Dialog>
 
       {/* DIALOG 3: MANAGE ALL CLUB NFC CARDS */}
-      <Dialog open={isManageCardsOpen} onOpenChange={setIsManageCardsOpen}>
+      <Dialog open={isManageCardsOpen} onOpenChange={lockedOpenChange(setIsManageCardsOpen)}>
         <DialogContent className="sm:max-w-xl rounded-2xl max-h-[85vh] flex flex-col">
           <DialogHeader>
             <DialogTitle className="text-lg font-bold flex items-center gap-2">
@@ -1918,7 +2092,7 @@ export function NFCStationClient({
       </Dialog>
 
       {/* PWA Install Instructions Dialog */}
-      <Dialog open={showInstallHelp} onOpenChange={setShowInstallHelp}>
+      <Dialog open={showInstallHelp} onOpenChange={lockedOpenChange(setShowInstallHelp)}>
         <DialogContent className="max-w-md">
           <DialogHeader>
             <div className="flex items-center gap-2 text-primary mb-1">
@@ -1969,7 +2143,7 @@ export function NFCStationClient({
       </Dialog>
 
       {/* DIALOG: OFFLINE QUEUE MANAGER */}
-      <Dialog open={isOfflineQueueOpen} onOpenChange={setIsOfflineQueueOpen}>
+      <Dialog open={isOfflineQueueOpen} onOpenChange={lockedOpenChange(setIsOfflineQueueOpen)}>
         <DialogContent className="sm:max-w-md rounded-2xl max-h-[85vh] flex flex-col">
           <DialogHeader>
             <div className="flex items-center gap-2 mb-1">
@@ -2040,9 +2214,25 @@ export function NFCStationClient({
                         </Badge>
                       </div>
                       <p className="font-medium text-foreground text-xs">{item.description}</p>
+                      {(item.memberName || item.nfcValue) && (
+                        <p className="text-[10px] text-muted-foreground">
+                          Card: {item.memberName ?? "Unknown member"}
+                          {item.nfcValue ? ` (${item.nfcValue})` : ""}
+                        </p>
+                      )}
+                      {item.equipmentNames && item.equipmentNames.length > 0 && (
+                        <p className="text-[10px] text-muted-foreground">
+                          Items: {item.equipmentNames.join(", ")}
+                        </p>
+                      )}
                       <p className="text-[10px] text-muted-foreground">
-                        {new Date(item.timestamp).toLocaleTimeString()}
+                        Performed {formatActionTime(item.timestamp)}
                       </p>
+                      {item.status === "failed" && item.error && (
+                        <p className="text-[10px] text-amber-600 dark:text-amber-400">
+                          Last attempt: {item.error} (will retry)
+                        </p>
+                      )}
                     </div>
                   </div>
                 ))
@@ -2064,10 +2254,10 @@ export function NFCStationClient({
               <Button
                 type="button"
                 size="sm"
-                disabled={isSyncing}
-                onClick={async () => {
-                  await runAutoSync();
-                  setOfflineQueueList(getOfflineQueue());
+                disabled={isSyncing || isProcessing}
+                onClick={() => {
+                  setIsOfflineQueueOpen(false);
+                  void runSync("manual");
                 }}
                 className="rounded-xl text-xs font-semibold gap-1.5 bg-primary text-primary-foreground"
               >
@@ -2078,6 +2268,162 @@ export function NFCStationClient({
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      {/* DIALOG: OFFLINE ACTIONS REJECTED BY THE SERVER (must be acknowledged) */}
+      <Dialog
+        open={rejectedActions.length > 0 && !isSyncing}
+        onOpenChange={() => {
+          // Only the acknowledge buttons dismiss this dialog.
+        }}
+        disablePointerDismissal
+      >
+        <DialogContent
+          showCloseButton={false}
+          className="sm:max-w-lg rounded-2xl max-h-[85vh] flex flex-col"
+        >
+          <DialogHeader>
+            <div className="w-12 h-12 rounded-full bg-destructive/10 text-destructive flex items-center justify-center mb-2 border border-destructive/30">
+              <XCircle className="h-6 w-6" />
+            </div>
+            <DialogTitle className="text-lg font-bold">
+              {rejectedActions.length === 1
+                ? "An offline action was rejected"
+                : `${rejectedActions.length} offline actions were rejected`}
+            </DialogTitle>
+            <DialogDescription className="text-sm pt-1">
+              The database refused {rejectedActions.length === 1 ? "this action" : "these actions"}{" "}
+              recorded while the station was offline, so{" "}
+              {rejectedActions.length === 1 ? "it was" : "they were"} <strong>not applied</strong>.
+              Check the equipment physically and redo the action if needed. Other queued actions
+              keep syncing.
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="flex-1 overflow-y-auto space-y-2 py-1 pr-1 text-xs">
+            {rejectedActions.map((r) => (
+              <div
+                key={r.id}
+                className="p-3 rounded-xl border border-destructive/30 bg-destructive/5 space-y-1"
+              >
+                <div className="flex items-start justify-between gap-2">
+                  <div className="flex items-center gap-1.5 min-w-0">
+                    <Badge
+                      variant="outline"
+                      className={cn(
+                        "text-[10px] uppercase font-bold py-0 px-1.5 shrink-0",
+                        r.type === "checkout"
+                          ? "text-emerald-600 dark:text-emerald-400 border-emerald-500/30 bg-emerald-500/5"
+                          : r.type === "return"
+                          ? "text-blue-600 dark:text-blue-400 border-blue-500/30 bg-blue-500/5"
+                          : "text-purple-600 dark:text-purple-400 border-purple-500/30 bg-purple-500/5"
+                      )}
+                    >
+                      {r.type === "register_card" ? "register card" : r.type}
+                    </Badge>
+                    <span className="font-semibold text-foreground truncate">{r.description}</span>
+                  </div>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    onClick={() => {
+                      acknowledgeRejectedActions([r.id]);
+                      setRejectedActions(getRejectedActions());
+                    }}
+                    className="h-7 px-2.5 text-[11px] font-semibold shrink-0"
+                  >
+                    Acknowledge
+                  </Button>
+                </div>
+                <p className="text-muted-foreground">
+                  Member:{" "}
+                  <span className="font-medium text-foreground">
+                    {r.memberName ?? "Unknown member"}
+                  </span>
+                  {r.nfcValue && <span className="font-mono"> ({r.nfcValue})</span>}
+                </p>
+                {r.equipmentNames && r.equipmentNames.length > 0 && (
+                  <p className="text-muted-foreground">
+                    Equipment:{" "}
+                    <span className="font-medium text-foreground">{r.equipmentNames.join(", ")}</span>
+                  </p>
+                )}
+                <p className="text-muted-foreground">
+                  Performed: {formatActionTime(r.queuedAt)} · Rejected: {formatActionTime(r.rejectedAt)}
+                </p>
+                <p className="text-destructive font-medium">
+                  Server reason ({r.httpStatus}): {r.reason}
+                </p>
+              </div>
+            ))}
+          </div>
+
+          {rejectedActions.length > 1 && (
+            <DialogFooter className="pt-2 border-t">
+              <Button
+                type="button"
+                onClick={() => {
+                  acknowledgeRejectedActions(rejectedActions.map((r) => r.id));
+                  setRejectedActions(getRejectedActions());
+                }}
+                className="rounded-xl font-semibold"
+              >
+                Acknowledge All ({rejectedActions.length})
+              </Button>
+            </DialogFooter>
+          )}
+        </DialogContent>
+      </Dialog>
+
+      {/* STATION LOCK OVERLAY: shown while queued offline actions are being synced */}
+      {isSyncing && (
+        <div
+          role="alertdialog"
+          aria-modal="true"
+          aria-live="assertive"
+          aria-label="Syncing offline actions, station locked"
+          className="fixed inset-0 z-[200] pointer-events-auto cursor-wait select-none bg-black/85 backdrop-blur-md flex items-center justify-center p-6 animate-in fade-in duration-150"
+          onPointerDown={(e) => {
+            e.preventDefault();
+            e.stopPropagation();
+          }}
+          onClick={(e) => {
+            e.preventDefault();
+            e.stopPropagation();
+          }}
+          onContextMenu={(e) => e.preventDefault()}
+        >
+          <div className="w-full max-w-md rounded-2xl border border-primary/30 bg-card text-card-foreground p-8 text-center shadow-2xl space-y-4">
+            <div className="relative mx-auto w-16 h-16">
+              <div className="absolute inset-0 rounded-full border-4 border-primary/20" />
+              <RefreshCw className="absolute inset-0 m-auto h-9 w-9 text-primary animate-spin" />
+            </div>
+            <h2 className="text-lg sm:text-xl font-bold tracking-tight">
+              {`Syncing ${syncTotal} offline action${syncTotal === 1 ? "" : "s"} — station locked, please wait`}
+            </h2>
+            <p className="text-xs text-muted-foreground">
+              Uploading actions recorded while the station was offline. Card taps, barcode scans
+              and buttons are disabled until the sync finishes.
+            </p>
+            {syncProgress && syncProgress.total > 0 && (
+              <div className="space-y-1.5">
+                <div className="h-2 w-full rounded-full bg-muted overflow-hidden">
+                  <div
+                    className="h-full bg-primary transition-all duration-300"
+                    style={{
+                      width: `${Math.min(100, Math.round((syncProgress.processed / syncProgress.total) * 100))}%`,
+                    }}
+                  />
+                </div>
+                <p className="text-[11px] text-muted-foreground">
+                  {syncProgress.processed} of {syncProgress.total} processed
+                  {syncProgress.current ? ` · ${syncProgress.current}` : ""}
+                </p>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
     </div>
   );
 }

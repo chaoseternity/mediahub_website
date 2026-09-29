@@ -14,6 +14,7 @@ import { EquipmentCard } from "@/components/EquipmentCard";
 import { EquipmentModal } from "@/components/EquipmentModal";
 import { parseEquipmentId, sortEquipmentById, getAdaptiveBarcodeWidth } from "@/lib/utils";
 import type { Equipment, Role } from "@/lib/types";
+import { APP_TIMEZONE, parseDbDate } from "@/lib/timezone";
 import { Barcode, Loader2 } from "lucide-react";
 import JSZip from "jszip";
 import JsBarcode from "jsbarcode";
@@ -50,9 +51,18 @@ export function EquipmentGrid({ initialData, role, onAddNew: _onAddNew, userName
   const [modalOpen, setModalOpen] = useState(false);
 
   const refresh = useCallback(async () => {
-    const res = await fetch("/api/equipment");
-    const data: Equipment[] = await res.json();
-    setItems(data);
+    try {
+      const res = await fetch("/api/equipment");
+      if (res.ok) {
+        const data: unknown = await res.json();
+        // Never put an error body into list state — .map/.filter on it would crash the grid.
+        if (Array.isArray(data)) setItems(data as Equipment[]);
+      } else {
+        console.error("Failed to refresh equipment:", res.status);
+      }
+    } catch (err) {
+      console.error("Failed to refresh equipment:", err);
+    }
     onRefresh?.();
   }, [onRefresh]);
 
@@ -147,7 +157,7 @@ export function EquipmentGrid({ initialData, role, onAddNew: _onAddNew, userName
       return a.status.localeCompare(b.status);
     }
     // Default: updated
-    return new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime();
+    return (parseDbDate(b.updated_at)?.getTime() ?? 0) - (parseDbDate(a.updated_at)?.getTime() ?? 0);
   });
 
   function openModal(id: number) {
@@ -241,7 +251,8 @@ export function EquipmentGrid({ initialData, role, onAddNew: _onAddNew, userName
       const url = URL.createObjectURL(content);
       const a = document.createElement("a");
       a.href = url;
-      const today = new Date().toISOString().split("T")[0];
+      // en-CA formats as YYYY-MM-DD; use the club's date, not the UTC date.
+      const today = new Date().toLocaleDateString("en-CA", { timeZone: APP_TIMEZONE });
       a.download = `Equipment_Barcodes_${today}.zip`;
       document.body.appendChild(a);
       a.click();

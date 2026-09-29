@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { readErrorMessage } from "@/lib/fetch-error";
 import {
   Card,
   CardContent,
@@ -35,8 +36,7 @@ export function SetupUsernameForm() {
         body: JSON.stringify({ username: trimmed }),
       });
       if (!res.ok) {
-        const data = await res.json();
-        setError(data?.error?.formErrors?.[0] ?? "Something went wrong.");
+        setError(await readErrorMessage(res, "Something went wrong."));
         return;
       }
       router.push("/dashboard");

@@ -1,6 +1,7 @@
 import { auth } from "@/lib/auth";
 import { createCheckout, getEquipmentById, getUserByEmail } from "@/lib/db";
 import { NextRequest, NextResponse } from "next/server";
+import { toErrorResponse, validationErrorResponse } from "@/lib/api-errors";
 import { z } from "zod";
 
 const CheckoutSchema = z.object({
@@ -49,7 +50,7 @@ export async function POST(
 
   const parsed = CheckoutSchema.safeParse(body);
   if (!parsed.success) {
-    return NextResponse.json({ error: parsed.error.flatten() }, { status: 400 });
+    return validationErrorResponse(parsed.error);
   }
 
   try {
@@ -70,7 +71,7 @@ export async function POST(
     });
     return NextResponse.json(checkout, { status: 201 });
   } catch (err: unknown) {
-    const message = err instanceof Error ? err.message : "Checkout failed";
-    return NextResponse.json({ error: message }, { status: 409 });
+    // "not available" / "already checked out" → 409, "Equipment not found." → 404.
+    return toErrorResponse(err, "Checkout failed");
   }
 }

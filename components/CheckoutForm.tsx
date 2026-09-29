@@ -6,6 +6,8 @@ import { z } from "zod";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { useState } from "react";
+import { readErrorMessage, networkErrorMessage } from "@/lib/fetch-error";
 
 const CheckoutSchema = z.object({
   checked_out_by_name: z.string().min(1, "Name is required"),
@@ -33,18 +35,24 @@ export function CheckoutForm({ equipmentId, defaultName, onSuccess }: CheckoutFo
     defaultValues: { checked_out_by_name: defaultName ?? "" },
   });
 
+  const [submitError, setSubmitError] = useState<string | null>(null);
+
   async function onSubmit(data: CheckoutFormValues) {
-    const res = await fetch(`/api/equipment/${equipmentId}/checkout`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(data),
-    });
-    if (res.ok) {
+    setSubmitError(null);
+    try {
+      const res = await fetch(`/api/equipment/${equipmentId}/checkout`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(data),
+      });
+      if (!res.ok) {
+        setSubmitError(await readErrorMessage(res, "Checkout failed"));
+        return;
+      }
       reset();
       onSuccess();
-    } else {
-      const json = await res.json();
-      alert(json.error ?? "Checkout failed");
+    } catch (err) {
+      setSubmitError(networkErrorMessage(err));
     }
   }
 
@@ -79,6 +87,12 @@ export function CheckoutForm({ equipmentId, defaultName, onSuccess }: CheckoutFo
         <Label htmlFor="checkout_location">Location <span className="text-muted-foreground font-normal">(optional)</span></Label>
         <Input id="checkout_location" placeholder="Where will this be used?" {...register("checkout_location")} />
       </div>
+
+      {submitError && (
+        <p role="alert" className="text-sm text-destructive">
+          {submitError}
+        </p>
+      )}
 
       <Button type="submit" disabled={isSubmitting} className="w-full">
         {isSubmitting ? "Checking out…" : "Check Out"}

@@ -5,7 +5,9 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Search, Check } from "lucide-react";
-import type { User, EventSection } from "@/lib/types";
+import type { EventSection } from "@/lib/types";
+import { fetchUserDirectory, matchesUserSearch, type DirectoryUser } from "@/lib/user-directory";
+import { readErrorMessage, networkErrorMessage } from "@/lib/fetch-error";
 
 interface SectionDeploymentModalProps {
   eventId: number | null;
@@ -24,30 +26,39 @@ export function SectionDeploymentModal({
   onClose,
   onUpdated,
 }: SectionDeploymentModalProps) {
-  const [allUsers, setAllUsers] = useState<User[]>([]);
+  const [allUsers, setAllUsers] = useState<DirectoryUser[]>([]);
+  const [usersError, setUsersError] = useState<string | null>(null);
   const [search, setSearch] = useState("");
   const [selectedUserIds, setSelectedUserIds] = useState<number[]>([]);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  // Keyed on the ID *contents*, not the array identity, so a parent re-render that passes a
+  // fresh (but equal) array doesn't wipe the user's in-progress selection.
+  const deployedKey = currentlyDeployedUserIds.join(",");
+
   useEffect(() => {
     if (open && eventId && section) {
       setSearch("");
-      setSelectedUserIds([...currentlyDeployedUserIds]);
+      setSelectedUserIds(deployedKey ? deployedKey.split(",").map(Number) : []);
       setError(null);
+      setUsersError(null);
 
-      fetch("/api/users")
-        .then((r) => r.json())
-        .then((data: User[]) => setAllUsers(data))
-        .catch(() => setAllUsers([]));
+      const controller = new AbortController();
+      fetchUserDirectory(controller.signal).then((result) => {
+        if (controller.signal.aborted) return;
+        if (result.ok) {
+          setAllUsers(result.users);
+        } else {
+          setAllUsers([]);
+          setUsersError(result.error);
+        }
+      });
+      return () => controller.abort();
     }
-  }, [open, eventId, section, currentlyDeployedUserIds]);
+  }, [open, eventId, section, deployedKey]);
 
-  const filteredUsers = allUsers.filter(
-    (u) =>
-      u.name.toLowerCase().includes(search.toLowerCase()) ||
-      u.email.toLowerCase().includes(search.toLowerCase())
-  );
+  const filteredUsers = allUsers.filter((u) => matchesUserSearch(u, search));
 
   function toggleUser(id: number) {
     setSelectedUserIds((prev) =>
@@ -59,6 +70,8 @@ export function SectionDeploymentModal({
     if (!eventId || !section) return;
     setSubmitting(true);
     setError(null);
+    let changed = false;
+    const emailFailures: string[] = [];
 
     try {
       const toAdd = selectedUserIds.filter((id) => !currentlyDeployedUserIds.includes(id));
@@ -75,8 +88,14 @@ export function SectionDeploymentModal({
           }),
         });
         if (!res.ok) {
-          const json = await res.json().catch(() => ({}));
-          throw new Error(json.error ?? "Failed to add member deployment");
+          throw new Error(await readErrorMessage(res, "Failed to add member deployment"));
+        }
+        changed = true;
+        // The member was deployed, but the invitation email may not have gone out.
+        const body = (await res.json().catch(() => ({}))) as { emailSent?: boolean; emailError?: string };
+        if (body.emailSent === false) {
+          const name = allUsers.find((u) => u.id === uid)?.name ?? `User #${uid}`;
+          emailFailures.push(`${name}${body.emailError ? ` (${body.emailError})` : ""}`);
         }
       }
 
@@ -91,15 +110,27 @@ export function SectionDeploymentModal({
           }),
         });
         if (!res.ok) {
-          const json = await res.json().catch(() => ({}));
-          throw new Error(json.error ?? "Failed to remove member deployment");
+          throw new Error(await readErrorMessage(res, "Failed to remove member deployment"));
         }
+        changed = true;
       }
 
       onUpdated();
+      if (emailFailures.length > 0) {
+        alert(
+          "Members were deployed, but the invitation email could not be sent to:\n\n" +
+            emailFailures.join("\n") +
+            "\n\nUse the resend-email button (envelope icon) in the event details once email is working."
+        );
+      }
       onClose();
     } catch (err: unknown) {
-      setError(err instanceof Error ? err.message : "An error occurred");
+      setError(
+        networkErrorMessage(err) +
+          (emailFailures.length > 0 ? ` (Invitation emails also failed for: ${emailFailures.join(", ")})` : "")
+      );
+      // Some changes may have been applied before the failure — let the parent re-sync.
+      if (changed) onUpdated();
     } finally {
       setSubmitting(false);
     }
@@ -114,11 +145,14 @@ export function SectionDeploymentModal({
 
         <div className="space-y-3 py-2 flex-1 overflow-hidden flex flex-col">
           {error && <p className="text-xs text-destructive font-medium bg-destructive/10 p-2 rounded-md">{error}</p>}
+          {usersError && (
+            <p className="text-xs text-destructive font-medium bg-destructive/10 p-2 rounded-md">{usersError}</p>
+          )}
 
           <div className="relative">
             <Search className="h-3.5 w-3.5 absolute left-2.5 top-2.5 text-muted-foreground" />
             <Input
-              placeholder="Search users by name or email…"
+              placeholder="Search users by name or username…"
               value={search}
               onChange={(e) => setSearch(e.target.value)}
               className="pl-8 text-xs h-8"
@@ -129,7 +163,9 @@ export function SectionDeploymentModal({
 
           <div className="flex-1 overflow-y-auto border rounded-md divide-y bg-muted/10">
             {filteredUsers.length === 0 ? (
-              <p className="p-3 text-xs text-muted-foreground">No users found matching search</p>
+              <p className="p-3 text-xs text-muted-foreground">
+                {usersError ? "Member list unavailable" : "No users found matching search"}
+              </p>
             ) : (
               filteredUsers.map((u) => {
                 const isSelected = selectedUserIds.includes(u.id);
@@ -144,7 +180,9 @@ export function SectionDeploymentModal({
                   >
                     <div>
                       <p className="text-xs font-semibold">{u.name}</p>
-                      <p className="text-[10px] text-muted-foreground">{u.email}</p>
+                      {(u.email || u.username) && (
+                        <p className="text-[10px] text-muted-foreground">{u.email ?? `@${u.username}`}</p>
+                      )}
                     </div>
                     <div
                       className={`h-4 w-4 rounded border flex items-center justify-center ${
