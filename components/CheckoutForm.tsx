@@ -6,8 +6,10 @@ import { z } from "zod";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { readErrorMessage, networkErrorMessage } from "@/lib/fetch-error";
+import { fetchUserDirectory, type DirectoryUser } from "@/lib/user-directory";
+import type { Role } from "@/lib/types";
 
 const CheckoutSchema = z.object({
   checked_out_by_name: z.string().min(1, "Name is required"),
@@ -21,19 +23,57 @@ type CheckoutFormValues = z.infer<typeof CheckoutSchema>;
 interface CheckoutFormProps {
   equipmentId: number;
   defaultName?: string;
+  role?: Role;
   onSuccess: () => void;
 }
 
-export function CheckoutForm({ equipmentId, defaultName, onSuccess }: CheckoutFormProps) {
+export function CheckoutForm({ equipmentId, defaultName, role, onSuccess }: CheckoutFormProps) {
+  const isAdmin = role === "admin";
+  const [users, setUsers] = useState<DirectoryUser[]>([]);
+  const [loadingUsers, setLoadingUsers] = useState(false);
+
   const {
     register,
     handleSubmit,
     formState: { errors, isSubmitting },
     reset,
+    setValue,
   } = useForm<CheckoutFormValues>({
     resolver: zodResolver(CheckoutSchema),
     defaultValues: { checked_out_by_name: defaultName ?? "" },
   });
+
+  useEffect(() => {
+    if (defaultName) {
+      setValue("checked_out_by_name", defaultName);
+    }
+  }, [defaultName, setValue]);
+
+  useEffect(() => {
+    if (!isAdmin) return;
+    const controller = new AbortController();
+    setLoadingUsers(true);
+    fetchUserDirectory(controller.signal)
+      .then((result) => {
+        if (controller.signal.aborted) return;
+        if (result.ok) {
+          setUsers(result.users);
+        }
+      })
+      .finally(() => {
+        if (!controller.signal.aborted) {
+          setLoadingUsers(false);
+        }
+      });
+    return () => controller.abort();
+  }, [isAdmin]);
+
+  const userNames = Array.from(
+    new Set([
+      ...(defaultName ? [defaultName] : []),
+      ...users.map((u) => u.name).filter(Boolean),
+    ])
+  );
 
   const [submitError, setSubmitError] = useState<string | null>(null);
 
@@ -59,12 +99,41 @@ export function CheckoutForm({ equipmentId, defaultName, onSuccess }: CheckoutFo
   return (
     <form onSubmit={handleSubmit(onSubmit)} className="space-y-4 pt-2">
       <div className="space-y-1">
-        <Label htmlFor="checked_out_by_name">Checked out by *</Label>
-        <Input
-          id="checked_out_by_name"
-          placeholder="Full name"
-          {...register("checked_out_by_name")}
-        />
+        <Label htmlFor="checked_out_by_name">
+          Checked out by *
+          {!isAdmin && (
+            <span className="text-xs text-muted-foreground font-normal ml-1.5">
+              (OAuth account)
+            </span>
+          )}
+        </Label>
+        {isAdmin ? (
+          <select
+            id="checked_out_by_name"
+            className="flex h-9 w-full rounded-md border border-input bg-background px-3 py-1 text-sm shadow-xs transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50 text-foreground"
+            disabled={isSubmitting}
+            {...register("checked_out_by_name")}
+          >
+            {userNames.length === 0 && (
+              <option value={defaultName ?? ""}>
+                {loadingUsers ? "Loading users…" : (defaultName || "Select user…")}
+              </option>
+            )}
+            {userNames.map((name) => (
+              <option key={name} value={name}>
+                {name}
+              </option>
+            ))}
+          </select>
+        ) : (
+          <Input
+            id="checked_out_by_name"
+            readOnly
+            tabIndex={-1}
+            className="bg-muted cursor-not-allowed select-none opacity-80 pointer-events-none"
+            {...register("checked_out_by_name")}
+          />
+        )}
         {errors.checked_out_by_name && (
           <p className="text-xs text-destructive">{errors.checked_out_by_name.message}</p>
         )}

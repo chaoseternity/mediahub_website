@@ -1,5 +1,5 @@
 import { auth } from "@/lib/auth";
-import { createCheckout, getEquipmentById, getUserByEmail } from "@/lib/db";
+import { createCheckout, getEquipmentById, getUserByEmail, getUserByName } from "@/lib/db";
 import { NextRequest, NextResponse } from "next/server";
 import { toErrorResponse, validationErrorResponse } from "@/lib/api-errors";
 import { z } from "zod";
@@ -61,9 +61,17 @@ export async function POST(
         ? parsed.data.checked_out_by_name.trim()
         : session.user.name || dbUser?.name || "Member";
 
+    let targetUserId = dbUser?.id ?? null;
+    if (isAdmin && finalCheckedOutByName && finalCheckedOutByName !== (session.user.name || dbUser?.name)) {
+      const selectedUser = await getUserByName(finalCheckedOutByName);
+      if (selectedUser) {
+        targetUserId = selectedUser.id;
+      }
+    }
+
     const checkout = await createCheckout({
       equipment_id: Number(id),
-      checked_out_by: dbUser?.id ?? null,
+      checked_out_by: targetUserId,
       checked_out_by_name: finalCheckedOutByName,
       expected_return_at: parsed.data.expected_return_at,
       notes: parsed.data.notes,
