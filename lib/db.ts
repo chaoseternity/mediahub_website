@@ -110,6 +110,14 @@ export async function getUserById(id: number): Promise<User | undefined> {
   return rows[0];
 }
 
+export async function getUserByName(name: string): Promise<User | undefined> {
+  const trimmed = name.trim();
+  if (!trimmed) return undefined;
+  await ensureSchema();
+  const { rows } = await sql<User>`SELECT id, name, email, google_id, image, role, provider, created_at FROM users WHERE LOWER(name) = LOWER(${trimmed}) LIMIT 1`;
+  return rows[0];
+}
+
 export async function getUserProfileData(userId: number): Promise<UserProfileData | undefined> {
   if (!Number.isInteger(userId) || userId <= 0) return undefined;
   await ensureSchema();

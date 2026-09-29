@@ -643,6 +643,7 @@ export function EquipmentModal({
                   <CheckoutForm
                     equipmentId={equipment.id}
                     defaultName={userName}
+                    role={role}
                     onSuccess={() => {
                       onUpdated();
                       onClose();
