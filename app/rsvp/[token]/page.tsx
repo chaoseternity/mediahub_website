@@ -21,6 +21,14 @@ import {
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { cn } from "@/lib/utils";
+import { formatDate, formatLongDateTime, formatTime } from "@/lib/timezone";
+import { readErrorMessage } from "@/lib/fetch-error";
+
+/** "Tue, 29 Sept 2026, 14:00 – 18:00" (end date repeated only if it differs). */
+function fmtRange(start: string, end: string): string {
+  const sameDay = formatDate(start) === formatDate(end);
+  return `${formatLongDateTime(start)} – ${sameDay ? formatTime(end) : formatLongDateTime(end)}`;
+}
 
 interface RSVPData {
   eventName: string;
@@ -33,10 +41,10 @@ interface RSVPData {
   rehearsalEndTime: string | null;
   attendingRehearsal: boolean;
   userName: string;
-  userEmail: string;
   section: "photo" | "video" | "av";
   responseStatus: "pending" | "confirmed" | "declined";
   respondedAt: string | null;
+  eventEnded?: boolean;
 }
 
 const SECTION_CONFIG = {
@@ -85,8 +93,7 @@ function RSVPContent() {
         });
 
         if (!res.ok) {
-          const errData = await res.json().catch(() => ({}));
-          throw new Error(errData.error || "Failed to update availability");
+          throw new Error(await readErrorMessage(res, "Failed to update availability"));
         }
 
         setSubmittedStatus(status);
@@ -115,16 +122,17 @@ function RSVPContent() {
     async function loadData() {
       try {
         setLoading(true);
-        const res = await fetch(`/api/rsvp?token=${token}`);
+        const res = await fetch(`/api/rsvp?token=${encodeURIComponent(token)}`);
         if (!res.ok) {
-          const errData = await res.json().catch(() => ({}));
-          throw new Error(errData.error || "Failed to load invitation details");
+          throw new Error(await readErrorMessage(res, "Failed to load invitation details"));
         }
         const rsvpData: RSVPData = await res.json();
         setData(rsvpData);
 
         // If URL contained ?action=confirm or ?action=decline, auto-respond if currently pending
-        if (initialAction === "confirm" && rsvpData.responseStatus === "pending") {
+        if (rsvpData.eventEnded) {
+          // RSVP is closed once the event has ended; never auto-submit.
+        } else if (initialAction === "confirm" && rsvpData.responseStatus === "pending") {
           handleRSVP("confirmed");
         } else if (initialAction === "decline" && rsvpData.responseStatus === "pending") {
           handleRSVP("declined");
@@ -176,6 +184,7 @@ function RSVPContent() {
   const currentStatus = submittedStatus || data.responseStatus;
   const isConfirmed = currentStatus === "confirmed";
   const isDeclined = currentStatus === "declined";
+  const rsvpClosed = Boolean(data?.eventEnded);
 
   return (
     <div className="min-h-screen bg-linear-to-b from-slate-50 via-slate-50/80 to-slate-100 dark:from-slate-950 dark:via-slate-900/90 dark:to-slate-950 py-10 px-4 sm:px-6 flex items-center justify-center relative overflow-hidden">
@@ -285,9 +294,6 @@ function RSVPContent() {
                   <span className="font-semibold text-xs text-foreground">{data.userName}</span>
                 </div>
               </div>
-              <span className="text-muted-foreground text-[11px] font-mono bg-background/60 px-2 py-1 rounded border border-border/50">
-                {data.userEmail}
-              </span>
             </div>
 
             {/* Event Timing & Location */}
@@ -299,21 +305,7 @@ function RSVPContent() {
                 <div className="flex-1">
                   <span className="font-semibold block text-foreground">Event Schedule</span>
                   <span className="text-muted-foreground">
-                    {new Date(data.startTime).toLocaleString("en-US", {
-                      weekday: "short",
-                      month: "short",
-                      day: "numeric",
-                      year: "numeric",
-                      hour: "numeric",
-                      minute: "2-digit",
-                      hour12: true,
-                    })}{" "}
-                    –{" "}
-                    {new Date(data.endTime).toLocaleString("en-US", {
-                      hour: "numeric",
-                      minute: "2-digit",
-                      hour12: true,
-                    })}
+                    {fmtRange(data.startTime, data.endTime)}
                   </span>
                 </div>
               </div>
@@ -344,20 +336,7 @@ function RSVPContent() {
                       )}
                     </div>
                     <p className="text-muted-foreground">
-                      {new Date(data.rehearsalStartTime).toLocaleString("en-US", {
-                        weekday: "short",
-                        month: "short",
-                        day: "numeric",
-                        hour: "numeric",
-                        minute: "2-digit",
-                        hour12: true,
-                      })}{" "}
-                      –{" "}
-                      {new Date(data.rehearsalEndTime).toLocaleString("en-US", {
-                        hour: "numeric",
-                        minute: "2-digit",
-                        hour12: true,
-                      })}
+                      {fmtRange(data.rehearsalStartTime, data.rehearsalEndTime)}
                     </p>
                   </div>
                 </div>
@@ -372,6 +351,11 @@ function RSVPContent() {
                 <span className="text-xs font-bold text-foreground uppercase tracking-wider">
                   Select Your Availability
                 </span>
+                {rsvpClosed && (
+                  <span className="text-[11px] text-muted-foreground font-medium">
+                    This event has ended, so responses are closed.
+                  </span>
+                )}
                 {submitting && (
                   <span className="text-[11px] text-purple-600 flex items-center gap-1 font-medium">
                     <Loader2 className="h-3 w-3 animate-spin" /> Saving response...
@@ -384,7 +368,7 @@ function RSVPContent() {
                 <button
                   type="button"
                   onClick={() => handleRSVP("confirmed")}
-                  disabled={submitting}
+                  disabled={submitting || rsvpClosed}
                   className={cn(
                     "relative group text-left p-4 rounded-2xl border-2 transition-all duration-200 cursor-pointer select-none",
                     "focus:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500 focus-visible:ring-offset-2",
@@ -428,7 +412,7 @@ function RSVPContent() {
                 <button
                   type="button"
                   onClick={() => handleRSVP("declined")}
-                  disabled={submitting}
+                  disabled={submitting || rsvpClosed}
                   className={cn(
                     "relative group text-left p-4 rounded-2xl border-2 transition-all duration-200 cursor-pointer select-none",
                     "focus:outline-none focus-visible:ring-2 focus-visible:ring-rose-500 focus-visible:ring-offset-2",

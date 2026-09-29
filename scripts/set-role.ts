@@ -6,6 +6,8 @@
  *   npm run set-role -- --email=you@gmail.com --role=viewer
  *
  * The user must have signed in at least once (so their row exists in the DB).
+ * Accounts listed in ADMIN_EMAILS cannot be demoted (they are re-promoted on every login);
+ * remove them from ADMIN_EMAILS first.
  */
 
 import { getUserByEmail, updateUserRole } from "../lib/db";
@@ -41,6 +43,15 @@ const { email, role } = parseArgs();
     process.exit(1);
   }
 
-  await updateUserRole(user.id, role);
+  try {
+    const result = await updateUserRole(user.id, role);
+    if (!result.success) {
+      console.error(`Error: ${result.error ?? "role update failed"}`);
+      process.exit(1);
+    }
+  } catch (err) {
+    console.error(`Error: ${err instanceof Error ? err.message : String(err)}`);
+    process.exit(1);
+  }
   console.log(`✓ ${email} is now "${role}" (was "${user.role}")`);
 })();

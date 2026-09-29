@@ -6,7 +6,8 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Search, UserCheck, ShieldAlert } from "lucide-react";
-import type { User } from "@/lib/types";
+import { fromLocalInputValue } from "@/lib/datetime-local";
+import { fetchUserDirectory, matchesUserSearch, type DirectoryUser } from "@/lib/user-directory";
 
 interface CreateEventModalProps {
   open: boolean;
@@ -26,7 +27,8 @@ export function CreateEventModal({ open, onClose, onCreated }: CreateEventModalP
   const [rehearsalEndTime, setRehearsalEndTime] = useState("");
 
   const [userSearch, setUserSearch] = useState("");
-  const [allUsers, setAllUsers] = useState<User[]>([]);
+  const [allUsers, setAllUsers] = useState<DirectoryUser[]>([]);
+  const [usersError, setUsersError] = useState<string | null>(null);
 
   const [selectedOicIds, setSelectedOicIds] = useState<number[]>([]);
   const [selectedPhotoIcIds, setSelectedPhotoIcIds] = useState<number[]>([]);
@@ -52,20 +54,23 @@ export function CreateEventModal({ open, onClose, onCreated }: CreateEventModalP
       setSelectedVideoIcIds([]);
       setSelectedAvIcIds([]);
       setError(null);
+      setUsersError(null);
 
-      fetch("/api/users")
-        .then((r) => r.json())
-        .then((data: User[]) => setAllUsers(data))
-        .catch(() => setAllUsers([]));
+      const controller = new AbortController();
+      fetchUserDirectory(controller.signal).then((result) => {
+        if (controller.signal.aborted) return;
+        if (result.ok) {
+          setAllUsers(result.users);
+        } else {
+          setAllUsers([]);
+          setUsersError(result.error);
+        }
+      });
+      return () => controller.abort();
     }
   }, [open]);
 
-  const filteredUsers = allUsers.filter(
-    (u) =>
-      u.name.toLowerCase().includes(userSearch.toLowerCase()) ||
-      u.email.toLowerCase().includes(userSearch.toLowerCase()) ||
-      (u.username && u.username.toLowerCase().includes(userSearch.toLowerCase()))
-  );
+  const filteredUsers = allUsers.filter((u) => matchesUserSearch(u, userSearch));
 
   function toggleId(list: number[], id: number) {
     return list.includes(id) ? list.filter((i) => i !== id) : [...list, id];
@@ -105,11 +110,12 @@ export function CreateEventModal({ open, onClose, onCreated }: CreateEventModalP
           name,
           description: description || undefined,
           location,
-          start_time: new Date(startTime).toISOString(),
-          end_time: new Date(endTime).toISOString(),
+          // datetime-local values are local wall-clock time; convert to ISO (UTC) for storage.
+          start_time: fromLocalInputValue(startTime),
+          end_time: fromLocalInputValue(endTime),
           has_rehearsal: hasRehearsal,
-          rehearsal_start_time: hasRehearsal ? new Date(rehearsalStartTime).toISOString() : undefined,
-          rehearsal_end_time: hasRehearsal ? new Date(rehearsalEndTime).toISOString() : undefined,
+          rehearsal_start_time: hasRehearsal ? fromLocalInputValue(rehearsalStartTime) : undefined,
+          rehearsal_end_time: hasRehearsal ? fromLocalInputValue(rehearsalEndTime) : undefined,
           oic_user_ids: selectedOicIds,
           photo_ic_ids: selectedPhotoIcIds,
           video_ic_ids: selectedVideoIcIds,
@@ -118,7 +124,7 @@ export function CreateEventModal({ open, onClose, onCreated }: CreateEventModalP
       });
 
       if (!res.ok) {
-        const data = await res.json();
+        const data = await res.json().catch(() => ({}));
         throw new Error(data.error?.message ?? data.error ?? "Failed to create event");
       }
 
@@ -249,13 +255,17 @@ export function CreateEventModal({ open, onClose, onCreated }: CreateEventModalP
               <div className="relative w-64">
                 <Search className="h-3.5 w-3.5 absolute left-2.5 top-2.5 text-muted-foreground" />
                 <Input
-                  placeholder="Search users by name/email…"
+                  placeholder="Search users by name/username…"
                   value={userSearch}
                   onChange={(e) => setUserSearch(e.target.value)}
                   className="pl-8 h-8 text-xs"
                 />
               </div>
             </div>
+
+            {usersError && (
+              <p className="text-xs text-destructive font-medium bg-destructive/10 p-2 rounded-md">{usersError}</p>
+            )}
 
             {/* OIC Section */}
             <div className="space-y-2">
@@ -273,7 +283,9 @@ export function CreateEventModal({ open, onClose, onCreated }: CreateEventModalP
                       className="rounded border-input text-primary"
                     />
                     <span className="font-medium">{u.name}</span>
-                    <span className="text-[10px] text-muted-foreground">({u.email})</span>
+                    {(u.email || u.username) && (
+                      <span className="text-[10px] text-muted-foreground">({u.email ?? `@${u.username}`})</span>
+                    )}
                   </label>
                 ))}
               </div>

@@ -26,6 +26,8 @@ import {
 } from "lucide-react";
 import type { AppEvent, EventSection } from "@/lib/types";
 import { UserLink } from "@/components/UserLink";
+import { formatDateTime } from "@/lib/timezone";
+import { readErrorMessage } from "@/lib/fetch-error";
 
 interface EventDetailModalProps {
   eventId: number | null;
@@ -33,47 +35,44 @@ interface EventDetailModalProps {
   onClose: () => void;
 }
 
-const SGT = "Asia/Singapore";
-
-function parseUTC(s: string): Date {
-  if (!s.includes("T") && !s.endsWith("Z") && !s.includes("+")) {
-    return new Date(s.replace(" ", "T") + "Z");
-  }
-  return new Date(s);
-}
-
-function fmtDateTime(s: string | null | undefined): string {
-  if (!s) return "—";
-  const d = parseUTC(s);
-  return isNaN(d.getTime())
-    ? s
-    : d.toLocaleString("en-GB", {
-        year: "numeric",
-        month: "short",
-        day: "numeric",
-        hour: "2-digit",
-        minute: "2-digit",
-        timeZone: SGT,
-      });
-}
+const fmtDateTime = (s: string | null | undefined) => formatDateTime(s);
 
 export function EventDetailModal({ eventId, open, onClose }: EventDetailModalProps) {
   const [event, setEvent] = useState<AppEvent | null>(null);
   const [loading, setLoading] = useState(false);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [resendingKey, setResendingKey] = useState<string | null>(null);
 
   useEffect(() => {
     if (open && eventId) {
+      let cancelled = false;
       setLoading(true);
+      setLoadError(null);
       fetch(`/api/events/${eventId}`)
-        .then((res) => res.json())
-        .then((data: AppEvent) => {
-          setEvent(data);
+        .then(async (res) => {
+          if (!res.ok) throw new Error(await readErrorMessage(res, "Failed to load event details"));
+          return (await res.json()) as AppEvent;
         })
-        .catch((err) => console.error("Failed to load event details", err))
-        .finally(() => setLoading(false));
+        .then((data) => {
+          if (!cancelled) setEvent(data);
+        })
+        .catch((err: unknown) => {
+          console.error("Failed to load event details", err);
+          if (cancelled) return;
+          setEvent(null);
+          setLoadError(
+            err instanceof Error && err.name !== "TypeError" ? err.message : "Failed to load event details."
+          );
+        })
+        .finally(() => {
+          if (!cancelled) setLoading(false);
+        });
+      return () => {
+        cancelled = true;
+      };
     } else {
       setEvent(null);
+      setLoadError(null);
     }
   }, [open, eventId]);
 
@@ -92,10 +91,14 @@ export function EventDetailModal({ eventId, open, onClose }: EventDetailModalPro
         }),
       });
       if (res.ok) {
-        alert("Availability invitation email resent successfully!");
+        const body = (await res.json().catch(() => ({}))) as { emailSent?: boolean; emailError?: string };
+        if (body.emailSent === false) {
+          alert(`The invitation email could not be sent${body.emailError ? `: ${body.emailError}` : "."}`);
+        } else {
+          alert("Availability invitation email resent successfully!");
+        }
       } else {
-        const err = await res.json().catch(() => ({}));
-        alert(err.error || "Failed to resend invitation email");
+        alert(await readErrorMessage(res, "Failed to resend invitation email"));
       }
     } catch (e) {
       console.error("Error resending email:", e);
@@ -136,7 +139,7 @@ export function EventDetailModal({ eventId, open, onClose }: EventDetailModalPro
           </div>
         ) : !event ? (
           <div className="py-8 text-center text-sm text-muted-foreground">
-            Event not found.
+            {loadError ?? "Event not found."}
           </div>
         ) : (
           <div className="space-y-5 py-2">

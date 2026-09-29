@@ -1,6 +1,7 @@
 import { auth } from "@/lib/auth";
 import { getSOPDocumentById, updateSOPDocument, deleteSOPDocument } from "@/lib/db";
 import { NextRequest, NextResponse } from "next/server";
+import { toErrorResponse, validationErrorResponse } from "@/lib/api-errors";
 import { z } from "zod";
 
 const UpdateSOPSchema = z.object({
@@ -54,7 +55,7 @@ export async function PUT(
 
   const parsed = UpdateSOPSchema.safeParse(body);
   if (!parsed.success) {
-    return NextResponse.json({ error: parsed.error.flatten() }, { status: 400 });
+    return validationErrorResponse(parsed.error);
   }
 
   try {
@@ -62,8 +63,7 @@ export async function PUT(
     if (!updated) return NextResponse.json({ error: "SOP Document not found" }, { status: 404 });
     return NextResponse.json(updated);
   } catch (err: unknown) {
-    const msg = err instanceof Error ? err.message : "Failed to update SOP document";
-    return NextResponse.json({ error: msg }, { status: 500 });
+    return toErrorResponse(err, "Failed to update SOP document");
   }
 }
 

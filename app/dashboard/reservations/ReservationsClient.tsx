@@ -35,6 +35,9 @@ import {
 import { Label } from "@/components/ui/label";
 import type { Equipment, Reservation, Role } from "@/lib/types";
 import { cn } from "@/lib/utils";
+import { APP_TIMEZONE, formatDateTime, parseDbDate } from "@/lib/timezone";
+import { readErrorMessage } from "@/lib/fetch-error";
+import { useNow } from "@/lib/use-now";
 
 interface ReservationsClientProps {
   initialReservations: Reservation[];
@@ -44,21 +47,28 @@ interface ReservationsClientProps {
   currentUserName: string;
 }
 
-function fmtDate(dStr: string) {
-  try {
-    const d = new Date(dStr);
-    return isNaN(d.getTime())
-      ? dStr
-      : d.toLocaleDateString("en-SG", {
-          month: "short",
-          day: "numeric",
-          year: "numeric",
-          hour: "2-digit",
-          minute: "2-digit",
-        });
-  } catch {
-    return dStr;
-  }
+const fmtDate = (dStr: string) => formatDateTime(dStr, dStr);
+
+function pad2(n: number): string {
+  return String(n).padStart(2, "0");
+}
+
+/** Calendar date ("YYYY-MM-DD") of an instant in the club's time zone. */
+function appDateKey(d: Date): string {
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: APP_TIMEZONE,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).formatToParts(d);
+  const get = (t: string) => parts.find((p) => p.type === t)?.value ?? "";
+  return `${get("year")}-${get("month")}-${get("day")}`;
+}
+
+/** { year, month (0-based) } of an instant in the club's time zone. */
+function appYearMonth(ms: number): { year: number; month: number } {
+  const [y, m] = appDateKey(new Date(ms)).split("-").map(Number);
+  return { year: y, month: m - 1 };
 }
 
 export function ReservationsClient({
@@ -73,7 +83,18 @@ export function ReservationsClient({
   const [search, setSearch] = useState("");
   const [filterStatus, setFilterStatus] = useState<string>("all");
   const [viewMode, setViewMode] = useState<"list" | "calendar">("calendar");
-  const [currentMonth, setCurrentMonth] = useState<Date>(new Date());
+  // The calendar depends on "now" (current month, today highlight), so it is only built after
+  // mount — building it during render would differ between the server (UTC) and the browser.
+  const now = useNow();
+  const [viewMonth, setViewMonth] = useState<{ year: number; month: number } | null>(null);
+  const currentMonth = viewMonth ?? (now !== null ? appYearMonth(now) : null);
+  const todayKey = now !== null ? appDateKey(new Date(now)) : null;
+
+  function shiftMonth(delta: number) {
+    if (!currentMonth) return;
+    const idx = currentMonth.year * 12 + currentMonth.month + delta;
+    setViewMonth({ year: Math.floor(idx / 12), month: ((idx % 12) + 12) % 12 });
+  }
 
   // Create Modal State
   const [isCreateOpen, setIsCreateOpen] = useState(false);
@@ -87,8 +108,9 @@ export function ReservationsClient({
   // Fulfillment State
   const [fulfillingId, setFulfillingId] = useState<number | null>(null);
 
+  // The reservations tab is admin-only (enforced by the page and API).
   const isAdmin = role === "admin";
-  const canCreate = role === "admin" || role === "verified";
+  const canCreate = isAdmin;
 
   // Filtered reservations
   const filtered = reservations.filter((r) => {
@@ -127,13 +149,13 @@ export function ReservationsClient({
         }),
       });
 
-      const data = await res.json();
       if (!res.ok) {
-        setErrorMessage(data.error || "Failed to create reservation");
+        setErrorMessage(await readErrorMessage(res, "Failed to create reservation"));
         return;
       }
+      const data = (await res.json()) as Reservation;
 
-      setReservations([data, ...reservations]);
+      setReservations((prev) => [data, ...prev]);
       setIsCreateOpen(false);
       resetForm();
       router.refresh();
@@ -155,8 +177,7 @@ export function ReservationsClient({
         );
         router.refresh();
       } else {
-        const d = await res.json();
-        alert(d.error || "Failed to cancel reservation");
+        alert(await readErrorMessage(res, "Failed to cancel reservation"));
       }
     } catch (err) {
       console.error(err);
@@ -172,7 +193,6 @@ export function ReservationsClient({
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ action: "fulfill" }),
       });
-      const data = await res.json();
       if (res.ok) {
         setReservations((prev) =>
           prev.map((r) => (r.id === id ? { ...r, status: "fulfilled" as const } : r))
@@ -180,7 +200,7 @@ export function ReservationsClient({
         alert("Reservation fulfilled! Equipment has been checked out.");
         router.refresh();
       } else {
-        alert(data.error || "Cannot fulfill reservation");
+        alert(await readErrorMessage(res, "Cannot fulfill reservation"));
       }
     } catch (err) {
       console.error(err);
@@ -279,7 +299,12 @@ export function ReservationsClient({
             <div className="flex items-center gap-2">
               <CalendarIcon className="h-5 w-5 text-primary" />
               <CardTitle className="text-base sm:text-lg">
-                {currentMonth.toLocaleDateString("en-US", { month: "long", year: "numeric" })}
+                {currentMonth
+                  ? new Date(Date.UTC(currentMonth.year, currentMonth.month, 1)).toLocaleDateString(
+                      "en-GB",
+                      { month: "long", year: "numeric", timeZone: "UTC" }
+                    )
+                  : " "}
               </CardTitle>
             </div>
             <div className="flex items-center gap-1.5">
@@ -287,11 +312,8 @@ export function ReservationsClient({
                 variant="outline"
                 size="icon"
                 className="h-8 w-8"
-                onClick={() =>
-                  setCurrentMonth(
-                    new Date(currentMonth.getFullYear(), currentMonth.getMonth() - 1, 1)
-                  )
-                }
+                disabled={!currentMonth}
+                onClick={() => shiftMonth(-1)}
               >
                 <ChevronLeft className="h-4 w-4" />
               </Button>
@@ -299,7 +321,7 @@ export function ReservationsClient({
                 variant="outline"
                 size="sm"
                 className="h-8 text-xs px-2.5"
-                onClick={() => setCurrentMonth(new Date())}
+                onClick={() => setViewMonth(null)}
               >
                 Today
               </Button>
@@ -307,11 +329,8 @@ export function ReservationsClient({
                 variant="outline"
                 size="icon"
                 className="h-8 w-8"
-                onClick={() =>
-                  setCurrentMonth(
-                    new Date(currentMonth.getFullYear(), currentMonth.getMonth() + 1, 1)
-                  )
-                }
+                disabled={!currentMonth}
+                onClick={() => shiftMonth(1)}
               >
                 <ChevronRight className="h-4 w-4" />
               </Button>
@@ -330,11 +349,24 @@ export function ReservationsClient({
 
             {/* Monthly Calendar Grid */}
             {(() => {
-              const year = currentMonth.getFullYear();
-              const month = currentMonth.getMonth();
-              const firstDayIndex = new Date(year, month, 1).getDay();
-              const daysInMonth = new Date(year, month + 1, 0).getDate();
-              const today = new Date();
+              if (!currentMonth) {
+                return <div className="min-h-[200px]" aria-busy="true" />;
+              }
+              const { year, month } = currentMonth;
+              // Pure calendar arithmetic in UTC — independent of the browser's time zone.
+              const firstDayIndex = new Date(Date.UTC(year, month, 1)).getUTCDay();
+              const daysInMonth = new Date(Date.UTC(year, month + 1, 0)).getUTCDate();
+
+              // Club-time-zone calendar dates each reservation spans.
+              const spans = filtered.map((r) => {
+                const s = parseDbDate(r.start_time);
+                const e = parseDbDate(r.end_time);
+                return {
+                  r,
+                  startKey: s ? appDateKey(s) : null,
+                  endKey: e ? appDateKey(e) : null,
+                };
+              });
 
               const cells = [];
               // Leading empty cells
@@ -349,20 +381,16 @@ export function ReservationsClient({
 
               // Days of month
               for (let day = 1; day <= daysInMonth; day++) {
-                const dayDate = new Date(year, month, day);
-                const isToday =
-                  today.getDate() === day &&
-                  today.getMonth() === month &&
-                  today.getFullYear() === year;
+                const dayKey = `${year}-${pad2(month + 1)}-${pad2(day)}`;
+                const isToday = todayKey === dayKey;
 
-                // Find reservations active on this calendar day
-                const dayReservations = filtered.filter((r) => {
-                  const s = new Date(r.start_time);
-                  const e = new Date(r.end_time);
-                  const startOfDay = new Date(year, month, day, 0, 0, 0);
-                  const endOfDay = new Date(year, month, day, 23, 59, 59);
-                  return s <= endOfDay && e >= startOfDay;
-                });
+                // Reservations active on this calendar day ("YYYY-MM-DD" compares lexically).
+                const dayReservations = spans
+                  .filter(
+                    ({ startKey, endKey }) =>
+                      startKey !== null && endKey !== null && startKey <= dayKey && endKey >= dayKey
+                  )
+                  .map(({ r }) => r);
 
                 cells.push(
                   <div
@@ -445,8 +473,7 @@ export function ReservationsClient({
         ) : (
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
           {filtered.map((res) => {
-            const isOwner = currentUserId === res.reserved_by;
-            const canManage = isAdmin || isOwner;
+            const canManage = isAdmin;
             const isConfirmed = res.status === "confirmed";
 
             return (

@@ -11,7 +11,7 @@ migrations_dir = "migrations"
 
 [vars]
 AUTH_URL = "https://mediahub-website.media-club.workers.dev"
-ADMIN_EMAILS = "zhangbohan0429@gmail.com"
+# ADMIN_EMAILS is a secret: `npx wrangler secret put ADMIN_EMAILS` (comma-separated emails)
 GEMINI_BACKUP_MODEL = "gemini-3.1-flash-lite"
 GEMINI_MODEL = "gemini-3.5-flash-lite"
 SMTP_HOST = "smtp.gmail.com"

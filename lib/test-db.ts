@@ -8,7 +8,7 @@ export const SCHEMA_SQL = `
     id         INTEGER PRIMARY KEY AUTOINCREMENT,
     name       TEXT    NOT NULL,
     email      TEXT    NOT NULL UNIQUE,
-    username   TEXT,
+    username   TEXT    UNIQUE,
     google_id  TEXT,
     image      TEXT,
     role       TEXT    NOT NULL DEFAULT 'viewer' CHECK(role IN ('admin','verified','viewer')),
@@ -21,7 +21,8 @@ export const SCHEMA_SQL = `
     nfc_value   TEXT    NOT NULL UNIQUE,
     member_name TEXT    NOT NULL,
     notes       TEXT,
-    created_at  TEXT    NOT NULL DEFAULT (datetime('now'))
+    created_at  TEXT    NOT NULL DEFAULT (datetime('now')),
+    updated_at  TEXT    NOT NULL DEFAULT (datetime('now'))
   );
 
   CREATE TABLE IF NOT EXISTS tags (
@@ -52,7 +53,7 @@ export const SCHEMA_SQL = `
 
   CREATE TABLE IF NOT EXISTS checkouts (
     id                  INTEGER PRIMARY KEY AUTOINCREMENT,
-    equipment_id        INTEGER NOT NULL REFERENCES equipment(id),
+    equipment_id        INTEGER NOT NULL REFERENCES equipment(id) ON DELETE CASCADE,
     checked_out_by      INTEGER REFERENCES users(id),
     checked_out_by_name TEXT    NOT NULL,
     checked_out_at      TEXT    NOT NULL DEFAULT (datetime('now')),
@@ -140,7 +141,8 @@ export const SCHEMA_SQL = `
     checkout_id   INTEGER NOT NULL REFERENCES checkouts(id) ON DELETE CASCADE,
     reminder_type TEXT    NOT NULL CHECK(reminder_type IN ('due_soon', 'overdue')),
     sent_to_email TEXT    NOT NULL,
-    sent_at       TEXT    NOT NULL DEFAULT (datetime('now'))
+    sent_at       TEXT    NOT NULL DEFAULT (datetime('now')),
+    window_key    TEXT
   );
 
   CREATE TABLE IF NOT EXISTS reservations (
@@ -172,7 +174,8 @@ export const SCHEMA_SQL = `
   CREATE TABLE IF NOT EXISTS audit_sessions (
     id            INTEGER PRIMARY KEY AUTOINCREMENT,
     name          TEXT NOT NULL,
-    started_by    INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    started_by    INTEGER REFERENCES users(id) ON DELETE SET NULL,
+    started_by_name TEXT,
     status        TEXT NOT NULL DEFAULT 'in_progress' CHECK(status IN ('in_progress', 'completed', 'cancelled')),
     started_at    TEXT NOT NULL DEFAULT (datetime('now')),
     completed_at  TEXT,
@@ -206,6 +209,10 @@ export const SCHEMA_SQL = `
   CREATE INDEX IF NOT EXISTS idx_handover_code ON handover_codes(code);
   CREATE INDEX IF NOT EXISTS idx_handover_checkout ON handover_codes(checkout_id);
   CREATE INDEX IF NOT EXISTS idx_audit_records_session ON audit_records(session_id, status);
+  CREATE UNIQUE INDEX IF NOT EXISTS idx_checkouts_one_open ON checkouts(equipment_id) WHERE returned_at IS NULL;
+  CREATE UNIQUE INDEX IF NOT EXISTS idx_reminders_unique_window ON checkout_reminders(checkout_id, reminder_type, window_key);
+  CREATE UNIQUE INDEX IF NOT EXISTS idx_tags_name_lower ON tags(LOWER(name));
+  CREATE INDEX IF NOT EXISTS idx_event_equipment_equipment ON event_equipment(equipment_id);
 `;
 
 let testDbInstance: Database.Database | null = null;

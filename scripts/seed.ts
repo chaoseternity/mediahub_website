@@ -1,13 +1,18 @@
 /**
  * Seed script — generates seed SQL for Cloudflare D1.
  *
- * Usage (local wrangler dev):
+ * !!! WARNING !!!
+ * The generated SQL starts with DELETE FROM checkouts / equipment_tags / equipment / tags.
+ * On a real database this wipes ALL equipment and, through ON DELETE CASCADE, the checkout,
+ * reservation, handover, audit and event-equipment history. Only use it on a local dev DB.
+ *
+ * Usage (local wrangler dev — the only supported target):
  *   npm run seed
  *   wrangler d1 execute inventory-tracker-db --local --file=data/seed.sql
  *
- * Usage (remote / production):
- *   npm run seed
- *   wrangler d1 execute inventory-tracker-db --remote --file=data/seed.sql
+ * Remote / production is refused unless the data loss is explicitly acknowledged:
+ *   tsx scripts/seed.ts --remote --i-understand-this-wipes-production
+ * (or SEED_I_UNDERSTAND_THIS_WIPES_PRODUCTION=1 for `npm run db:seed:remote`).
  *
  * Creates:
  *   - 6 laptops, 10 video SD cards, 15 photo SD cards
@@ -16,6 +21,39 @@
 
 import fs from "fs";
 import path from "path";
+
+// ---------------------------------------------------------------------------
+// Safety guard: refuse to target a remote (production) database by default.
+// ---------------------------------------------------------------------------
+const ACK_FLAG = "--i-understand-this-wipes-production";
+const argv = process.argv.slice(2);
+const acknowledged =
+  argv.includes(ACK_FLAG) || process.env.SEED_I_UNDERSTAND_THIS_WIPES_PRODUCTION === "1";
+// `npm run db:seed:remote` runs this script right before `wrangler d1 execute --remote`.
+const targetsRemote =
+  argv.includes("--remote") || (process.env.npm_lifecycle_event ?? "").includes("remote");
+
+if (targetsRemote && !acknowledged) {
+  console.error(
+    [
+      "",
+      "REFUSING TO SEED A REMOTE DATABASE.",
+      "",
+      "The seed SQL deletes ALL equipment, tags and checkouts. On the production D1 database this",
+      "cascades and permanently wipes checkout, reservation, handover, audit and event history.",
+      "",
+      `If you really intend to do this, re-run with ${ACK_FLAG}`,
+      "(or SEED_I_UNDERSTAND_THIS_WIPES_PRODUCTION=1 when using npm run db:seed:remote).",
+      "",
+    ].join("\n")
+  );
+  process.exit(1);
+}
+if (targetsRemote) {
+  console.warn(
+    `WARNING: ${ACK_FLAG} given. Applying the generated SQL will WIPE the remote database's equipment and history.`
+  );
+}
 
 // ---------------------------------------------------------------------------
 // IDs (deterministic — inserts always run in order after a full clear)
@@ -70,6 +108,8 @@ const sql = (line: string) => lines.push(line);
 // ---------------------------------------------------------------------------
 // Clear existing data
 // ---------------------------------------------------------------------------
+sql("-- WARNING: DEVELOPMENT SEED DATA. The statements below delete ALL equipment, tags and");
+sql("-- checkouts (cascading to reservation/handover/audit/event history). Never apply to production.");
 sql("DELETE FROM checkouts;");
 sql("DELETE FROM equipment_tags;");
 sql("DELETE FROM equipment;");
@@ -139,4 +179,7 @@ fs.writeFileSync(outPath, lines.join("\n") + "\n", "utf-8");
 
 console.log(`✓ Generated ${outPath}`);
 console.log(`\nApply locally:   wrangler d1 execute inventory-tracker-db --local --file=data/seed.sql`);
-console.log(`Apply remotely:  wrangler d1 execute inventory-tracker-db --remote --file=data/seed.sql`);
+console.log(
+  "\nWARNING: this SQL deletes all equipment, tags and checkouts (and cascades to their history)." +
+    "\nNever apply it to the production database (--remote)."
+);

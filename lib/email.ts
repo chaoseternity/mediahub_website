@@ -1,5 +1,62 @@
 import nodemailer from "nodemailer";
 import type { EventSection } from "./types";
+import { formatDate, formatLongDateTime, formatTime, parseDbDate } from "./timezone";
+
+export interface EmailSendResult {
+  success: boolean;
+  previewUrl?: string;
+  error?: string;
+  /** True when nothing was sent because email delivery is not configured. */
+  skipped?: boolean;
+  reason?: string;
+}
+
+const SMTP_NOT_CONFIGURED = "SMTP not configured";
+
+function isLocalHost(hostname: string): boolean {
+  return hostname === "localhost" || hostname === "127.0.0.1" || hostname === "[::1]" || hostname.endsWith(".localhost");
+}
+
+function toHttpOrigin(value: string | undefined | null): string | null {
+  if (!value) return null;
+  try {
+    const parsed = new URL(value.trim());
+    if (parsed.protocol === "http:" || parsed.protocol === "https:") return parsed.origin;
+  } catch {
+    // ignore malformed values
+  }
+  return null;
+}
+
+/**
+ * Public base URL for links in emails. Prefers the configured AUTH_URL (set in wrangler.toml),
+ * then NEXTAUTH_URL, then the request origin passed by the caller, then VERCEL_URL. A localhost
+ * candidate is only used if nothing better is available, so production mail never links to it.
+ */
+export function resolveEmailBaseUrl(origin?: string | null): string {
+  const candidates = [
+    process.env.AUTH_URL,
+    process.env.NEXTAUTH_URL,
+    origin,
+    process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : undefined,
+  ]
+    .map(toHttpOrigin)
+    .filter((o): o is string => !!o);
+
+  const nonLocal = candidates.find((o) => !isLocalHost(new URL(o).hostname));
+  return nonLocal ?? candidates[0] ?? "http://localhost:3000";
+}
+
+/** "Tue, 1 Oct 2026, 18:00 – 22:00" (end date repeated only when it differs), in APP_TIMEZONE. */
+export function formatEmailTimeRange(start: string, end: string | null | undefined): string {
+  const startText = formatLongDateTime(start, start);
+  if (!end) return startText;
+  const startDate = parseDbDate(start);
+  const endDate = parseDbDate(end);
+  if (!startDate || !endDate) return `${startText} – ${end}`;
+  const sameDay = formatDate(startDate) === formatDate(endDate);
+  return `${startText} – ${sameDay ? formatTime(endDate) : formatLongDateTime(endDate)}`;
+}
 
 interface SendDeploymentInvitationParams {
   toEmail: string;
@@ -73,22 +130,9 @@ export async function sendDeploymentInvitationEmail({
   attendingRehearsal,
   token,
   origin,
-}: SendDeploymentInvitationParams): Promise<{ success: boolean; previewUrl?: string; error?: string }> {
+}: SendDeploymentInvitationParams): Promise<EmailSendResult> {
   try {
-    const rawBaseUrl =
-      process.env.NEXTAUTH_URL ||
-      (process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : origin) ||
-      "http://localhost:3000";
-
-    let baseUrl = "http://localhost:3000";
-    try {
-      const parsed = new URL(rawBaseUrl);
-      if (parsed.protocol === "http:" || parsed.protocol === "https:") {
-        baseUrl = parsed.origin;
-      }
-    } catch {
-      baseUrl = "http://localhost:3000";
-    }
+    const baseUrl = resolveEmailBaseUrl(origin);
 
     const safeToken = encodeURIComponent(token.trim());
     const rsvpUrl = `${baseUrl}/rsvp/${safeToken}`;
@@ -104,37 +148,11 @@ export async function sendDeploymentInvitationEmail({
     const safeLocation = escapeHtml(location);
     const safeSectionName = escapeHtml(sectionName);
 
-    const formattedStart = new Date(startTime).toLocaleString("en-US", {
-      weekday: "short",
-      month: "short",
-      day: "numeric",
-      year: "numeric",
-      hour: "numeric",
-      minute: "2-digit",
-      hour12: true,
-    });
-
-    const formattedEnd = new Date(endTime).toLocaleString("en-US", {
-      hour: "numeric",
-      minute: "2-digit",
-      hour12: true,
-    });
+    const formattedRange = escapeHtml(formatEmailTimeRange(startTime, endTime));
 
     let rehearsalHtml = "";
     if (hasRehearsal && rehearsalStartTime && rehearsalEndTime) {
-      const formattedRehStart = new Date(rehearsalStartTime).toLocaleString("en-US", {
-        weekday: "short",
-        month: "short",
-        day: "numeric",
-        hour: "numeric",
-        minute: "2-digit",
-        hour12: true,
-      });
-      const formattedRehEnd = new Date(rehearsalEndTime).toLocaleString("en-US", {
-        hour: "numeric",
-        minute: "2-digit",
-        hour12: true,
-      });
+      const formattedRehearsal = escapeHtml(formatEmailTimeRange(rehearsalStartTime, rehearsalEndTime));
 
       rehearsalHtml = `
         <div style="margin-top: 14px; padding: 12px; background-color: #fef3c7; border: 1px solid #fde68a; border-radius: 8px;">
@@ -142,7 +160,7 @@ export async function sendDeploymentInvitationEmail({
             🎭 Rehearsal Scheduled
           </p>
           <p style="margin: 4px 0 0 0; color: #78350f; font-size: 13px;">
-            <strong>Time:</strong> ${formattedRehStart} - ${formattedRehEnd}
+            <strong>Time:</strong> ${formattedRehearsal}
           </p>
           ${
             attendingRehearsal
@@ -191,7 +209,7 @@ export async function sendDeploymentInvitationEmail({
               ${safeEventDesc ? `<p style="margin: 0 0 12px 0; font-size: 13px; color: #52525b; line-height: 1.4;">${safeEventDesc}</p>` : ""}
 
               <div style="font-size: 13px; color: #27272a; line-height: 1.6;">
-                <p style="margin: 4px 0;">📅 <strong>Date & Time:</strong> ${formattedStart} – ${formattedEnd}</p>
+                <p style="margin: 4px 0;">📅 <strong>Date &amp; Time:</strong> ${formattedRange}</p>
                 <p style="margin: 4px 0;">📍 <strong>Location:</strong> ${safeLocation}</p>
               </div>
 
@@ -250,11 +268,9 @@ export async function sendDeploymentInvitationEmail({
       console.log(`✓ Sent deployment email to ${cleanToEmail} for event "${cleanEventName}"`);
       return { success: true };
     } else {
-      console.log(`[DEV MAIL] SMTP not configured. Simulated invitation to ${cleanToEmail}:`);
-      console.log(`   RSVP Link: ${rsvpUrl}`);
-      console.log(`   Confirm Link: ${confirmUrl}`);
-      console.log(`   Decline Link: ${declineUrl}`);
-      return { success: true, previewUrl: rsvpUrl };
+      // Never log the RSVP link: it embeds a bearer token that would persist in log storage.
+      console.warn(`[MAIL] ${SMTP_NOT_CONFIGURED}; deployment invitation for "${cleanEventName}" was not sent.`);
+      return { success: false, skipped: true, reason: SMTP_NOT_CONFIGURED, error: SMTP_NOT_CONFIGURED };
     }
   } catch (err: unknown) {
     console.error("Error dispatching deployment invitation email:", err);
@@ -291,22 +307,9 @@ export async function sendOverdueReminderEmail({
   notes,
   isOverdue,
   origin,
-}: SendOverdueReminderParams): Promise<{ success: boolean; previewUrl?: string; error?: string }> {
+}: SendOverdueReminderParams): Promise<EmailSendResult> {
   try {
-    const rawBaseUrl =
-      process.env.NEXTAUTH_URL ||
-      (process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : origin) ||
-      "http://localhost:3000";
-
-    let baseUrl = "http://localhost:3000";
-    try {
-      const parsed = new URL(rawBaseUrl);
-      if (parsed.protocol === "http:" || parsed.protocol === "https:") {
-        baseUrl = parsed.origin;
-      }
-    } catch {
-      baseUrl = "http://localhost:3000";
-    }
+    const baseUrl = resolveEmailBaseUrl(origin);
 
     const cleanEquipmentName = equipmentName.replace(/[\r\n]+/g, " ").trim();
     const cleanToEmail = toEmail.replace(/[\r\n]+/g, "").trim();
@@ -316,20 +319,7 @@ export async function sendOverdueReminderEmail({
     const subjectPrefix = isOverdue ? "[OVERDUE] Please return" : "[Return Reminder]";
     const headerTitle = isOverdue ? "Equipment Return is Overdue" : "Equipment Due for Return Soon";
 
-    const fmtDate = (d: string) => {
-      try {
-        return new Date(d).toLocaleString("en-GB", {
-          weekday: "short",
-          day: "numeric",
-          month: "short",
-          year: "numeric",
-          hour: "2-digit",
-          minute: "2-digit",
-        });
-      } catch {
-        return d;
-      }
-    };
+    const fmtDate = (d: string) => escapeHtml(formatLongDateTime(d, d));
 
     const dashboardUrl = `${baseUrl}/dashboard`;
 
@@ -436,12 +426,8 @@ export async function sendOverdueReminderEmail({
       console.log(`✓ Sent ${badgeText} reminder to ${cleanToEmail} for "${cleanEquipmentName}"`);
       return { success: true };
     } else {
-      console.log(`[DEV MAIL] SMTP not configured. Simulated reminder to ${cleanToEmail}:`);
-      console.log(`   Type: ${badgeText}`);
-      console.log(`   Equipment: ${cleanEquipmentName} (ID: ${serialNumber || "N/A"})`);
-      console.log(`   Expected Return: ${expectedReturnAt}`);
-      console.log(`   Dashboard: ${dashboardUrl}`);
-      return { success: true, previewUrl: dashboardUrl };
+      console.warn(`[MAIL] ${SMTP_NOT_CONFIGURED}; ${badgeText} reminder for "${cleanEquipmentName}" was not sent.`);
+      return { success: false, skipped: true, reason: SMTP_NOT_CONFIGURED, error: SMTP_NOT_CONFIGURED };
     }
   } catch (err: unknown) {
     console.error("Error dispatching return reminder email:", err);

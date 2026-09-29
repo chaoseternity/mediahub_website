@@ -109,10 +109,16 @@ export interface EquipmentDetail extends Omit<Equipment, "active_checkout_id" | 
 export type EventStatus = "Upcoming" | "Ongoing" | "Completed";
 export type EventSection = "photo" | "video" | "av";
 
+/**
+ * A user as embedded in event data. Event data is served to every logged-in user, so
+ * contact details and login identifiers (email, google_id) are never included.
+ */
+export type EventMember = Omit<User, "email" | "google_id">;
+
 export interface SectionICMap {
-  photo: User[];
-  video: User[];
-  av: User[];
+  photo: EventMember[];
+  video: EventMember[];
+  av: EventMember[];
 }
 
 export interface SectionEquipmentItem extends Equipment {
@@ -127,10 +133,11 @@ export interface SectionEquipmentMap {
 
 export type DeploymentResponseStatus = "pending" | "confirmed" | "declined";
 
-export interface SectionDeploymentItem extends User {
+// response_token is intentionally absent: it is the sole credential for the public RSVP
+// endpoint and must never be sent to clients.
+export interface SectionDeploymentItem extends EventMember {
   attending_rehearsal: boolean;
   response_status?: DeploymentResponseStatus;
-  response_token?: string;
   responded_at?: string | null;
 }
 
@@ -163,7 +170,7 @@ export interface AppEvent {
   has_rehearsal: boolean;
   rehearsal_start_time: string | null;
   rehearsal_end_time: string | null;
-  oics: User[];
+  oics: EventMember[];
   section_ics: SectionICMap;
   section_equipment: SectionEquipmentMap;
   section_deployments: SectionDeploymentMap;
@@ -262,6 +269,8 @@ export interface CheckoutReminder {
   reminder_type: ReminderType;
   sent_to_email: string;
   sent_at: string;
+  /** Reminder window this record claims (UNIQUE per checkout + type); null for legacy rows. */
+  window_key?: string | null;
 }
 
 export interface ReminderProcessResult {
@@ -269,6 +278,8 @@ export interface ReminderProcessResult {
   sent: number;
   skipped: number;
   errors: number;
+  /** Checkouts skipped because they are not linked to a user account (e.g. NFC-station checkouts). */
+  noLinkedAccount?: number;
   reminders: Array<{
     checkoutId: number;
     equipmentId: number;
@@ -348,7 +359,7 @@ export type AuditRecordStatus = "exists" | "missing";
 export interface AuditSession {
   id: number;
   name: string;
-  started_by: number;
+  started_by: number | null; // null once the starting user has been deleted (see started_by_name)
   started_by_name?: string;
   status: AuditSessionStatus;
   started_at: string;

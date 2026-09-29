@@ -5,6 +5,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import type { AppEvent, EventSection } from "@/lib/types";
+import { readErrorMessage, networkErrorMessage } from "@/lib/fetch-error";
 
 interface SectionRehearsalModalProps {
   event: AppEvent | null;
@@ -70,14 +71,13 @@ export function SectionRehearsalModal({
       });
 
       if (!res.ok) {
-        const data = await res.json();
-        throw new Error(data.error ?? "Failed to save rehearsal options");
+        throw new Error(await readErrorMessage(res, "Failed to save rehearsal options"));
       }
 
       onUpdated();
       onClose();
     } catch (err: unknown) {
-      setError(err instanceof Error ? err.message : "An error occurred");
+      setError(networkErrorMessage(err));
     } finally {
       setSubmitting(false);
     }
@@ -148,7 +148,9 @@ export function SectionRehearsalModal({
                           className="rounded border-input text-primary"
                         />
                         <span className="font-medium">{dep.name}</span>
-                        <span className="text-[10px] text-muted-foreground">({dep.email})</span>
+                        {dep.username && (
+                          <span className="text-[10px] text-muted-foreground">(@{dep.username})</span>
+                        )}
                       </label>
                     ))
                   )}

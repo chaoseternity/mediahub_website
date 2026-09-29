@@ -6,7 +6,9 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Search, UserCheck, ShieldAlert } from "lucide-react";
-import type { AppEvent, User } from "@/lib/types";
+import type { AppEvent } from "@/lib/types";
+import { toLocalInputValue, fromLocalInputValue } from "@/lib/datetime-local";
+import { fetchUserDirectory, matchesUserSearch, type DirectoryUser } from "@/lib/user-directory";
 
 interface EditEventModalProps {
   event: AppEvent | null;
@@ -28,7 +30,8 @@ export function EditEventModal({ event, open, isAdmin, onClose, onUpdated }: Edi
   const [rehearsalEndTime, setRehearsalEndTime] = useState("");
 
   const [userSearch, setUserSearch] = useState("");
-  const [allUsers, setAllUsers] = useState<User[]>([]);
+  const [allUsers, setAllUsers] = useState<DirectoryUser[]>([]);
+  const [usersError, setUsersError] = useState<string | null>(null);
 
   const [selectedOicIds, setSelectedOicIds] = useState<number[]>([]);
   const [selectedPhotoIcIds, setSelectedPhotoIcIds] = useState<number[]>([]);
@@ -44,12 +47,13 @@ export function EditEventModal({ event, open, isAdmin, onClose, onUpdated }: Edi
       setDescription(event.description ?? "");
       setLocation(event.location);
 
-      setStartTime(event.start_time ? new Date(event.start_time).toISOString().slice(0, 16) : "");
-      setEndTime(event.end_time ? new Date(event.end_time).toISOString().slice(0, 16) : "");
+      // datetime-local inputs are in LOCAL time; convert stored ISO (UTC) to local wall-clock.
+      setStartTime(toLocalInputValue(event.start_time));
+      setEndTime(toLocalInputValue(event.end_time));
 
       setHasRehearsal(event.has_rehearsal);
-      setRehearsalStartTime(event.rehearsal_start_time ? new Date(event.rehearsal_start_time).toISOString().slice(0, 16) : "");
-      setRehearsalEndTime(event.rehearsal_end_time ? new Date(event.rehearsal_end_time).toISOString().slice(0, 16) : "");
+      setRehearsalStartTime(toLocalInputValue(event.rehearsal_start_time));
+      setRehearsalEndTime(toLocalInputValue(event.rehearsal_end_time));
 
       setUserSearch("");
       setSelectedOicIds(event.oics.map((u) => u.id));
@@ -58,22 +62,25 @@ export function EditEventModal({ event, open, isAdmin, onClose, onUpdated }: Edi
       setSelectedAvIcIds(event.section_ics.av.map((u) => u.id));
 
       setError(null);
+      setUsersError(null);
 
-      fetch("/api/users")
-        .then((r) => r.json())
-        .then((data: User[]) => setAllUsers(data))
-        .catch(() => setAllUsers([]));
+      const controller = new AbortController();
+      fetchUserDirectory(controller.signal).then((result) => {
+        if (controller.signal.aborted) return;
+        if (result.ok) {
+          setAllUsers(result.users);
+        } else {
+          setAllUsers([]);
+          setUsersError(result.error);
+        }
+      });
+      return () => controller.abort();
     }
   }, [open, event]);
 
   if (!event) return null;
 
-  const filteredUsers = allUsers.filter(
-    (u) =>
-      u.name.toLowerCase().includes(userSearch.toLowerCase()) ||
-      u.email.toLowerCase().includes(userSearch.toLowerCase()) ||
-      (u.username && u.username.toLowerCase().includes(userSearch.toLowerCase()))
-  );
+  const filteredUsers = allUsers.filter((u) => matchesUserSearch(u, userSearch));
 
   function toggleId(list: number[], id: number) {
     return list.includes(id) ? list.filter((i) => i !== id) : [...list, id];
@@ -114,11 +121,11 @@ export function EditEventModal({ event, open, isAdmin, onClose, onUpdated }: Edi
           name: isAdmin ? name : undefined,
           description: description || undefined,
           location,
-          start_time: new Date(startTime).toISOString(),
-          end_time: new Date(endTime).toISOString(),
+          start_time: fromLocalInputValue(startTime),
+          end_time: fromLocalInputValue(endTime),
           has_rehearsal: hasRehearsal,
-          rehearsal_start_time: hasRehearsal ? new Date(rehearsalStartTime).toISOString() : null,
-          rehearsal_end_time: hasRehearsal ? new Date(rehearsalEndTime).toISOString() : null,
+          rehearsal_start_time: hasRehearsal ? fromLocalInputValue(rehearsalStartTime) : null,
+          rehearsal_end_time: hasRehearsal ? fromLocalInputValue(rehearsalEndTime) : null,
           oic_user_ids: selectedOicIds,
           photo_ic_ids: selectedPhotoIcIds,
           video_ic_ids: selectedVideoIcIds,
@@ -127,7 +134,7 @@ export function EditEventModal({ event, open, isAdmin, onClose, onUpdated }: Edi
       });
 
       if (!res.ok) {
-        const data = await res.json();
+        const data = await res.json().catch(() => ({}));
         throw new Error(data.error?.message ?? data.error ?? "Failed to update event");
       }
 
@@ -256,13 +263,17 @@ export function EditEventModal({ event, open, isAdmin, onClose, onUpdated }: Edi
               <div className="relative w-64">
                 <Search className="h-3.5 w-3.5 absolute left-2.5 top-2.5 text-muted-foreground" />
                 <Input
-                  placeholder="Search users by name/email…"
+                  placeholder="Search users by name/username…"
                   value={userSearch}
                   onChange={(e) => setUserSearch(e.target.value)}
                   className="pl-8 h-8 text-xs"
                 />
               </div>
             </div>
+
+            {usersError && (
+              <p className="text-xs text-destructive font-medium bg-destructive/10 p-2 rounded-md">{usersError}</p>
+            )}
 
             {/* OICs */}
             <div className="space-y-2">
@@ -280,7 +291,9 @@ export function EditEventModal({ event, open, isAdmin, onClose, onUpdated }: Edi
                       className="rounded border-input text-primary"
                     />
                     <span className="font-medium">{u.name}</span>
-                    <span className="text-[10px] text-muted-foreground">({u.email})</span>
+                    {(u.email || u.username) && (
+                      <span className="text-[10px] text-muted-foreground">({u.email ?? `@${u.username}`})</span>
+                    )}
                   </label>
                 ))}
               </div>

@@ -3,16 +3,41 @@ import { authConfig } from "@/auth.config";
 import { upsertUser, getUserByEmail } from "./db";
 import type { Role } from "./types";
 
+/** Microsoft sign-ins are restricted to school accounts. Google is unrestricted for now. */
+export const MICROSOFT_ALLOWED_EMAIL_DOMAIN = "nushigh.edu.sg";
+
+const GUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+export function isAllowedMicrosoftEmail(email: string): boolean {
+  return email.trim().toLowerCase().endsWith(`@${MICROSOFT_ALLOWED_EMAIL_DOMAIN}`);
+}
+
 export const { handlers, auth, signIn, signOut } = NextAuth({
   ...authConfig,
   session: { strategy: "jwt" },
   callbacks: {
     ...authConfig.callbacks,
-    async signIn({ user, account }) {
+    async signIn({ user, account, profile }) {
       const allowedProviders = ["google", "microsoft-entra-id"];
       if (!account?.provider || !allowedProviders.includes(account.provider)) return false;
       const email = user.email?.trim().toLowerCase();
       if (!email || !user.name || !account.providerAccountId) return false;
+
+      if (account.provider === "microsoft-entra-id") {
+        if (!isAllowedMicrosoftEmail(email)) return "/login?error=MicrosoftDomain";
+        // When a specific tenant is configured, reject tokens issued by any other tenant.
+        const tenantId = process.env.AZURE_AD_TENANT_ID;
+        if (tenantId && GUID_RE.test(tenantId)) {
+          const tid = (profile as Record<string, unknown> | undefined)?.tid;
+          if (typeof tid !== "string" || tid.toLowerCase() !== tenantId.toLowerCase()) {
+            return "/login?error=MicrosoftDomain";
+          }
+        }
+      }
+
+      if (account.provider === "google" && (profile as Record<string, unknown> | undefined)?.email_verified === false) {
+        return false;
+      }
 
       await upsertUser({
         name: user.name,

@@ -13,6 +13,8 @@ import { BookOpen, FileText, Calendar, User } from "lucide-react";
 import type { SOPDocument, SOPCitation } from "@/lib/types";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
+import { safeMarkdownComponents } from "@/components/safe-markdown";
+import { formatDate } from "@/lib/timezone";
 
 interface SOPPreviewModalProps {
   document: SOPDocument | null;
@@ -55,6 +57,7 @@ export function SOPPreviewModal({
               ),
               th: ({ children }) => <th className="px-3 py-2 font-semibold bg-muted/60 border-b">{children}</th>,
               td: ({ children }) => <td className="px-3 py-2 border-b border-muted/40">{children}</td>,
+              ...safeMarkdownComponents,
             }}
           >
             {document.content}
@@ -140,7 +143,7 @@ export function SOPPreviewModal({
           )}
           <span className="flex items-center gap-1">
             <Calendar className="h-3.5 w-3.5" />
-            Updated {new Date(document.updated_at).toLocaleDateString("en-GB")}
+            Updated {formatDate(document.updated_at)}
           </span>
         </div>
 

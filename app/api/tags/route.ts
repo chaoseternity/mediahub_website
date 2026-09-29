@@ -1,6 +1,7 @@
 import { auth } from "@/lib/auth";
 import { getAllTags, createTag } from "@/lib/db";
 import { NextRequest, NextResponse } from "next/server";
+import { errorResponse, toErrorResponse, validationErrorResponse } from "@/lib/api-errors";
 import { z } from "zod";
 
 const CreateTagSchema = z.object({
@@ -31,15 +32,19 @@ export async function POST(req: NextRequest) {
 
   const parsed = CreateTagSchema.safeParse(body);
   if (!parsed.success) {
-    return NextResponse.json({ error: parsed.error.flatten() }, { status: 400 });
+    return validationErrorResponse(parsed.error);
   }
 
   try {
-
+    // createTag returns the existing tag on a case-insensitive match: answer 200 then, 201 when new.
+    const existingIds = new Set((await getAllTags()).map((t) => t.id));
     const tag = await createTag(parsed.data.name);
-    return NextResponse.json(tag, { status: 201 });
+    return NextResponse.json(tag, { status: existingIds.has(tag.id) ? 200 : 201 });
   } catch (err: unknown) {
-    const message = err instanceof Error ? err.message : "Failed to create tag";
-    return NextResponse.json({ error: message }, { status: 409 });
+    // Duplicate names surface from the database as a UNIQUE constraint violation.
+    if (err instanceof Error && /UNIQUE constraint failed/i.test(err.message)) {
+      return errorResponse(409, `A tag named "${parsed.data.name}" already exists.`);
+    }
+    return toErrorResponse(err, "Failed to create tag");
   }
 }

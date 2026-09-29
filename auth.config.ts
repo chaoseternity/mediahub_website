@@ -36,10 +36,12 @@ export const authConfig = {
         },
       },
       profile(profile) {
+        // Prefer the sign-in name (UPN): its domain must be verified by the tenant,
+        // whereas the `email`/`mail` claims can be set freely by any tenant admin.
         const email =
-          profile.email ||
           profile.preferred_username ||
           (profile as Record<string, any>).upn ||
+          profile.email ||
           (profile as Record<string, any>).mail ||
           "";
         return {

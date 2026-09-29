@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import {
@@ -27,6 +27,7 @@ import { SectionDeploymentModal } from "./SectionDeploymentModal";
 import { SectionRehearsalModal } from "./SectionRehearsalModal";
 import { UserLink } from "./UserLink";
 import type { AppEvent, Role, EventSection } from "@/lib/types";
+import { formatDateTime } from "@/lib/timezone";
 
 interface EventsManagerProps {
   initialEvents: AppEvent[];
@@ -46,23 +47,75 @@ export function EventsManager({ initialEvents, role, currentUserId }: EventsMana
   const [deploymentModalTarget, setDeploymentModalTarget] = useState<{ eventId: number; section: EventSection } | null>(null);
   const [rehearsalModalTarget, setRehearsalModalTarget] = useState<{ event: AppEvent; section: EventSection } | null>(null);
 
+  const [actionError, setActionError] = useState<string | null>(null);
+
   const isAdmin = role === "admin";
 
+  async function readError(res: Response, fallback: string): Promise<string> {
+    const data: unknown = await res.json().catch(() => null);
+    if (data && typeof data === "object" && "error" in data) {
+      const err = (data as { error: unknown }).error;
+      if (typeof err === "string") return err;
+      if (err && typeof err === "object" && "message" in err && typeof (err as { message: unknown }).message === "string") {
+        return (err as { message: string }).message;
+      }
+    }
+    return `${fallback} (${res.status})`;
+  }
+
   async function refresh() {
-    const res = await fetch("/api/events");
-    const data: AppEvent[] = await res.json();
-    setEvents(data);
+    try {
+      const res = await fetch("/api/events");
+      if (!res.ok) {
+        setActionError(await readError(res, "Failed to refresh events"));
+        return;
+      }
+      const data: unknown = await res.json();
+      if (!Array.isArray(data)) {
+        setActionError("Failed to refresh events: unexpected response");
+        return;
+      }
+      setEvents(data as AppEvent[]);
+    } catch {
+      setActionError("Failed to refresh events: network error");
+    }
   }
 
   async function handleDeleteEvent(id: number) {
     if (!confirm("Are you sure you want to delete this event?")) return;
+    setActionError(null);
     try {
       const res = await fetch(`/api/events/${id}`, { method: "DELETE" });
-      if (res.ok) refresh();
+      if (!res.ok) {
+        setActionError(await readError(res, "Failed to delete event"));
+        return;
+      }
+      await refresh();
     } catch {
-      // Ignore
+      setActionError("Failed to delete event: network error");
     }
   }
+
+  // Stable ID arrays for the section modals: their effects depend on these props,
+  // so a fresh array on every render would re-run them and reset the selection.
+  const currentlyAttachedEqIds = useMemo(
+    () =>
+      equipmentModalTarget
+        ? events
+            .find((e) => e.id === equipmentModalTarget.eventId)
+            ?.section_equipment[equipmentModalTarget.section]?.map((eq) => eq.id) || []
+        : [],
+    [events, equipmentModalTarget]
+  );
+  const currentlyDeployedUserIds = useMemo(
+    () =>
+      deploymentModalTarget
+        ? events
+            .find((e) => e.id === deploymentModalTarget.eventId)
+            ?.section_deployments[deploymentModalTarget.section]?.map((d) => d.id) || []
+        : [],
+    [events, deploymentModalTarget]
+  );
 
   async function handleRemoveEquipment(eventId: number, section: EventSection, equipmentId: number) {
     try {
@@ -71,9 +124,13 @@ export function EventsManager({ initialEvents, role, currentUserId }: EventsMana
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ action: "remove_equipment", section, equipment_id: equipmentId }),
       });
-      if (res.ok) refresh();
+      if (!res.ok) {
+        setActionError(await readError(res, "Failed to remove equipment"));
+        return;
+      }
+      await refresh();
     } catch {
-      // Ignore
+      setActionError("Failed to remove equipment: network error");
     }
   }
 
@@ -84,9 +141,13 @@ export function EventsManager({ initialEvents, role, currentUserId }: EventsMana
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ action: "remove_deployment", section, user_id: userId }),
       });
-      if (res.ok) refresh();
+      if (!res.ok) {
+        setActionError(await readError(res, "Failed to remove member"));
+        return;
+      }
+      await refresh();
     } catch {
-      // Ignore
+      setActionError("Failed to remove member: network error");
     }
   }
 
@@ -115,6 +176,23 @@ export function EventsManager({ initialEvents, role, currentUserId }: EventsMana
           </Button>
         )}
       </div>
+
+      {actionError && (
+        <div
+          role="alert"
+          className="flex items-start justify-between gap-3 text-sm text-destructive font-medium bg-destructive/10 border border-destructive/30 p-3 rounded-md"
+        >
+          <span>{actionError}</span>
+          <button
+            type="button"
+            onClick={() => setActionError(null)}
+            className="shrink-0 opacity-70 hover:opacity-100"
+            aria-label="Dismiss error"
+          >
+            <X className="h-4 w-4" />
+          </button>
+        </div>
+      )}
 
       {/* Tabs */}
       <div className="flex gap-2 border-b pb-2">
@@ -183,13 +261,12 @@ export function EventsManager({ initialEvents, role, currentUserId }: EventsMana
                       </span>
                       <span className="flex items-center gap-1">
                         <Clock className="h-3.5 w-3.5 text-primary" />
-                        {new Date(ev.start_time).toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" })} –{" "}
-                        {new Date(ev.end_time).toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" })}
+                        {formatDateTime(ev.start_time)} – {formatDateTime(ev.end_time)}
                       </span>
                       {ev.has_rehearsal && (
                         <span className="flex items-center gap-1 font-medium text-purple-700 dark:text-purple-300">
                           <Sliders className="h-3.5 w-3.5" />
-                          Rehearsal: {new Date(ev.rehearsal_start_time!).toLocaleString(undefined, { dateStyle: "short", timeStyle: "short" })}
+                          Rehearsal: {formatDateTime(ev.rehearsal_start_time)}
                         </span>
                       )}
                     </div>
@@ -457,13 +534,7 @@ export function EventsManager({ initialEvents, role, currentUserId }: EventsMana
       <SectionEquipmentModal
         eventId={equipmentModalTarget?.eventId ?? null}
         section={equipmentModalTarget?.section ?? null}
-        currentlyAttachedEqIds={
-          equipmentModalTarget
-            ? events
-                .find((e) => e.id === equipmentModalTarget.eventId)
-                ?.section_equipment[equipmentModalTarget.section]?.map((eq) => eq.id) || []
-            : []
-        }
+        currentlyAttachedEqIds={currentlyAttachedEqIds}
         open={equipmentModalTarget !== null}
         onClose={() => setEquipmentModalTarget(null)}
         onUpdated={refresh}
@@ -472,13 +543,7 @@ export function EventsManager({ initialEvents, role, currentUserId }: EventsMana
       <SectionDeploymentModal
         eventId={deploymentModalTarget?.eventId ?? null}
         section={deploymentModalTarget?.section ?? null}
-        currentlyDeployedUserIds={
-          deploymentModalTarget
-            ? events
-                .find((e) => e.id === deploymentModalTarget.eventId)
-                ?.section_deployments[deploymentModalTarget.section]?.map((d) => d.id) || []
-            : []
-        }
+        currentlyDeployedUserIds={currentlyDeployedUserIds}
         open={deploymentModalTarget !== null}
         onClose={() => setDeploymentModalTarget(null)}
         onUpdated={refresh}

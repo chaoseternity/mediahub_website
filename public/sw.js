@@ -1,10 +1,20 @@
 // MediaHub & Media Club NFC Station PWA Service Worker
-const CACHE_NAME = "mediahub-station-v1";
+//
+// Privacy: only the NFC station page and static assets are cached. Other dashboard pages
+// (user lists, events, profiles), /rsvp/<token> pages and all API responses are never stored,
+// so a shared device does not expose a previous user's pages offline. The page cache is also
+// cleared on sign-out (CLEAR_USER_CACHE message from lib/sw-client.ts).
 
-const APP_SHELL_ASSETS = [
-  "/",
-  "/dashboard/nfc",
-  "/login",
+const CACHE_VERSION = "v2";
+const PAGE_CACHE = `mediahub-station-pages-${CACHE_VERSION}`;
+const STATIC_CACHE = `mediahub-station-static-${CACHE_VERSION}`;
+const CURRENT_CACHES = [PAGE_CACHE, STATIC_CACHE];
+
+// The only navigation that is cached for offline use.
+const OFFLINE_PAGES = ["/dashboard/nfc"];
+
+// Static app-shell assets precached on install (no navigations: those redirect when logged out).
+const PRECACHE_ASSETS = [
   "/favicon.ico",
   "/icons/icon-192.png",
   "/icons/icon-512.png",
@@ -14,101 +24,158 @@ const APP_SHELL_ASSETS = [
   "/manifest.webmanifest",
 ];
 
-// Install: pre-cache critical app shell routes & icons
+const MAX_STATIC_ENTRIES = 300;
+
+/** Only plain, non-redirected 200 responses may be cached (redirects break navigations). */
+function isCacheable(response) {
+  return (
+    !!response &&
+    response.status === 200 &&
+    response.type === "basic" &&
+    !response.redirected
+  );
+}
+
+function isOfflinePage(url) {
+  return OFFLINE_PAGES.includes(url.pathname.replace(/\/+$/, "") || "/");
+}
+
+function isStaticAsset(url) {
+  return (
+    url.pathname.startsWith("/_next/static/") ||
+    url.pathname.startsWith("/icons/") ||
+    url.pathname === "/favicon.ico" ||
+    url.pathname === "/manifest.webmanifest"
+  );
+}
+
+async function trimCache(cacheName, maxEntries) {
+  const cache = await caches.open(cacheName);
+  const keys = await cache.keys();
+  for (let i = 0; i < keys.length - maxEntries; i++) {
+    await cache.delete(keys[i]);
+  }
+}
+
+async function precache() {
+  const cache = await caches.open(STATIC_CACHE);
+  await Promise.all(
+    PRECACHE_ASSETS.map(async (path) => {
+      try {
+        const response = await fetch(path, { cache: "reload" });
+        if (isCacheable(response)) await cache.put(path, response);
+      } catch (err) {
+        console.warn("[SW] Pre-cache skipped:", path, err);
+      }
+    })
+  );
+}
+
+// Install: best-effort precache; activation never depends on it succeeding.
 self.addEventListener("install", (event) => {
   event.waitUntil(
-    caches
-      .open(CACHE_NAME)
-      .then((cache) => {
-        return cache.addAll(APP_SHELL_ASSETS);
-      })
-      .then(() => self.skipWaiting())
-      .catch((err) => {
-        console.warn("[SW] Pre-cache warning:", err);
-      })
+    precache()
+      .catch((err) => console.warn("[SW] Pre-cache warning:", err))
+      .finally(() => self.skipWaiting())
   );
 });
 
-// Activate: purge stale caches
+// Activate: delete every cache that is not current (including the old mediahub-station-v1,
+// which may hold other users' pages).
 self.addEventListener("activate", (event) => {
   event.waitUntil(
     caches
       .keys()
-      .then((keys) => {
-        return Promise.all(
-          keys.map((key) => {
-            if (key !== CACHE_NAME) {
-              return caches.delete(key);
-            }
-          })
-        );
-      })
+      .then((keys) => Promise.all(keys.filter((key) => !CURRENT_CACHES.includes(key)).map((key) => caches.delete(key))))
       .then(() => self.clients.claim())
   );
 });
 
-// Fetch: Network-first for navigation, Cache-first for static assets, Network-only for APIs
+// Sign-out: drop cached pages so the next user of this device cannot see them offline.
+self.addEventListener("message", (event) => {
+  const data = event.data;
+  if (!data || data.type !== "CLEAR_USER_CACHE") return;
+  const work = caches.delete(PAGE_CACHE).catch(() => false);
+  if (event.waitUntil) event.waitUntil(work);
+});
+
 self.addEventListener("fetch", (event) => {
-  const url = new URL(event.request.url);
+  const request = event.request;
+  const url = new URL(request.url);
 
-  // 1. Skip non-GET and API calls (offline sync engine handles APIs)
-  if (event.request.method !== "GET" || url.pathname.startsWith("/api/")) {
-    return;
-  }
-
-  // 2. Navigation requests (HTML pages) -> Network-first with Cache fallback
-  if (event.request.mode === "navigate") {
-    event.respondWith(
-      fetch(event.request)
-        .then((response) => {
-          if (response.status === 200) {
-            const clone = response.clone();
-            caches.open(CACHE_NAME).then((cache) => cache.put(event.request, clone));
-          }
-          return response;
-        })
-        .catch(async () => {
-          const cached = await caches.match(event.request);
-          if (cached) return cached;
-          // Fallback to cached NFC station route
-          const nfcFallback = await caches.match("/dashboard/nfc");
-          if (nfcFallback) return nfcFallback;
-          return caches.match("/");
-        })
-    );
-    return;
-  }
-
-  // 3. Static assets (_next/static, icons, images) -> Cache-first with Network update
+  // 1. Only same-origin GETs; never touch API calls (the offline sync engine handles them)
+  //    or RSVP token pages.
   if (
-    url.pathname.startsWith("/_next/static/") ||
-    url.pathname.startsWith("/icons/") ||
-    url.pathname.endsWith(".ico") ||
-    url.pathname.endsWith(".svg") ||
-    url.pathname.endsWith(".png")
+    request.method !== "GET" ||
+    url.origin !== self.location.origin ||
+    url.pathname.startsWith("/api/") ||
+    url.pathname.startsWith("/rsvp")
   ) {
-    event.respondWith(
-      caches.match(event.request).then((cached) => {
-        if (cached) {
-          // Background revalidation
-          fetch(event.request)
-            .then((networkRes) => {
-              if (networkRes.status === 200) {
-                caches.open(CACHE_NAME).then((cache) => cache.put(event.request, networkRes));
-              }
-            })
-            .catch(() => {});
-          return cached;
-        }
+    return;
+  }
 
-        return fetch(event.request).then((response) => {
-          if (response.status === 200) {
-            const clone = response.clone();
-            caches.open(CACHE_NAME).then((cache) => cache.put(event.request, clone));
-          }
-          return response;
+  // 2. Navigations: only the NFC station page is cached (network-first, cache fallback).
+  //    All other pages go straight to the network and are never stored.
+  if (request.mode === "navigate") {
+    if (!isOfflinePage(url)) return;
+
+    // Keyed by path (no query string), so the page cache holds at most one entry per offline page.
+    const { response, cacheWork } = fetchAndCache(request, PAGE_CACHE, url.pathname);
+    event.waitUntil(cacheWork);
+    event.respondWith(
+      response.catch(async () => {
+        const cached = await caches.match(url.pathname, { cacheName: PAGE_CACHE });
+        if (cached) return cached;
+        return new Response("You are offline and this page is not available offline.", {
+          status: 503,
+          headers: { "Content-Type": "text/plain; charset=utf-8" },
         });
       })
     );
+    return;
+  }
+
+  // 3. Static assets -> cache-first (hashed /_next/static files are immutable; others are
+  //    revalidated in the background).
+  if (isStaticAsset(url)) {
+    event.respondWith(
+      (async () => {
+        const cached = await caches.match(request, { cacheName: STATIC_CACHE });
+        if (cached && url.pathname.startsWith("/_next/static/")) return cached;
+
+        const { response, cacheWork } = fetchAndCache(request, STATIC_CACHE, request, () =>
+          trimCache(STATIC_CACHE, MAX_STATIC_ENTRIES)
+        );
+        // Still inside respondWith's pending promise, so extending the lifetime is allowed.
+        event.waitUntil(cacheWork);
+        if (cached) {
+          response.catch(() => {});
+          return cached;
+        }
+        return response;
+      })()
+    );
   }
 });
+
+/**
+ * Fetches `request` and stores a copy under `key` when cacheable. Returns the network
+ * response promise and a never-rejecting promise for the cache write.
+ */
+function fetchAndCache(request, cacheName, key, afterPut) {
+  let cacheWork = Promise.resolve();
+  const response = fetch(request).then((res) => {
+    if (isCacheable(res)) {
+      const copy = res.clone();
+      cacheWork = caches
+        .open(cacheName)
+        .then((cache) => cache.put(key, copy))
+        .then(() => (afterPut ? afterPut() : undefined));
+    }
+    return res;
+  });
+  return {
+    response,
+    cacheWork: response.then(() => cacheWork).catch(() => {}),
+  };
+}

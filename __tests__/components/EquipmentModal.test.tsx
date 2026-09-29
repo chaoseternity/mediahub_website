@@ -192,3 +192,151 @@ describe("EquipmentModal — Viewer role", () => {
     expect(screen.queryByTestId("checkout-button")).not.toBeInTheDocument();
   });
 });
+
+// ── Mutation handling: res.ok checks, inline errors, retire-instead-of-delete ──
+
+type Handler = (url: string, init?: RequestInit) => Promise<Response> | Response;
+
+function jsonResponse(body: unknown, status = 200): Response {
+  return { ok: status >= 200 && status < 300, status, json: async () => body } as Response;
+}
+
+/** GETs return the equipment/tag fixtures; other methods go to `onMutation`. */
+function mockFetchWith(data: EquipmentDetail, onMutation: Handler) {
+  if (!global.fetch) {
+    global.fetch = jest.fn();
+  }
+  return jest.spyOn(global, "fetch").mockImplementation((input, init) => {
+    const url = String(input);
+    const method = (init?.method ?? "GET").toUpperCase();
+    if (method !== "GET") return Promise.resolve(onMutation(url, init));
+    if (url.includes("/api/tags")) return Promise.resolve(jsonResponse([]));
+    return Promise.resolve(jsonResponse(data));
+  });
+}
+
+async function renderAdmin(data: EquipmentDetail, onMutation: Handler) {
+  const fetchSpy = mockFetchWith(data, onMutation);
+  const onClose = jest.fn();
+  const onUpdated = jest.fn();
+  render(
+    <EquipmentModal equipmentId={1} open={true} role="admin" onClose={onClose} onUpdated={onUpdated} />
+  );
+  await waitFor(() => expect(screen.queryByText("Loading…")).not.toBeInTheDocument());
+  // global.fetch may be a shared jest.fn across tests; only count calls made from here on.
+  fetchSpy.mockClear();
+  return { fetchSpy, onClose, onUpdated };
+}
+
+describe("EquipmentModal — mutation error handling", () => {
+  test("a rejected save shows the server error and keeps the modal open", async () => {
+    const { onClose, onUpdated } = await renderAdmin(mockAvailable, () =>
+      jsonResponse({ error: "Forbidden" }, 403)
+    );
+
+    // Edit the Equipment ID field to make the form dirty, then save.
+    await userEvent.click(screen.getByText("SN-001"));
+    const input = screen.getByDisplayValue("SN-001");
+    await userEvent.clear(input);
+    await userEvent.type(input, "SN-002");
+    await userEvent.click(screen.getByTestId("save-button"));
+
+    expect(await screen.findByTestId("action-error")).toHaveTextContent("Forbidden");
+    expect(onClose).not.toHaveBeenCalled();
+    expect(onUpdated).not.toHaveBeenCalled();
+  });
+
+  test("a failed return shows the server error and keeps the modal open", async () => {
+    const { onClose } = await renderAdmin(mockCheckedOut, () =>
+      jsonResponse({ error: "Item is not checked out" }, 409)
+    );
+
+    await userEvent.click(screen.getByText("Mark as Returned"));
+
+    expect(await screen.findByTestId("action-error")).toHaveTextContent("Item is not checked out");
+    expect(onClose).not.toHaveBeenCalled();
+  });
+
+  test("a network error on return is surfaced and the button re-enables", async () => {
+    const { onClose } = await renderAdmin(mockCheckedOut, () => {
+      throw new TypeError("Failed to fetch");
+    });
+
+    await userEvent.click(screen.getByText("Mark as Returned"));
+
+    expect(await screen.findByTestId("action-error")).toHaveTextContent(/network error/i);
+    expect(screen.getByText("Mark as Returned").closest("button")).not.toBeDisabled();
+    expect(onClose).not.toHaveBeenCalled();
+  });
+
+  test("double-clicking Mark as Returned only sends one request", async () => {
+    let resolveReturn: (r: Response) => void = () => {};
+    const { fetchSpy } = await renderAdmin(
+      mockCheckedOut,
+      () => new Promise<Response>((resolve) => (resolveReturn = resolve))
+    );
+
+    const button = screen.getByText("Mark as Returned").closest("button")!;
+    await userEvent.click(button);
+    await userEvent.click(button);
+
+    const posts = fetchSpy.mock.calls.filter(([, init]) => (init?.method ?? "GET") === "POST");
+    expect(posts).toHaveLength(1);
+    expect(screen.getByText("Returning…").closest("button")).toBeDisabled();
+    resolveReturn(jsonResponse({ success: true }));
+  });
+
+  test("delete that retires instead shows the retired message and stays open", async () => {
+    jest.spyOn(window, "confirm").mockReturnValue(true);
+    const { onClose, onUpdated } = await renderAdmin(mockAvailable, () =>
+      jsonResponse({
+        success: true,
+        retired: true,
+        message: "This equipment has usage history, so it was retired instead of deleted.",
+      })
+    );
+
+    await userEvent.click(screen.getByText("Delete"));
+
+    expect(await screen.findByTestId("action-notice")).toHaveTextContent(/retired instead of deleted/i);
+    expect(onUpdated).toHaveBeenCalled();
+    expect(onClose).not.toHaveBeenCalled();
+  });
+
+  test("a real delete closes the modal", async () => {
+    jest.spyOn(window, "confirm").mockReturnValue(true);
+    const { onClose, onUpdated } = await renderAdmin(mockAvailable, () =>
+      jsonResponse({ success: true, retired: false })
+    );
+
+    await userEvent.click(screen.getByText("Delete"));
+
+    await waitFor(() => expect(onClose).toHaveBeenCalled());
+    expect(onUpdated).toHaveBeenCalled();
+    expect(screen.queryByTestId("action-notice")).not.toBeInTheDocument();
+  });
+
+  test("a failed delete shows the error inline", async () => {
+    jest.spyOn(window, "confirm").mockReturnValue(true);
+    const { onClose } = await renderAdmin(mockAvailable, () =>
+      jsonResponse({ error: "Equipment is currently checked out" }, 409)
+    );
+
+    await userEvent.click(screen.getByText("Delete"));
+
+    expect(await screen.findByTestId("action-error")).toHaveTextContent("Equipment is currently checked out");
+    expect(onClose).not.toHaveBeenCalled();
+  });
+
+  test("a failed load shows an error instead of an empty modal", async () => {
+    if (!global.fetch) global.fetch = jest.fn();
+    jest.spyOn(global, "fetch").mockImplementation((input) =>
+      Promise.resolve(
+        String(input).includes("/api/tags") ? jsonResponse([]) : jsonResponse({ error: "Not found" }, 404)
+      )
+    );
+    render(<EquipmentModal equipmentId={1} open={true} role="admin" onClose={jest.fn()} onUpdated={jest.fn()} />);
+
+    expect(await screen.findByTestId("load-error")).toHaveTextContent("Not found");
+  });
+});

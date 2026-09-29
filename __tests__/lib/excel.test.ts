@@ -4,6 +4,8 @@ import {
   parseEquipmentExcel,
   sortEquipmentForExcel,
   normalizeCondition,
+  MAX_IMPORT_ROWS,
+  BATCH_CHUNK_SIZE,
 } from "@/lib/excel";
 import type { Equipment } from "@/lib/types";
 
@@ -171,5 +173,49 @@ describe("Excel utility - lib/excel.ts", () => {
       expect(parsed[1].serial_number).toBe("CAM-02");
       expect(parsed[1].tags).toEqual(["Camera"]); // tag inherited across empty row!
     });
+  });
+});
+
+describe("Excel export keeps formula-like and apostrophe text intact", () => {
+  test("round-trips leading '=', '-', '+', '@' and \"'\" text verbatim as string cells", () => {
+    const original: Equipment[] = [
+      createMockEquipment({
+        id: 1,
+        name: "=SUM(A1:A2)",
+        tags: ["@home"],
+        serial_number: "+65-001",
+        description: "- includes charger",
+        location: "'Quoted room",
+      }),
+      createMockEquipment({ id: 2, name: "'=not a formula", tags: ["@home"], serial_number: "-X-2", description: "O'Connor tripod" }),
+    ];
+
+    const buffer = generateEquipmentExcel(original);
+
+    // Every data cell is an explicit string cell with no formula and no added apostrophe.
+    const wb = XLSX.read(buffer, { type: "array" });
+    const ws = wb.Sheets[wb.SheetNames[0]];
+    for (const [ref, cell] of Object.entries(ws)) {
+      if (ref.startsWith("!")) continue;
+      expect((cell as XLSX.CellObject).t).toBe("s");
+      expect((cell as XLSX.CellObject).f).toBeUndefined();
+    }
+
+    const parsed = parseEquipmentExcel(buffer);
+    const first = parsed.find((p) => p.serial_number === "+65-001")!;
+    expect(first.name).toBe("=SUM(A1:A2)");
+    expect(first.description).toBe("- includes charger");
+    expect(first.location).toBe("'Quoted room");
+    expect(first.tags).toEqual(["@home"]);
+
+    const second = parsed.find((p) => p.serial_number === "-X-2")!;
+    expect(second.name).toBe("'=not a formula");
+    expect(second.description).toBe("O'Connor tripod");
+    expect(second.tags).toEqual(["@home"]);
+  });
+
+  test("exports import/batch limits for the upload UI", () => {
+    expect(MAX_IMPORT_ROWS).toBe(5000);
+    expect(BATCH_CHUNK_SIZE).toBe(500);
   });
 });

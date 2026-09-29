@@ -38,6 +38,7 @@ import {
 import { Label } from "@/components/ui/label";
 import type { AuditRecord, AuditSession, Equipment, Role } from "@/lib/types";
 import { cn } from "@/lib/utils";
+import { formatTime } from "@/lib/timezone";
 
 interface AuditClientProps {
   initialSession: (AuditSession & { records?: AuditRecord[] }) | null;
@@ -136,19 +137,55 @@ export function AuditClient({
   const [facingMode, setFacingMode] = useState<"environment" | "user">("environment");
   const [cameraError, setCameraError] = useState<string | null>(null);
   const [scanFeedback, setScanFeedback] = useState<{
+    id: number;
     text: string;
     type: "success" | "warning" | "error";
   } | null>(null);
+  const [queuedScanCount, setQueuedScanCount] = useState(0);
 
   // Live Multi-User Sync State
   const [isSyncing, setIsSyncing] = useState(false);
-  const [lastSyncTime, setLastSyncTime] = useState<Date | null>(new Date());
+  const [lastSyncTime, setLastSyncTime] = useState<Date | null>(null);
 
   const scanInputRef = useRef<HTMLInputElement | null>(null);
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const scannerRef = useRef<any>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const lastScannedTimeRef = useRef<{ [code: string]: number }>({});
+
+  // Latest session, readable from async callbacks without stale closures.
+  const sessionRef = useRef(session);
+  useEffect(() => {
+    sessionRef.current = session;
+  }, [session]);
+
+  // Poll/mutation coordination: every local mutation bumps the generation at start and end,
+  // so any poll response whose request began before the latest mutation is discarded.
+  const mutationGenRef = useRef(0);
+  const mutationsInFlightRef = useRef(0);
+  const syncInFlightRef = useRef(false);
+
+  function beginMutation() {
+    mutationsInFlightRef.current += 1;
+    mutationGenRef.current += 1;
+  }
+  function endMutation() {
+    mutationsInFlightRef.current = Math.max(0, mutationsInFlightRef.current - 1);
+    mutationGenRef.current += 1;
+  }
+
+  // Camera lifecycle: generation counter cancels stale starts; pending mount timeout is tracked.
+  const cameraGenRef = useRef(0);
+  const cameraStartTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // Scan feedback auto-dismiss (matched by id, not by text).
+  const feedbackIdRef = useRef(0);
+  const feedbackTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // Sequential scan queue so rapid barcode-gun scans are processed in order, never dropped.
+  const scanQueueRef = useRef<{ code: string; method: "qr" | "manual" }[]>([]);
+  const scanQueueRunningRef = useRef(false);
+  const unmountedRef = useRef(false);
 
   // Auto-focus manual barcode input when not using camera
   useEffect(() => {
@@ -160,124 +197,178 @@ export function AuditClient({
   // Initial population of records if session loaded without them
   useEffect(() => {
     if (session?.id && (!session.records || session.records.length === 0)) {
-      fetch(`/api/audit/session?id=${session.id}`)
-        .then((res) => res.json())
+      const sessionId = session.id;
+      fetch(`/api/audit/session?id=${sessionId}`)
+        .then((res) => (res.ok ? res.json() : null))
         .then((data) => {
           if (data?.records) {
-            setSession((prev) => (prev ? { ...prev, ...data } : prev));
+            setSession((prev) => (prev && prev.id === sessionId ? { ...prev, ...data } : prev));
           }
         })
         .catch(() => {});
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [session?.id]);
+
+  function showScanFeedback(text: string, type: "success" | "warning" | "error") {
+    const id = ++feedbackIdRef.current;
+    setScanFeedback({ id, text, type });
+    if (feedbackTimerRef.current) clearTimeout(feedbackTimerRef.current);
+    feedbackTimerRef.current = setTimeout(() => {
+      setScanFeedback((cur) => (cur?.id === id ? null : cur));
+    }, 3000);
+  }
 
   // Centralized scan submission used by both Camera and Barcode Gun
   async function processScan(rawCode: string, method: "qr" | "manual" = "manual") {
     const code = rawCode.trim();
-    if (!code || !session?.id) return;
+    const sessionId = sessionRef.current?.id;
+    if (!code || !sessionId) return;
 
     const identifier = extractIdentifier(code, equipmentList);
 
+    beginMutation();
     try {
       const res = await fetch("/api/audit/scan", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          sessionId: session.id,
-          session_id: session.id,
+          sessionId,
+          session_id: sessionId,
           identifier,
           code: identifier,
           method,
         }),
       });
 
-      const data = await res.json();
+      const data = await res.json().catch(() => ({}));
+      if (unmountedRef.current) return;
       if (res.ok) {
+        playAuditBeep(true);
         if (data.alreadyScanned) {
-          playAuditBeep(true);
-          setScanFeedback({
-            text: `⚠️ Already verified: ${data.record.equipment_name || identifier}`,
-            type: "warning",
-          });
+          showScanFeedback(`⚠️ Already verified: ${data.record?.equipment_name || identifier}`, "warning");
         } else {
-          playAuditBeep(true);
-          setScanFeedback({
-            text: `✅ Verified: ${data.record.equipment_name || identifier}`,
-            type: "success",
-          });
+          showScanFeedback(`✅ Verified: ${data.record?.equipment_name || identifier}`, "success");
 
-          // Optimistically update session records in state
-          setSession((prev) => {
-            if (!prev) return prev;
-            const existingRecords = prev.records || [];
-            const updated = existingRecords.map((r) =>
-              r.id === data.record.id ? { ...r, ...data.record } : r
-            );
-            return {
-              ...prev,
-              found_count: (prev.found_count || 0) + 1,
-              missing_count: Math.max(0, (prev.missing_count || 0) - 1),
-              records: updated,
-            };
-          });
+          // Optimistically update session records in state (only for the session scanned into)
+          if (data.record) {
+            setSession((prev) => {
+              if (!prev || prev.id !== sessionId) return prev;
+              const existingRecords = prev.records || [];
+              const updated = existingRecords.map((r) =>
+                r.id === data.record.id ? { ...r, ...data.record } : r
+              );
+              return {
+                ...prev,
+                found_count: (prev.found_count || 0) + 1,
+                missing_count: Math.max(0, (prev.missing_count || 0) - 1),
+                records: updated,
+              };
+            });
+          }
         }
       } else {
         playAuditBeep(false);
-        setScanFeedback({
-          text: `❌ ${data.error || "Item not recognized in catalog"}`,
-          type: "error",
-        });
+        showScanFeedback(`❌ ${data.error || "Item not recognized in catalog"}`, "error");
       }
     } catch (err) {
       console.error("Scan recording error:", err);
+      if (unmountedRef.current) return;
       playAuditBeep(false);
-      setScanFeedback({
-        text: "❌ Network error recording scan",
-        type: "error",
-      });
+      showScanFeedback("❌ Network error recording scan", "error");
+    } finally {
+      endMutation();
     }
-
-    // Auto-dismiss notification after 3 seconds
-    setTimeout(() => {
-      setScanFeedback((cur) => (cur?.text.includes(identifier) ? null : cur));
-    }, 3000);
   }
 
-  // Camera scanner handlers
-  async function stopCamera() {
-    if (scannerRef.current) {
+  // Always call the latest processScan (the camera callback outlives renders).
+  const processScanRef = useRef(processScan);
+  useEffect(() => {
+    processScanRef.current = processScan;
+  });
+
+  async function drainScanQueue() {
+    if (scanQueueRunningRef.current) return;
+    scanQueueRunningRef.current = true;
+    try {
+      while (scanQueueRef.current.length > 0 && !unmountedRef.current) {
+        const next = scanQueueRef.current.shift()!;
+        setQueuedScanCount(scanQueueRef.current.length);
+        await processScanRef.current(next.code, next.method);
+      }
+    } finally {
+      scanQueueRunningRef.current = false;
+      if (!unmountedRef.current) setQueuedScanCount(scanQueueRef.current.length);
+    }
+  }
+
+  function enqueueScan(code: string, method: "qr" | "manual") {
+    if (!code.trim()) return;
+    scanQueueRef.current.push({ code, method });
+    setQueuedScanCount(scanQueueRef.current.length);
+    void drainScanQueue();
+  }
+  const enqueueScanRef = useRef(enqueueScan);
+  useEffect(() => {
+    enqueueScanRef.current = enqueueScan;
+  });
+
+  // Stops the scanner instance and releases the camera stream (does not touch React state).
+  async function releaseScanner() {
+    if (cameraStartTimeoutRef.current) {
+      clearTimeout(cameraStartTimeoutRef.current);
+      cameraStartTimeoutRef.current = null;
+    }
+    const scanner = scannerRef.current;
+    scannerRef.current = null;
+    if (scanner) {
       try {
-        if (scannerRef.current.isScanning) {
-          await scannerRef.current.stop();
+        if (scanner.isScanning) {
+          await scanner.stop();
         }
-        scannerRef.current.clear();
+        scanner.clear();
       } catch {
         // ignore cleanup error
       }
-      scannerRef.current = null;
     }
     if (streamRef.current) {
       streamRef.current.getTracks().forEach((t) => t.stop());
       streamRef.current = null;
     }
+  }
+
+  // Camera scanner handlers
+  async function stopCamera() {
+    cameraGenRef.current += 1; // cancel any pending start
+    await releaseScanner();
+    if (unmountedRef.current) return;
     setIsCameraOpen(false);
     setCameraError(null);
   }
 
   async function startCamera(desiredFacing: "environment" | "user" = facingMode) {
-    await stopCamera();
+    const gen = ++cameraGenRef.current;
+    const isStale = () => gen !== cameraGenRef.current || unmountedRef.current;
+
+    // Cancel any pending start and stop an existing scanner before creating a new one.
+    await releaseScanner();
+    if (isStale()) return;
     setCameraError(null);
     setIsCameraOpen(true);
 
     // Allow DOM element to mount
-    setTimeout(async () => {
+    cameraStartTimeoutRef.current = setTimeout(async () => {
+      cameraStartTimeoutRef.current = null;
+      if (isStale()) return;
+
       let mod: typeof import("html5-qrcode");
       try {
         mod = await import("html5-qrcode");
       } catch {
-        setCameraError("QR and Barcode camera engine failed to load.");
+        if (!isStale()) setCameraError("QR and Barcode camera engine failed to load.");
         return;
       }
+      if (isStale() || !document.getElementById("audit-camera-reader")) return;
 
       const supportedFormats = [
         mod.Html5QrcodeSupportedFormats.QR_CODE,
@@ -310,16 +401,30 @@ export function AuditClient({
             // Debounce identical barcode scans for 1.8s
             if (now - lastTime < 1800) return;
             lastScannedTimeRef.current[decodedText] = now;
-            processScan(decodedText, "qr");
+            // Via ref: always the latest session / handlers, never a stale closure.
+            enqueueScanRef.current(decodedText, "qr");
           },
           undefined
         );
+
+        // Stopped, restarted or unmounted while start() was pending: release this stream now.
+        if (isStale()) {
+          if (scannerRef.current === html5QrCode) scannerRef.current = null;
+          try {
+            if (html5QrCode.isScanning) await html5QrCode.stop();
+            html5QrCode.clear();
+          } catch {
+            // ignore
+          }
+          return;
+        }
 
         const video = document.querySelector<HTMLVideoElement>("#audit-camera-reader video");
         if (video?.srcObject instanceof MediaStream) {
           streamRef.current = video.srcObject;
         }
       } catch (err: unknown) {
+        if (isStale()) return;
         console.error("Camera start failed:", err);
         const msg = String(err);
         setCameraError(
@@ -334,36 +439,56 @@ export function AuditClient({
   function toggleCameraFacing() {
     const next = facingMode === "environment" ? "user" : "environment";
     setFacingMode(next);
-    startCamera(next);
+    void startCamera(next);
   }
 
-  // Cleanup camera stream on unmount
+  // The camera card only renders inside the active-session branch, so when the session
+  // ends (locally or via sync) the scanner must be stopped explicitly.
+  const hasSession = session !== null;
   useEffect(() => {
+    if (!hasSession) {
+      scanQueueRef.current = [];
+      setQueuedScanCount(0);
+      if (isCameraOpen || scannerRef.current || cameraStartTimeoutRef.current) {
+        void stopCamera();
+      }
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [hasSession]);
+
+  // Cleanup camera stream and timers on unmount
+  useEffect(() => {
+    unmountedRef.current = false;
     return () => {
-      if (scannerRef.current) {
-        try {
-          if (scannerRef.current.isScanning) {
-            scannerRef.current.stop().catch(() => {});
-          }
-          scannerRef.current.clear();
-        } catch {}
-      }
-      if (streamRef.current) {
-        streamRef.current.getTracks().forEach((t) => t.stop());
-      }
+      unmountedRef.current = true;
+      cameraGenRef.current += 1;
+      scanQueueRef.current = [];
+      if (feedbackTimerRef.current) clearTimeout(feedbackTimerRef.current);
+      void releaseScanner();
     };
   }, []);
 
   // Multi-user website-wide live sync polling
   async function syncSession(silent = true) {
+    // Don't poll while a local mutation is in flight, and never overlap polls.
+    if (mutationsInFlightRef.current > 0 || syncInFlightRef.current) return;
+    const gen = mutationGenRef.current;
+    syncInFlightRef.current = true;
     if (!silent) setIsSyncing(true);
     try {
-      const res = await fetch("/api/audit/session");
+      const res = await fetch("/api/audit/session", { cache: "no-store" });
       if (!res.ok) return;
       const data = await res.json();
 
+      // A mutation started (or finished) after this poll was sent: its response is stale.
+      if (gen !== mutationGenRef.current || mutationsInFlightRef.current > 0 || unmountedRef.current) return;
+
       if (data?.active?.id || data?.id) {
-        const activeData = data.active ? { ...data.active, ...data } : data;
+        const base = data.session ?? data.active ?? data;
+        const activeData = {
+          ...base,
+          records: Array.isArray(data.records) ? data.records : base.records,
+        } as AuditSession & { records?: AuditRecord[] };
         setSession((prev) => {
           // If we had no session locally, join the newly discovered active audit
           if (!prev) return activeData;
@@ -382,35 +507,46 @@ export function AuditClient({
         });
         setLastSyncTime(new Date());
       } else {
-        // If active session was finalized by another admin
-        setSession((prev) => {
-          if (prev?.status === "in_progress") {
-            setCompletionSummary("The active audit session was completed or cancelled by another administrator.");
-            return null;
-          }
-          return prev;
-        });
+        // Active session was finalized/cancelled by another admin
+        if (sessionRef.current?.status === "in_progress") {
+          setCompletionSummary("The active audit session was completed or cancelled by another administrator.");
+        }
+        setSession((prev) => (prev?.status === "in_progress" ? null : prev));
+        setLastSyncTime(new Date());
       }
     } catch (err) {
       console.warn("Audit sync poll failed:", err);
     } finally {
-      if (!silent) setIsSyncing(false);
+      syncInFlightRef.current = false;
+      if (!silent && !unmountedRef.current) setIsSyncing(false);
     }
   }
-
-  // Auto-sync polling every 3.5 seconds when page is visible
+  const syncSessionRef = useRef(syncSession);
   useEffect(() => {
-    const interval = setInterval(() => {
-      if (typeof document !== "undefined" && document.visibilityState === "visible") {
-        syncSession(true);
-      }
-    }, 3500);
+    syncSessionRef.current = syncSession;
+  });
 
-    return () => clearInterval(interval);
+  // Auto-sync polling every 3.5 seconds, only while the tab is visible
+  useEffect(() => {
+    const isVisible = () => typeof document === "undefined" || document.visibilityState === "visible";
+    const interval = setInterval(() => {
+      if (isVisible()) void syncSessionRef.current(true);
+    }, 3500);
+    // Catch up immediately when the tab becomes visible again
+    function onVisibilityChange() {
+      if (isVisible()) void syncSessionRef.current(true);
+    }
+    document.addEventListener("visibilitychange", onVisibilityChange);
+
+    return () => {
+      clearInterval(interval);
+      document.removeEventListener("visibilitychange", onVisibilityChange);
+    };
   }, []);
 
   async function handleStartSession(e: React.FormEvent) {
     e.preventDefault();
+    beginMutation();
     try {
       setIsStarting(true);
       const res = await fetch("/api/audit/session", {
@@ -418,9 +554,10 @@ export function AuditClient({
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ notes: startNotes }),
       });
-      const data = await res.json();
+      const data = await res.json().catch(() => ({}));
       if (res.ok) {
         setSession(data);
+        setCompletionSummary(null);
         setIsStartModalOpen(false);
         setStartNotes("");
         router.refresh();
@@ -432,37 +569,44 @@ export function AuditClient({
       alert("Network error starting audit session");
     } finally {
       setIsStarting(false);
+      endMutation();
     }
   }
 
-  async function handleManualSubmit(e: React.FormEvent) {
+  function handleManualSubmit(e: React.FormEvent) {
     e.preventDefault();
-    if (!scanInput.trim()) return;
-    await processScan(scanInput, "manual");
+    // Capture and clear immediately so the next gun scan starts from an empty field.
+    const value = scanInputRef.current?.value ?? scanInput;
     setScanInput("");
+    if (!value.trim()) return;
+    enqueueScan(value, "manual");
   }
 
   async function handleCompleteSession() {
     if (!session) return;
+    const sessionId = session.id;
+    beginMutation();
     try {
       setIsCompleting(true);
+      scanQueueRef.current = [];
       if (isCameraOpen) await stopCamera();
 
       const res = await fetch("/api/audit/complete", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          sessionId: session.id,
-          session_id: session.id,
+          sessionId,
+          session_id: sessionId,
           markMissingInCatalog,
           mark_missing_in_catalog: markMissingInCatalog,
         }),
       });
 
-      const data = await res.json();
+      const data = await res.json().catch(() => ({}));
       if (res.ok) {
+        const s = data.session ?? {};
         setCompletionSummary(
-          `Audit Finished!\n\nTotal Counted: ${data.session.total_items}\nVerified Present: ${data.session.found_count}\nMissing: ${data.session.missing_count}`
+          `Audit Finished!\n\nTotal Counted: ${s.total_items ?? "-"}\nVerified Present: ${s.found_count ?? "-"}\nMissing: ${s.missing_count ?? "-"}`
         );
         setSession(null);
         setIsCompleteModalOpen(false);
@@ -475,10 +619,11 @@ export function AuditClient({
       alert("Error completing audit");
     } finally {
       setIsCompleting(false);
+      endMutation();
     }
   }
 
-  const records = session?.records || [];
+  const records = useMemo(() => session?.records || [], [session?.records]);
   const filteredRecords = records.filter((r) => {
     const matchesFilter = filterState === "all" || r.status === filterState;
     const matchesSearch =
@@ -618,7 +763,7 @@ export function AuditClient({
                 </div>
                 <p className="text-xs text-muted-foreground">
                   Initiated by <strong className="text-foreground">{session.started_by_name || "Admin"}</strong> at{" "}
-                  {new Date(session.started_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}.
+                  {formatTime(session.started_at)}.
                   All admins can scan simultaneously from phones or laptops.
                 </p>
               </div>
@@ -827,6 +972,26 @@ export function AuditClient({
                     Verify Item
                   </Button>
                 </div>
+                {queuedScanCount > 0 && (
+                  <p className="text-[11px] text-muted-foreground">
+                    Processing scans… {queuedScanCount} more queued
+                  </p>
+                )}
+                {/* Scan result for barcode-gun / manual users (the camera card has its own overlay) */}
+                {scanFeedback && !isCameraOpen && (
+                  <div
+                    role="status"
+                    aria-live="polite"
+                    className={cn(
+                      "p-2.5 rounded-lg text-xs font-semibold text-center shadow-xs animate-in fade-in",
+                      scanFeedback.type === "success" && "bg-emerald-600 text-white",
+                      scanFeedback.type === "warning" && "bg-amber-600 text-white",
+                      scanFeedback.type === "error" && "bg-red-600 text-white"
+                    )}
+                  >
+                    {scanFeedback.text}
+                  </div>
+                )}
               </form>
             </CardContent>
           </Card>
@@ -938,7 +1103,7 @@ export function AuditClient({
                           </div>
                           {rec.scanned_at && (
                             <p className="text-[10px] text-muted-foreground">
-                              {new Date(rec.scanned_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
+                              {formatTime(rec.scanned_at)}
                             </p>
                           )}
                         </div>

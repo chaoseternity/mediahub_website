@@ -8,6 +8,7 @@ import {
 } from "@/lib/db";
 import type { AppEvent, EventSection } from "@/lib/types";
 import { NextRequest, NextResponse } from "next/server";
+import { resultErrorResponse, validationErrorResponse } from "@/lib/api-errors";
 import { z } from "zod";
 
 const EquipmentEventSchema = z.object({
@@ -44,7 +45,7 @@ export async function POST(
 
   const parsed = EquipmentEventSchema.safeParse(body);
   if (!parsed.success) {
-    return NextResponse.json({ error: parsed.error.flatten() }, { status: 400 });
+    return validationErrorResponse(parsed.error);
   }
 
   const event = await getEventById(eventId);
@@ -73,7 +74,7 @@ export async function POST(
   try {
     const result = await attachEquipmentToEventSection(eventId, parsed.data.equipment_id, parsed.data.section, false, currentUser?.id ?? null);
     if (!result.success) {
-      return NextResponse.json({ error: result.error }, { status: 400 });
+      return resultErrorResponse(result.error, "Failed to update event equipment");
     }
     return NextResponse.json({ success: true });
   } catch (err) {
@@ -109,7 +110,7 @@ export async function DELETE(
 
   const parsed = EquipmentEventSchema.safeParse(body);
   if (!parsed.success) {
-    return NextResponse.json({ error: parsed.error.flatten() }, { status: 400 });
+    return validationErrorResponse(parsed.error);
   }
 
   const currentUser = await getUserByEmail(session.user.email!);
@@ -121,7 +122,7 @@ export async function DELETE(
   try {
     const result = await detachEquipmentFromEventSection(eventId, parsed.data.equipment_id, parsed.data.section);
     if (!result.success) {
-      return NextResponse.json({ error: result.error }, { status: 400 });
+      return resultErrorResponse(result.error, "Failed to update event equipment");
     }
     return NextResponse.json({ success: true });
   } catch (err) {

@@ -9,6 +9,8 @@ import { AddEquipmentModal } from "@/components/AddEquipmentModal";
 import { UploadEquipmentModal } from "@/components/UploadEquipmentModal";
 import { generateEquipmentExcel } from "@/lib/excel";
 import type { Equipment, Role } from "@/lib/types";
+import { APP_TIMEZONE, parseDueDate } from "@/lib/timezone";
+import { useNow } from "@/lib/use-now";
 
 const EquipmentGrid = dynamic(
   () => import("@/components/EquipmentGrid").then((m) => m.EquipmentGrid),
@@ -29,12 +31,17 @@ export function DashboardClient({ initialData, role, userName }: DashboardClient
   const [items, setItems] = useState<Equipment[]>(initialData);
   const router = useRouter();
 
-  const overdueCount = items.filter(
-    (i) =>
-      i.status === "Checked Out" &&
-      i.expected_return_at &&
-      new Date() > new Date(i.expected_return_at)
-  ).length;
+  // Computed after mount only (now === null during SSR) to avoid a hydration mismatch.
+  // Date-only due dates are due until the end of that day in the club's time zone.
+  const now = useNow();
+  const overdueCount =
+    now === null
+      ? 0
+      : items.filter((i) => {
+          if (i.status !== "Checked Out") return false;
+          const due = parseDueDate(i.expected_return_at);
+          return due !== null && now > due.getTime();
+        }).length;
 
   const [isTestingWebhook, setIsTestingWebhook] = useState(false);
 
@@ -42,11 +49,11 @@ export function DashboardClient({ initialData, role, userName }: DashboardClient
     try {
       setIsTestingWebhook(true);
       const res = await fetch("/api/webhooks/test", { method: "POST" });
-      const data = await res.json();
+      const data = await res.json().catch(() => ({}));
       if (res.ok) {
         alert(
           `Discord & Club Webhook Test Complete:\n\n` +
-            `• Configured Targets: ${data.channels.length > 0 ? data.channels.join(", ") : "Discord webhook URL pending (Logged to server console in dev mode)"}\n` +
+            `• Configured Targets: ${Array.isArray(data.channels) && data.channels.length > 0 ? data.channels.join(", ") : "Discord webhook URL pending (Logged to server console in dev mode)"}\n` +
             `• Summary: ${data.message}\n\n` +
             `Tip: Add DISCORD_WEBHOOK_URL to your environment variables to receive live gear alerts in Discord channels.`
         );
@@ -65,7 +72,7 @@ export function DashboardClient({ initialData, role, userName }: DashboardClient
     try {
       setIsCheckingReminders(true);
       const res = await fetch("/api/cron/reminders", { method: "POST" });
-      const data = await res.json();
+      const data = await res.json().catch(() => ({}));
       if (res.ok) {
         alert(
           `Return Reminders Check Complete:\n\n` +
@@ -89,8 +96,8 @@ export function DashboardClient({ initialData, role, userName }: DashboardClient
     try {
       const res = await fetch("/api/equipment");
       if (res.ok) {
-        const data: Equipment[] = await res.json();
-        setItems(data);
+        const data: unknown = await res.json();
+        if (Array.isArray(data)) setItems(data as Equipment[]);
       }
     } catch (err) {
       console.error("Failed to refresh equipment list:", err);
@@ -108,7 +115,8 @@ export function DashboardClient({ initialData, role, userName }: DashboardClient
       const url = URL.createObjectURL(blob);
       const a = document.createElement("a");
       a.href = url;
-      const today = new Date().toISOString().split("T")[0];
+      // en-CA formats as YYYY-MM-DD; use the club's date, not the UTC date.
+      const today = new Date().toLocaleDateString("en-CA", { timeZone: APP_TIMEZONE });
       a.download = `MediaHub_Equipment_${today}.xlsx`;
       document.body.appendChild(a);
       a.click();

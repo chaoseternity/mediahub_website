@@ -4,6 +4,8 @@ import { useState, useEffect, useSyncExternalStore } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { signOut } from "next-auth/react";
+import { confirmOfflineSignOut } from "@/lib/offlineSync";
+import { clearServiceWorkerCaches } from "@/lib/sw-client";
 import { useTheme } from "next-themes";
 import {
   LayoutGrid,
@@ -48,7 +50,7 @@ const navGroups: NavGroup[] = [
     title: "Equipment & Events",
     items: [
       { href: "/dashboard", label: "Equipment", icon: LayoutGrid, roles: ["admin", "verified", "viewer"] },
-      { href: "/dashboard/reservations", label: "Reservations", icon: CalendarClock, roles: ["admin", "verified", "viewer"] },
+      { href: "/dashboard/reservations", label: "Reservations", icon: CalendarClock, roles: ["admin"] },
       { href: "/dashboard/events", label: "Events", icon: Calendar, roles: ["admin", "verified", "viewer"] },
       { href: "/dashboard/map", label: "Storage Map", icon: Boxes, roles: ["admin", "verified", "viewer"] },
       { href: "/dashboard/scan", label: "Scan QR", icon: QrCode, roles: ["admin", "verified", "viewer"] },
@@ -338,7 +340,12 @@ export function Sidebar({ userName, role }: SidebarProps) {
         <button
           type="button"
           aria-label="Sign out"
-          onClick={() => signOut({ callbackUrl: "/login" })}
+          onClick={() => {
+            // Warns about unsynced NFC offline actions and clears cached member data.
+            if (!confirmOfflineSignOut()) return;
+            void clearServiceWorkerCaches();
+            void signOut({ callbackUrl: "/login" });
+          }}
           className="group relative flex items-center h-10 w-full rounded-lg text-sm font-medium text-muted-foreground hover:text-destructive hover:bg-destructive/10 transition-colors cursor-pointer"
         >
           {/* Icon Slot: exactly 40px wide, centered at 32px */}
