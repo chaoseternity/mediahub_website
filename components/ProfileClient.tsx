@@ -121,7 +121,7 @@ export function ProfileClient({
     return true;
   });
 
-  const initials = (user.name || user.username || "U")
+  const initials = (user.name || "U")
     .split(" ")
     .map((p) => p[0])
     .join("")
@@ -648,10 +648,6 @@ export function ProfileClient({
                 <div className="flex justify-between border-b pb-2">
                   <span className="text-muted-foreground">Full Name</span>
                   <span className="font-medium">{user.name}</span>
-                </div>
-                <div className="flex justify-between border-b pb-2">
-                  <span className="text-muted-foreground">Username</span>
-                  <span className="font-medium">{user.username || "—"}</span>
                 </div>
                 <div className="flex justify-between border-b pb-2">
                   <span className="text-muted-foreground">Email Address</span>

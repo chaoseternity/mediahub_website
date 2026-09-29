@@ -205,7 +205,7 @@ export function EventDetailModal({ eventId, open, onClose }: EventDetailModalPro
                   ) : (
                     event.oics.map((u) => (
                       <Badge key={u.id} variant="secondary" className="text-xs py-0.5 px-2 bg-purple-100 text-purple-900 dark:bg-purple-900/30 dark:text-purple-200">
-                        <UserLink name={u.name} username={u.username} userId={u.id} className="text-inherit hover:underline" />
+                        <UserLink name={u.name} userId={u.id} className="text-inherit hover:underline" />
                       </Badge>
                     ))
                   )}
@@ -224,7 +224,7 @@ export function EventDetailModal({ eventId, open, onClose }: EventDetailModalPro
                     ) : (
                       event.section_ics.photo.map((u) => (
                         <div key={u.id} className="font-medium">
-                          <UserLink name={u.name} username={u.username} userId={u.id} />
+                          <UserLink name={u.name} userId={u.id} />
                         </div>
                       ))
                     )}
@@ -241,7 +241,7 @@ export function EventDetailModal({ eventId, open, onClose }: EventDetailModalPro
                     ) : (
                       event.section_ics.video.map((u) => (
                         <div key={u.id} className="font-medium">
-                          <UserLink name={u.name} username={u.username} userId={u.id} />
+                          <UserLink name={u.name} userId={u.id} />
                         </div>
                       ))
                     )}
@@ -258,7 +258,7 @@ export function EventDetailModal({ eventId, open, onClose }: EventDetailModalPro
                     ) : (
                       event.section_ics.av.map((u) => (
                         <div key={u.id} className="font-medium">
-                          <UserLink name={u.name} username={u.username} userId={u.id} />
+                          <UserLink name={u.name} userId={u.id} />
                         </div>
                       ))
                     )}
@@ -327,7 +327,7 @@ export function EventDetailModal({ eventId, open, onClose }: EventDetailModalPro
                                 >
                                   <div className="flex items-center justify-between gap-1">
                                     <span className="font-medium truncate text-foreground">
-                                      <UserLink name={m.name} username={m.username} userId={m.id} />
+                                      <UserLink name={m.name} userId={m.id} />
                                     </span>
                                     
                                     <div className="flex items-center gap-1 shrink-0">

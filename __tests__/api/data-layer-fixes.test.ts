@@ -1,8 +1,7 @@
 /**
  * Regression tests for the data-layer fixes (lib/db.ts, lib/d1.ts) on an in-memory SQLite DB:
  *  - return reminders: recipient only via checked_out_by, no name matching, race-safe dedupe
- *  - profile data / username lookup never match by display name
- *  - username collisions (username or another user's display name)
+ *  - profile data never matches by display name
  *  - reservation validation
  *  - storage map config validation + defensive read of stored data
  *  - SOP search treats % and _ literally
@@ -23,8 +22,6 @@ jest.mock("@/lib/auth", () => ({
 import {
   upsertUser,
   updateUserRole,
-  updateUsername,
-  getUserByUsername,
   getUserProfileData,
   createEquipment,
   updateEquipment,
@@ -53,7 +50,6 @@ import {
   getAllEvents,
   getEventById,
   batchUpsertEquipment,
-  UsernameTakenError,
   ConfiguredAdminError,
   ReservationValidationError,
   StorageMapConfigError,
@@ -210,36 +206,6 @@ describe("data-layer fixes", () => {
       const victimProfile = await getUserProfileData(victim.id);
       expect(victimProfile!.activeEquipment.map((c) => c.equipment_id)).toEqual([eq1.id]);
       expect(victimProfile!.nfcCard).toBeNull();
-    });
-
-    test("getUserByUsername matches usernames only, case-insensitively", async () => {
-      const u = await makeUser("Jordan Display");
-      await updateUsername(u.id, "jordan_d");
-      expect((await getUserByUsername("JORDAN_D"))?.id).toBe(u.id);
-      expect(await getUserByUsername("Jordan Display")).toBeUndefined();
-    });
-  });
-
-  // -------------------------------------------------------------------------
-  describe("updateUsername", () => {
-    test("rejects another user's display name or username (case-insensitive)", async () => {
-      const a = await makeUser("Morgan Admin");
-      const b = await makeUser("Casey");
-      await updateUsername(a.id, "morgan");
-
-      await expect(updateUsername(b.id, "morgan admin")).rejects.toBeInstanceOf(UsernameTakenError);
-      await expect(updateUsername(b.id, "MORGAN")).rejects.toBeInstanceOf(UsernameTakenError);
-      // Own display name is fine.
-      await expect(updateUsername(b.id, "casey")).resolves.toBeUndefined();
-    });
-
-    test("trims/validates input", async () => {
-      const a = await makeUser("Pat");
-      await expect(updateUsername(a.id, "   ")).rejects.toBeInstanceOf(UsernameTakenError);
-      await expect(updateUsername(a.id, "x".repeat(51))).rejects.toBeInstanceOf(UsernameTakenError);
-      await expect(updateUsername(a.id, "bad<name>")).rejects.toBeInstanceOf(UsernameTakenError);
-      await updateUsername(a.id, "  pat   the  cat ");
-      expect((await getUserByUsername("pat the cat"))?.id).toBe(a.id);
     });
   });
 

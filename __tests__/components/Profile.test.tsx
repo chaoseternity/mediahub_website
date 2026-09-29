@@ -24,18 +24,11 @@ jest.mock("next/navigation", () => ({
 
 describe("UserLink Component", () => {
   test("renders link with userId when userId is provided", () => {
-    render(<UserLink name="Alice Smith" username="alice_s" userId={1} />);
+    render(<UserLink name="Alice Smith" userId={1} />);
     const link = screen.getByRole("link");
     expect(link).toBeInTheDocument();
     expect(link).toHaveAttribute("href", "/dashboard/profile?id=1");
     expect(screen.getByText("Alice Smith")).toBeInTheDocument();
-  });
-
-  test("renders link with username when userId is missing", () => {
-    render(<UserLink name="Bob Viewer" username="bob_v" />);
-    const link = screen.getByRole("link");
-    expect(link).toBeInTheDocument();
-    expect(link).toHaveAttribute("href", "/dashboard/profile?username=bob_v");
   });
 
   test("renders plain text (no profile link) when only a display name is known", () => {
@@ -52,7 +45,6 @@ describe("ProfileClient Component", () => {
       id: 2,
       name: "Bob Viewer",
       email: "bob@club.com",
-      username: "bob_v",
       role: "viewer",
       google_id: null,
       image: null,
@@ -140,7 +132,6 @@ describe("ProfileClient Component", () => {
     );
 
     expect(screen.getByText("Bob Viewer")).toBeInTheDocument();
-    expect(screen.queryByText("@bob_v")).not.toBeInTheDocument();
     expect(screen.getByText("bob@club.com")).toBeInTheDocument();
     expect(screen.getByText("Sony FX3 Camera")).toBeInTheDocument();
     expect(screen.getByText("CAM-01")).toBeInTheDocument();

@@ -95,7 +95,6 @@ export const authConfig = {
       if (session.user && token) {
         session.user.role = (token.role as import("./lib/types").Role) ?? "viewer";
         session.user.id = (token.userId as string) ?? "";
-        session.user.username = (token.username as string | null) ?? (token.name as string | null) ?? null;
       }
       return session;
     },

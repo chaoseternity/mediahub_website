@@ -61,14 +61,6 @@ export function isConfiguredAdminEmail(email: string | null | undefined): boolea
 // Error types (route handlers can map these to 4xx responses)
 // ---------------------------------------------------------------------------
 
-/** updateUsername: the username is invalid or already used (as a username or display name). */
-export class UsernameTakenError extends Error {
-  constructor(message: string) {
-    super(message);
-    this.name = "UsernameTakenError";
-  }
-}
-
 /** updateUserRole: the target account is listed in ADMIN_EMAILS and cannot be demoted. */
 export class ConfiguredAdminError extends Error {
   constructor(message = "This account is a configured administrator (ADMIN_EMAILS) and can't be demoted here.") {
@@ -107,30 +99,14 @@ export class InvalidTagNameError extends Error {
 
 export async function getUserByEmail(email: string): Promise<User | undefined> {
   await ensureSchema();
-  const { rows } = await sql<User>`SELECT * FROM users WHERE LOWER(email) = LOWER(${email})`;
+  const { rows } = await sql<User>`SELECT id, name, email, google_id, image, role, provider, created_at FROM users WHERE LOWER(email) = LOWER(${email})`;
   return rows[0];
 }
 
 export async function getUserById(id: number): Promise<User | undefined> {
   if (!Number.isInteger(id) || id <= 0) return undefined;
   await ensureSchema();
-  const { rows } = await sql<User>`SELECT * FROM users WHERE id = ${id}`;
-  return rows[0];
-}
-
-export async function getUserByUsername(username: string): Promise<User | undefined> {
-  if (!username) return undefined;
-  await ensureSchema();
-  const trimmed = username.trim();
-  if (!trimmed) return undefined;
-  // Username only: display names are not unique and can be copied by anyone, so matching them
-  // here would let one user resolve to (and view) another user's profile.
-  const { rows } = await sql<User>`
-    SELECT * FROM users
-    WHERE LOWER(username) = LOWER(${trimmed})
-    ORDER BY id ASC
-    LIMIT 1
-  `;
+  const { rows } = await sql<User>`SELECT id, name, email, google_id, image, role, provider, created_at FROM users WHERE id = ${id}`;
   return rows[0];
 }
 
@@ -142,9 +118,9 @@ export async function getUserProfileData(userId: number): Promise<UserProfileDat
   if (!user) return undefined;
 
   // 1. Fetch checkouts made under this user's account. Matching by checked_out_by_name is
-  // deliberately NOT done: names are not unique (and usernames can be set to anyone's name), so
-  // it would expose other people's history. NFC-station checkouts have no user link (nfc_cards
-  // has no user column), so they are not attributed to accounts.
+  // deliberately NOT done: names are not unique, so it would expose other people's history.
+  // NFC-station checkouts have no user link (nfc_cards has no user column), so they are not
+  // attributed to accounts.
   const { rows: checkoutRows } = await sql<{
     id: number;
     equipment_id: number;
@@ -421,7 +397,7 @@ export async function getUserProfileData(userId: number): Promise<UserProfileDat
 export async function getAllUsers(): Promise<User[]> {
   await ensureSchema();
   const { rows } = await sql<User>`
-    SELECT id, name, email, username, google_id, image, role, provider, created_at
+    SELECT id, name, email, google_id, image, role, provider, created_at
     FROM users
     ORDER BY name ASC
   `;
@@ -470,7 +446,7 @@ export async function upsertUser(params: {
   const { rows } = await sql<User>`
     INSERT INTO users (name, email, google_id, image, role, provider)
     VALUES (${params.name}, ${normalizedEmail}, ${params.google_id}, ${params.image}, ${role}, ${params.provider})
-    RETURNING *
+    RETURNING id, name, email, google_id, image, role, provider, created_at
   `;
   return rows[0];
 }
@@ -600,59 +576,6 @@ export async function deleteUser(id: number): Promise<{ success: boolean; error?
   }
 
   return { success: true };
-}
-
-/** Allowed username characters (same rule as the API route schemas): letters, digits, space, _ - . */
-const USERNAME_RE = /^[\p{L}\p{N}_\-. ]+$/u;
-export const USERNAME_MAX_LENGTH = 50;
-
-/**
- * Sets a user's username.
- *
- * Throws UsernameTakenError (a subclass of Error) when the username is invalid or when, compared
- * case-insensitively, it equals another user's username OR another user's display name (so
- * nobody can impersonate someone else by taking their name as a username). Throws a plain
- * Error("Invalid user ID") / Error("User not found") for a bad id.
- */
-export async function updateUsername(id: number, username: string): Promise<void> {
-  if (!Number.isInteger(id) || id <= 0) {
-    throw new Error("Invalid user ID");
-  }
-  const trimmed = typeof username === "string" ? username.normalize("NFC").trim().replace(/\s+/g, " ") : "";
-  if (!trimmed) {
-    throw new UsernameTakenError("Username cannot be empty.");
-  }
-  if (trimmed.length > USERNAME_MAX_LENGTH) {
-    throw new UsernameTakenError(`Username cannot exceed ${USERNAME_MAX_LENGTH} characters.`);
-  }
-  if (!USERNAME_RE.test(trimmed)) {
-    throw new UsernameTakenError("Username may only contain letters, numbers, spaces, and _ - .");
-  }
-  await ensureSchema();
-
-  // The availability check is part of the UPDATE, so two users can't claim the same name at once.
-  let rowCount: number;
-  try {
-    ({ rowCount } = await sql`
-      UPDATE users SET username = ${trimmed}
-      WHERE id = ${id}
-        AND NOT EXISTS (
-          SELECT 1 FROM users o
-          WHERE o.id <> ${id}
-            AND (LOWER(o.username) = LOWER(${trimmed}) OR LOWER(TRIM(o.name)) = LOWER(${trimmed}))
-        )
-    `);
-  } catch (err) {
-    if (err instanceof Error && /UNIQUE/i.test(err.message)) {
-      throw new UsernameTakenError(`The username "${trimmed}" is already taken.`);
-    }
-    throw err;
-  }
-  if (rowCount === 0) {
-    const exists = await sql`SELECT 1 FROM users WHERE id = ${id}`;
-    if (exists.rows.length === 0) throw new Error("User not found");
-    throw new UsernameTakenError(`The username "${trimmed}" is already taken.`);
-  }
 }
 
 // ---------------------------------------------------------------------------
@@ -1965,7 +1888,7 @@ const EVENT_BASE_COLUMNS =
 
 // Member columns embedded in event data. Event data is served to every logged-in user, so
 // email, google_id and the RSVP response_token are deliberately NOT selected.
-const EVENT_MEMBER_COLUMNS = "u.id, u.name, u.username, u.image, u.role, u.provider, u.created_at";
+const EVENT_MEMBER_COLUMNS = "u.id, u.name, u.image, u.role, u.provider, u.created_at";
 
 /**
  * Loads events and all their related rows with a fixed number of queries (6, regardless of how

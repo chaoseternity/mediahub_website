@@ -152,7 +152,7 @@ export function SectionDeploymentModal({
           <div className="relative">
             <Search className="h-3.5 w-3.5 absolute left-2.5 top-2.5 text-muted-foreground" />
             <Input
-              placeholder="Search users by name or username…"
+              placeholder="Search users by name…"
               value={search}
               onChange={(e) => setSearch(e.target.value)}
               className="pl-8 text-xs h-8"
@@ -180,8 +180,8 @@ export function SectionDeploymentModal({
                   >
                     <div>
                       <p className="text-xs font-semibold">{u.name}</p>
-                      {(u.email || u.username) && (
-                        <p className="text-[10px] text-muted-foreground">{u.email ?? `@${u.username}`}</p>
+                      {u.email && (
+                        <p className="text-[10px] text-muted-foreground">{u.email}</p>
                       )}
                     </div>
                     <div

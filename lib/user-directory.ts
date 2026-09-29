@@ -2,13 +2,12 @@
  * Client-side helper for loading the member directory from GET /api/users.
  *
  * Admins receive full user records; all other members receive a minimal
- * directory (id, name, username, image). Callers must therefore treat
+ * directory (id, name, image). Callers must therefore treat
  * email and other fields as optional.
  */
 export interface DirectoryUser {
   id: number;
   name: string;
-  username: string | null;
   image: string | null;
   email?: string;
 }
@@ -40,13 +39,12 @@ export async function fetchUserDirectory(signal?: AbortSignal): Promise<UserDire
   }
 }
 
-/** Case-insensitive match against name, username and (when present) email. */
+/** Case-insensitive match against name and (when present) email. */
 export function matchesUserSearch(u: DirectoryUser, query: string): boolean {
   const q = query.trim().toLowerCase();
   if (!q) return true;
   return (
     (u.name ?? "").toLowerCase().includes(q) ||
-    (u.username ?? "").toLowerCase().includes(q) ||
     (u.email ?? "").toLowerCase().includes(q)
   );
 }
