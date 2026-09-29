@@ -20,21 +20,14 @@ export function UsersManager({ users: initialUsers, currentUserId }: UsersManage
   const [users, setUsers] = useState(initialUsers);
   const [editing, setEditing] = useState<number | null>(null);
   const [pendingRole, setPendingRole] = useState<Role | null>(null);
-  const [editingUsername, setEditingUsername] = useState<number | null>(null);
-  const [pendingUsername, setPendingUsername] = useState("");
   const [saving, setSaving] = useState<number | null>(null);
   const [deleting, setDeleting] = useState<number | null>(null);
   const [error, setError] = useState<string | null>(null);
   const selectRef = useRef<HTMLSelectElement>(null);
-  const usernameInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     if (editing !== null) selectRef.current?.focus();
   }, [editing]);
-
-  useEffect(() => {
-    if (editingUsername !== null) usernameInputRef.current?.focus();
-  }, [editingUsername]);
 
   function startEdit(user: User) {
     setEditing(user.id);
@@ -44,40 +37,6 @@ export function UsersManager({ users: initialUsers, currentUserId }: UsersManage
   function cancelEdit() {
     setEditing(null);
     setPendingRole(null);
-  }
-
-  function startUsernameEdit(user: User) {
-    setEditingUsername(user.id);
-    setPendingUsername(user.username ?? "");
-  }
-
-  function cancelUsernameEdit() {
-    setEditingUsername(null);
-    setPendingUsername("");
-  }
-
-  async function commitUsernameEdit(userId: number) {
-    const trimmed = pendingUsername.trim();
-    if (!trimmed) return;
-    setSaving(userId);
-    setError(null);
-    try {
-      const res = await fetch(`/api/users/${userId}`, {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ username: trimmed }),
-      });
-      if (!res.ok) throw new Error(await readErrorMessage(res, "Failed to update username."));
-      setUsers((prev) =>
-        prev.map((u) => (u.id === userId ? { ...u, username: trimmed } : u))
-      );
-      setEditingUsername(null);
-      setPendingUsername("");
-    } catch (err) {
-      setError(networkErrorMessage(err, "Failed to update username. Please try again."));
-    } finally {
-      setSaving(null);
-    }
   }
 
   async function commitEdit(userId: number) {
@@ -128,8 +87,7 @@ export function UsersManager({ users: initialUsers, currentUserId }: UsersManage
         <table className="w-full text-sm">
           <thead>
             <tr className="border-b bg-muted/50">
-              <th className="text-left px-4 py-3 font-medium text-muted-foreground min-w-[140px]">OAuth Name</th>
-              <th className="text-left px-4 py-3 font-medium text-muted-foreground min-w-[160px]">Username</th>
+              <th className="text-left px-4 py-3 font-medium text-muted-foreground min-w-[180px]">Name</th>
               <th className="text-left px-4 py-3 font-medium text-muted-foreground min-w-[200px]">Email</th>
               <th className="text-left px-4 py-3 font-medium text-muted-foreground min-w-[100px]">Provider</th>
               <th className="text-left px-4 py-3 font-medium text-muted-foreground min-w-[140px]">Role</th>
@@ -144,60 +102,8 @@ export function UsersManager({ users: initialUsers, currentUserId }: UsersManage
                 <tr key={user.id} className="h-14 hover:bg-muted/30 transition-colors">
                   <td className="px-4 align-middle">
                     <div className="font-medium whitespace-nowrap">
-                      <UserLink name={user.name} username={user.username} userId={user.id} />
+                      <UserLink name={user.name} userId={user.id} />
                     </div>
-                  </td>
-                  <td className="px-4 align-middle">
-                    {editingUsername === user.id ? (
-                      <div className="flex items-center gap-1.5">
-                        <input
-                          ref={usernameInputRef}
-                          value={pendingUsername}
-                          maxLength={50}
-                          disabled={saving === user.id}
-                          onChange={(e) => setPendingUsername(e.target.value)}
-                          onKeyDown={(e) => {
-                            if (e.key === "Enter") commitUsernameEdit(user.id);
-                            if (e.key === "Escape") cancelUsernameEdit();
-                          }}
-                          className="text-xs rounded-md border bg-background px-2 py-1 w-32 focus:outline-none focus:ring-2 focus:ring-ring disabled:opacity-50"
-                        />
-                        <Button
-                          variant="ghost"
-                          size="icon"
-                          aria-label="Confirm"
-                          disabled={saving === user.id || !pendingUsername.trim()}
-                          onClick={() => commitUsernameEdit(user.id)}
-                          className="h-6 w-6 text-emerald-600 hover:text-emerald-700"
-                        >
-                          <Check className="h-3.5 w-3.5" />
-                        </Button>
-                        <Button
-                          variant="ghost"
-                          size="icon"
-                          aria-label="Cancel"
-                          onClick={cancelUsernameEdit}
-                          className="h-6 w-6 text-muted-foreground hover:text-foreground"
-                        >
-                          <X className="h-3.5 w-3.5" />
-                        </Button>
-                      </div>
-                    ) : (
-                      <div className="flex items-center gap-1.5">
-                        {user.username
-                          ? <UserLink name={user.name} username={user.username} userId={user.id} className="font-medium" />
-                          : <span className="text-muted-foreground text-xs italic">not set</span>}
-                        <Button
-                          variant="ghost"
-                          size="icon"
-                          aria-label={`Edit username for ${user.name}`}
-                          onClick={() => startUsernameEdit(user)}
-                          className="h-6 w-6 text-muted-foreground hover:text-foreground"
-                        >
-                          <Pencil className="h-3 w-3" />
-                        </Button>
-                      </div>
-                    )}
                   </td>
                   <td className="px-4 align-middle text-muted-foreground whitespace-nowrap">{user.email}</td>
                   <td className="px-4 align-middle">

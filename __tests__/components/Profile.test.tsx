@@ -140,7 +140,7 @@ describe("ProfileClient Component", () => {
     );
 
     expect(screen.getByText("Bob Viewer")).toBeInTheDocument();
-    expect(screen.getByText("@bob_v")).toBeInTheDocument();
+    expect(screen.queryByText("@bob_v")).not.toBeInTheDocument();
     expect(screen.getByText("bob@club.com")).toBeInTheDocument();
     expect(screen.getByText("Sony FX3 Camera")).toBeInTheDocument();
     expect(screen.getByText("CAM-01")).toBeInTheDocument();

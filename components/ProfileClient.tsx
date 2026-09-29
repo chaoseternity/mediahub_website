@@ -72,12 +72,7 @@ export function ProfileClient({
   const [returningId, setReturningId] = useState<number | null>(null);
   const [eventFilter, setEventFilter] = useState<"all" | "upcoming" | "past">("all");
 
-  // Edit username modal state
-  const [editUsernameOpen, setEditUsernameOpen] = useState(false);
   const [handoverEquipment, setHandoverEquipment] = useState<{ id: number; name: string } | null>(null);
-  const [newUsername, setNewUsername] = useState(data.user.username ?? data.user.name ?? "");
-  const [updatingUsername, setUpdatingUsername] = useState(false);
-  const [usernameError, setUsernameError] = useState<string | null>(null);
 
   // null during SSR/first render so overdue badges don't cause a hydration mismatch.
   const now = useNow();
@@ -119,37 +114,6 @@ export function ProfileClient({
     }
   }
 
-  async function handleSaveUsername(e: React.FormEvent) {
-    e.preventDefault();
-    const trimmed = newUsername.trim();
-    if (!trimmed) {
-      setUsernameError("Please enter your name.");
-      return;
-    }
-    setUpdatingUsername(true);
-    setUsernameError(null);
-    try {
-      const res = await fetch("/api/users/me", {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ username: trimmed }),
-      });
-      if (!res.ok) {
-        setUsernameError(await readErrorMessage(res, "Failed to update name"));
-        return;
-      }
-      setData({
-        ...data,
-        user: { ...data.user, username: trimmed },
-      });
-      setEditUsernameOpen(false);
-      router.refresh();
-    } catch {
-      setUsernameError("Something went wrong. Please try again.");
-    } finally {
-      setUpdatingUsername(false);
-    }
-  }
 
   const filteredEvents = data.events.filter((ev) => {
     if (eventFilter === "upcoming") return ev.status !== "Completed";
@@ -202,12 +166,6 @@ export function ProfileClient({
                   </Badge>
                 </div>
 
-                {user.username && user.username !== user.name && (
-                  <p className="text-sm font-medium text-muted-foreground truncate">
-                    @{user.username}
-                  </p>
-                )}
-
                 <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-muted-foreground pt-0.5">
                   <span className="flex items-center gap-1 truncate">
                     <Mail className="h-3.5 w-3.5 shrink-0" />
@@ -219,25 +177,6 @@ export function ProfileClient({
                   </span>
                 </div>
               </div>
-            </div>
-
-            {/* Actions */}
-            <div className="flex items-center gap-2 shrink-0 w-full sm:w-auto justify-end pt-2 sm:pt-0 border-t sm:border-t-0">
-              {isSelf && (
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={() => {
-                    setNewUsername(data.user.username ?? data.user.name ?? "");
-                    setUsernameError(null);
-                    setEditUsernameOpen(true);
-                  }}
-                  className="gap-1.5 text-xs"
-                >
-                  <Edit2 className="h-3.5 w-3.5" />
-                  Edit Name
-                </Button>
-              )}
             </div>
           </div>
         </CardContent>
@@ -801,50 +740,6 @@ export function ProfileClient({
         }}
       />
 
-      {/* ── Edit Display Name Dialog ── */}
-      <Dialog open={editUsernameOpen} onOpenChange={setEditUsernameOpen}>
-        <DialogContent className="sm:max-w-md">
-          <form onSubmit={handleSaveUsername}>
-            <DialogHeader>
-              <DialogTitle>Edit Profile Name</DialogTitle>
-              <DialogDescription>
-                Update your display name. This will be shown on equipment checkouts, event rosters, and your profile.
-              </DialogDescription>
-            </DialogHeader>
-
-            <div className="py-4 space-y-2">
-              <Label htmlFor="display-name" className="text-xs">
-                Your Full Name (as in eSpace)
-              </Label>
-              <Input
-                id="display-name"
-                value={newUsername}
-                onChange={(e) => setNewUsername(e.target.value)}
-                placeholder="e.g. Alice Johnson"
-                autoFocus
-                required
-              />
-              {usernameError && (
-                <p className="text-xs text-destructive">{usernameError}</p>
-              )}
-            </div>
-
-            <DialogFooter>
-              <Button
-                type="button"
-                variant="ghost"
-                onClick={() => setEditUsernameOpen(false)}
-                disabled={updatingUsername}
-              >
-                Cancel
-              </Button>
-              <Button type="submit" disabled={updatingUsername}>
-                {updatingUsername ? "Saving..." : "Save Name"}
-              </Button>
-            </DialogFooter>
-          </form>
-        </DialogContent>
-      </Dialog>
 
       {handoverEquipment && (
         <HandoverModal
