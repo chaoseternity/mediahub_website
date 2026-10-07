@@ -158,7 +158,7 @@ async function ensurePostgresSchema(pg: any): Promise<void> {
         email TEXT NOT NULL UNIQUE,
         google_id TEXT NOT NULL,
         image TEXT,
-        role TEXT NOT NULL DEFAULT 'viewer' CHECK(role IN ('admin', 'editor', 'viewer')),
+        role TEXT NOT NULL DEFAULT 'viewer' CHECK(role IN ('admin', 'verified', 'viewer')),
         provider TEXT NOT NULL,
         created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
       );
@@ -275,7 +275,7 @@ async function ensurePostgresSchema(pg: any): Promise<void> {
       CREATE TABLE IF NOT EXISTS event_ics (
         event_id INT NOT NULL REFERENCES events(id) ON DELETE CASCADE,
         user_id INT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-        section TEXT NOT NULL CHECK(section IN ('pa', 'lights', 'sound', 'av')),
+        section TEXT NOT NULL CHECK(section IN ('photo', 'video', 'av')),
         PRIMARY KEY (event_id, user_id, section)
       );
     `,
@@ -288,7 +288,7 @@ async function ensurePostgresSchema(pg: any): Promise<void> {
         id SERIAL PRIMARY KEY,
         event_id INT NOT NULL REFERENCES events(id) ON DELETE CASCADE,
         equipment_id INT NOT NULL REFERENCES equipment(id) ON DELETE CASCADE,
-        section TEXT NOT NULL CHECK(section IN ('pa', 'lights', 'sound', 'av')),
+        section TEXT NOT NULL CHECK(section IN ('photo', 'video', 'av')),
         added_by INT REFERENCES users(id) ON DELETE SET NULL,
         added_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
         used_for_rehearsal BOOLEAN DEFAULT FALSE
@@ -303,7 +303,7 @@ async function ensurePostgresSchema(pg: any): Promise<void> {
         id SERIAL PRIMARY KEY,
         event_id INT NOT NULL REFERENCES events(id) ON DELETE CASCADE,
         user_id INT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-        section TEXT NOT NULL CHECK(section IN ('pa', 'lights', 'sound', 'av')),
+        section TEXT NOT NULL CHECK(section IN ('photo', 'video', 'av')),
         added_by INT REFERENCES users(id) ON DELETE SET NULL,
         added_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
         attending_rehearsal BOOLEAN DEFAULT FALSE,
@@ -318,7 +318,7 @@ async function ensurePostgresSchema(pg: any): Promise<void> {
     () => sql`
       CREATE TABLE IF NOT EXISTS event_section_rehearsals (
         event_id INT NOT NULL REFERENCES events(id) ON DELETE CASCADE,
-        section TEXT NOT NULL CHECK(section IN ('pa', 'lights', 'sound', 'av')),
+        section TEXT NOT NULL CHECK(section IN ('photo', 'video', 'av')),
         participating BOOLEAN DEFAULT FALSE,
         rehearsal_conducted BOOLEAN DEFAULT FALSE,
         notes TEXT,
@@ -333,7 +333,7 @@ async function ensurePostgresSchema(pg: any): Promise<void> {
       CREATE TABLE IF NOT EXISTS sop_documents (
         id SERIAL PRIMARY KEY,
         name TEXT NOT NULL,
-        category TEXT NOT NULL CHECK(category IN ('pa', 'lights', 'sound', 'av', 'general')),
+        category TEXT NOT NULL DEFAULT 'General',
         file_name TEXT NOT NULL,
         file_type TEXT NOT NULL,
         file_size INT NOT NULL,
@@ -454,6 +454,19 @@ async function ensurePostgresSchema(pg: any): Promise<void> {
   await runSafe(() => sql`ALTER TABLE events ADD COLUMN IF NOT EXISTS rehearsal_end_time TIMESTAMP WITH TIME ZONE;`, "ALTER events rehearsal_end_time");
   await runSafe(() => sql`ALTER TABLE checkout_reminders ADD COLUMN IF NOT EXISTS window_key TEXT;`, "ALTER checkout_reminders window_key");
   await runSafe(() => sql`ALTER TABLE audit_sessions ADD COLUMN IF NOT EXISTS started_by_name TEXT;`, "ALTER audit_sessions started_by_name");
+
+  // Update check constraints on existing databases if needed
+  await runSafe(() => sql`ALTER TABLE users DROP CONSTRAINT IF EXISTS users_role_check;`, "DROP users_role_check");
+  await runSafe(() => sql`ALTER TABLE users ADD CONSTRAINT users_role_check CHECK(role IN ('admin', 'verified', 'viewer'));`, "ADD users_role_check");
+  await runSafe(() => sql`ALTER TABLE event_ics DROP CONSTRAINT IF EXISTS event_ics_section_check;`, "DROP event_ics_section_check");
+  await runSafe(() => sql`ALTER TABLE event_ics ADD CONSTRAINT event_ics_section_check CHECK(section IN ('photo', 'video', 'av'));`, "ADD event_ics_section_check");
+  await runSafe(() => sql`ALTER TABLE event_equipment DROP CONSTRAINT IF EXISTS event_equipment_section_check;`, "DROP event_equipment_section_check");
+  await runSafe(() => sql`ALTER TABLE event_equipment ADD CONSTRAINT event_equipment_section_check CHECK(section IN ('photo', 'video', 'av'));`, "ADD event_equipment_section_check");
+  await runSafe(() => sql`ALTER TABLE event_deployments DROP CONSTRAINT IF EXISTS event_deployments_section_check;`, "DROP event_deployments_section_check");
+  await runSafe(() => sql`ALTER TABLE event_deployments ADD CONSTRAINT event_deployments_section_check CHECK(section IN ('photo', 'video', 'av'));`, "ADD event_deployments_section_check");
+  await runSafe(() => sql`ALTER TABLE event_section_rehearsals DROP CONSTRAINT IF EXISTS event_section_rehearsals_section_check;`, "DROP event_section_rehearsals_section_check");
+  await runSafe(() => sql`ALTER TABLE event_section_rehearsals ADD CONSTRAINT event_section_rehearsals_section_check CHECK(section IN ('photo', 'video', 'av'));`, "ADD event_section_rehearsals_section_check");
+  await runSafe(() => sql`ALTER TABLE sop_documents DROP CONSTRAINT IF EXISTS sop_documents_category_check;`, "DROP sop_documents_category_check");
 
   // Constraints and Indexes
   await runSafe(
