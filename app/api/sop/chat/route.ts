@@ -24,7 +24,9 @@ export async function POST(req: NextRequest) {
   }
 
   try {
-    const question = (parsed.data.question || parsed.data.message || "").trim();
+    const rawQuestion = (parsed.data.question || parsed.data.message || "").trim();
+    const image = parsed.data.image;
+    const question = rawQuestion || (image ? "Please inspect this image and provide relevant equipment, operational, or SOP guidance." : "");
     const history = parsed.data.history || [];
 
     // Fetch SOP documents, live equipment inventory, and events in parallel
@@ -36,6 +38,7 @@ export async function POST(req: NextRequest) {
 
     const result = await askSOPAssistant({
       question,
+      image,
       history,
       sopDocuments,
       equipmentList,

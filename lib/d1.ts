@@ -332,13 +332,13 @@ async function ensurePostgresSchema(pg: any): Promise<void> {
     () => sql`
       CREATE TABLE IF NOT EXISTS sop_documents (
         id SERIAL PRIMARY KEY,
-        name TEXT NOT NULL,
+        title TEXT NOT NULL,
         category TEXT NOT NULL DEFAULT 'General',
-        file_name TEXT NOT NULL,
-        file_type TEXT NOT NULL,
-        file_size INT NOT NULL,
-        content_text TEXT NOT NULL,
-        uploaded_by INT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        content TEXT NOT NULL,
+        file_name TEXT,
+        file_type TEXT,
+        file_size INT,
+        uploaded_by INT REFERENCES users(id) ON DELETE SET NULL,
         created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
         updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
       );
@@ -467,6 +467,31 @@ async function ensurePostgresSchema(pg: any): Promise<void> {
   await runSafe(() => sql`ALTER TABLE event_section_rehearsals DROP CONSTRAINT IF EXISTS event_section_rehearsals_section_check;`, "DROP event_section_rehearsals_section_check");
   await runSafe(() => sql`ALTER TABLE event_section_rehearsals ADD CONSTRAINT event_section_rehearsals_section_check CHECK(section IN ('photo', 'video', 'av'));`, "ADD event_section_rehearsals_section_check");
   await runSafe(() => sql`ALTER TABLE sop_documents DROP CONSTRAINT IF EXISTS sop_documents_category_check;`, "DROP sop_documents_category_check");
+
+  // Migrate sop_documents columns if they were created with prototype names
+  await runSafe(
+    () => sql`
+      DO $$
+      BEGIN
+        IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'sop_documents' AND column_name = 'name')
+           AND NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'sop_documents' AND column_name = 'title') THEN
+          ALTER TABLE sop_documents RENAME COLUMN name TO title;
+        END IF;
+
+        IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'sop_documents' AND column_name = 'content_text')
+           AND NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'sop_documents' AND column_name = 'content') THEN
+          ALTER TABLE sop_documents RENAME COLUMN content_text TO content;
+        END IF;
+      END $$;
+    `,
+    "MIGRATE sop_documents columns name/content_text"
+  );
+  await runSafe(() => sql`ALTER TABLE sop_documents ALTER COLUMN file_name DROP NOT NULL;`, "ALTER sop_documents file_name DROP NOT NULL");
+  await runSafe(() => sql`ALTER TABLE sop_documents ALTER COLUMN file_type DROP NOT NULL;`, "ALTER sop_documents file_type DROP NOT NULL");
+  await runSafe(() => sql`ALTER TABLE sop_documents ALTER COLUMN file_size DROP NOT NULL;`, "ALTER sop_documents file_size DROP NOT NULL");
+  await runSafe(() => sql`ALTER TABLE sop_documents ALTER COLUMN uploaded_by DROP NOT NULL;`, "ALTER sop_documents uploaded_by DROP NOT NULL");
+  await runSafe(() => sql`ALTER TABLE sop_documents ADD COLUMN IF NOT EXISTS title TEXT;`, "ALTER sop_documents ADD COLUMN title");
+  await runSafe(() => sql`ALTER TABLE sop_documents ADD COLUMN IF NOT EXISTS content TEXT;`, "ALTER sop_documents ADD COLUMN content");
 
   // Constraints and Indexes
   await runSafe(

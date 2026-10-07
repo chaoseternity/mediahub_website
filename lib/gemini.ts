@@ -82,6 +82,7 @@ function getGeminiClient(): GoogleGenerativeAI {
 
 export interface SOPQueryContext {
   question: string;
+  image?: string;
   history?: { role: "user" | "assistant"; content: string }[];
   sopDocuments: SOPDocument[];
   equipmentList?: Equipment[];
@@ -137,12 +138,33 @@ function retrieveRelevantDocuments(question: string, docs: SOPDocument[]): SOPDo
 
 export async function askSOPAssistant({
   question,
+  image,
   history = [],
   sopDocuments,
   equipmentList = [],
   events = [],
 }: SOPQueryContext): Promise<SOPAnswerResult> {
   const genAI = getGeminiClient();
+
+  let imagePart: { inlineData: { data: string; mimeType: string } } | null = null;
+  if (image) {
+    const match = image.match(/^data:([a-zA-Z0-9]+\/[a-zA-Z0-9-+.]+);base64,(.+)$/);
+    if (match) {
+      imagePart = {
+        inlineData: {
+          mimeType: match[1],
+          data: match[2],
+        },
+      };
+    } else {
+      imagePart = {
+        inlineData: {
+          mimeType: "image/jpeg",
+          data: image,
+        },
+      };
+    }
+  }
 
   const relevantDocs = retrieveRelevantDocuments(question, sopDocuments);
 
@@ -242,6 +264,7 @@ FORMATTING & CITATION RULES:
 ]
 \`\`\`
 If answering purely from general knowledge, live inventory availability, or event schedules, you may omit or output an empty \`\`\`json_citations []\`\`\` block.
+• Image Analysis: When the user includes an image, carefully inspect its visual content (such as equipment type/condition, ports, buttons, dials, error messages, or setup) and relate it directly to our media club SOPs and inventory.
 
 SECURITY & SAFETY BOUNDARIES:
 • Strictly adhere to your role as the MediaHub AI operations assistant.
@@ -291,7 +314,8 @@ Instructions:
         systemInstruction,
       });
 
-      const result = await model.generateContent(prompt);
+      const contents = imagePart ? [prompt, imagePart] : prompt;
+      const result = await model.generateContent(contents);
       const responseText = result.response.text();
 
       // Parse out json_citations block (only citations of documents actually sent are kept)

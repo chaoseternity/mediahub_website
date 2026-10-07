@@ -28,6 +28,7 @@ import {
   AlertTriangle,
   Edit3,
   Repeat,
+  ImagePlus,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -130,8 +131,54 @@ export function SOPManager({ initialDocuments, role, userName }: SOPManagerProps
 
   const [inputQuery, setInputQuery] = useState("");
   const [chatLoading, setChatLoading] = useState(false);
+  const [attachedImage, setAttachedImage] = useState<string | null>(null);
+  const [attachedImageName, setAttachedImageName] = useState<string | null>(null);
   const chatBottomRef = useRef<HTMLDivElement>(null);
   const chatInputRef = useRef<HTMLTextAreaElement>(null);
+  const chatImageInputRef = useRef<HTMLInputElement>(null);
+
+  const processChatImage = useCallback((file: File) => {
+    if (!file.type.startsWith("image/")) {
+      alert("Please upload a valid image file (JPEG, PNG, WebP, GIF).");
+      return;
+    }
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      const dataUrl = e.target?.result as string;
+      const img = new window.Image();
+      img.onload = () => {
+        const maxDim = 1200;
+        let width = img.width;
+        let height = img.height;
+        if (width > maxDim || height > maxDim) {
+          if (width > height) {
+            height = Math.round((height * maxDim) / width);
+            width = maxDim;
+          } else {
+            width = Math.round((width * maxDim) / height);
+            height = maxDim;
+          }
+        }
+        const canvas = document.createElement("canvas");
+        canvas.width = width;
+        canvas.height = height;
+        const ctx = canvas.getContext("2d");
+        if (ctx) {
+          ctx.drawImage(img, 0, 0, width, height);
+          setAttachedImage(canvas.toDataURL("image/jpeg", 0.85));
+        } else {
+          setAttachedImage(dataUrl);
+        }
+        setAttachedImageName(file.name);
+      };
+      img.onerror = () => {
+        setAttachedImage(dataUrl);
+        setAttachedImageName(file.name);
+      };
+      img.src = dataUrl;
+    };
+    reader.readAsDataURL(file);
+  }, []);
 
   // Document Library & Upload State
   const [searchQuery, setSearchQuery] = useState("");
@@ -714,7 +761,7 @@ export function SOPManager({ initialDocuments, role, userName }: SOPManagerProps
   // Handle Send Chat
   async function handleSendMessage(textToSend?: string) {
     const q = (textToSend || inputQuery).trim();
-    if (!q || chatLoading) return;
+    if ((!q && !attachedImage) || chatLoading) return;
 
     if (q.length > MAX_MESSAGE_CHARS) {
       setMessages((prev) => [
@@ -730,15 +777,23 @@ export function SOPManager({ initialDocuments, role, userName }: SOPManagerProps
       return;
     }
 
+    const currentImage = attachedImage;
+
     const userMsg: ChatMessage = {
       id: `user-${Date.now()}`,
       role: "user",
-      content: q,
+      content: q || "Please inspect this image and provide relevant SOP guidance.",
+      image: currentImage || undefined,
       created_at: new Date().toISOString(),
     };
 
     setMessages((prev) => [...prev, userMsg]);
     setInputQuery("");
+    setAttachedImage(null);
+    setAttachedImageName(null);
+    if (chatImageInputRef.current) {
+      chatImageInputRef.current.value = "";
+    }
     if (chatInputRef.current) {
       chatInputRef.current.style.height = "auto";
     }
@@ -754,6 +809,7 @@ export function SOPManager({ initialDocuments, role, userName }: SOPManagerProps
         body: JSON.stringify({
           question: q,
           message: q,
+          image: currentImage || undefined,
           history: historyPayload,
         }),
       });
@@ -951,6 +1007,17 @@ export function SOPManager({ initialDocuments, role, userName }: SOPManagerProps
                   >
                     {/* Message Body */}
                     <div className="text-sm leading-relaxed max-w-none break-words">
+                      {m.image && (
+                        <div className="mb-2 max-w-xs sm:max-w-sm rounded-lg overflow-hidden border bg-background/50 shadow-xs">
+                          {/* eslint-disable-next-line @next/next/no-img-element */}
+                          <img
+                            src={m.image}
+                            alt="Uploaded question attachment"
+                            className="max-h-60 w-auto rounded-lg object-contain block hover:opacity-95 cursor-pointer transition-opacity"
+                            onClick={() => window.open(m.image, "_blank")}
+                          />
+                        </div>
+                      )}
                       {m.role === "user" ? (
                         <div className="whitespace-pre-wrap">{m.content}</div>
                       ) : (
@@ -1054,34 +1121,101 @@ export function SOPManager({ initialDocuments, role, userName }: SOPManagerProps
             </div>
 
             {/* Input Bar */}
-            <div className="p-3 border-t bg-background flex gap-2 items-end">
-              <textarea
-                ref={chatInputRef}
-                placeholder="Ask about SOP rules, camera specs, or live gear availability... (Shift + Enter for new line)"
-                value={inputQuery}
-                onChange={(e) => {
-                  setInputQuery(e.target.value);
-                  e.target.style.height = "auto";
-                  e.target.style.height = `${Math.min(e.target.scrollHeight, 160)}px`;
-                }}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter" && !e.shiftKey) {
-                    e.preventDefault();
-                    handleSendMessage();
-                  }
-                }}
-                disabled={chatLoading}
-                rows={1}
-                className="flex-1 min-h-[40px] max-h-[160px] resize-none rounded-md border border-input bg-background px-3 py-2 text-xs md:text-sm shadow-xs focus:outline-none focus:ring-1 focus:ring-ring disabled:cursor-not-allowed disabled:opacity-50 leading-relaxed font-sans"
-              />
-              <Button
-                onClick={() => handleSendMessage()}
-                disabled={chatLoading || !inputQuery.trim()}
-                className="bg-purple-600 hover:bg-purple-700 text-white h-10 px-4 shrink-0 gap-1.5 self-end"
-              >
-                <Send className="h-4 w-4" />
-                <span className="hidden sm:inline">Ask</span>
-              </Button>
+            <div className="border-t bg-background flex flex-col">
+              {/* Attached Image Preview Pill */}
+              {attachedImage && (
+                <div className="px-3 pt-2.5 pb-1 flex items-center gap-2">
+                  <div className="inline-flex items-center gap-2 rounded-lg border border-purple-300 dark:border-purple-800 bg-purple-50/80 dark:bg-purple-950/40 p-1.5 shadow-2xs">
+                    {/* eslint-disable-next-line @next/next/no-img-element */}
+                    <img
+                      src={attachedImage}
+                      alt="Thumbnail preview"
+                      className="h-9 w-9 object-cover rounded border"
+                    />
+                    <div className="flex flex-col min-w-0 pr-1">
+                      <span className="text-xs font-semibold text-foreground max-w-[160px] truncate leading-tight">
+                        {attachedImageName || "Attached image"}
+                      </span>
+                      <span className="text-[10px] text-muted-foreground">Ready to send</span>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setAttachedImage(null);
+                        setAttachedImageName(null);
+                        if (chatImageInputRef.current) chatImageInputRef.current.value = "";
+                      }}
+                      className="h-5 w-5 rounded-full bg-muted/80 hover:bg-destructive hover:text-white flex items-center justify-center text-muted-foreground transition-colors ml-1"
+                      title="Remove image"
+                    >
+                      <X className="h-3 w-3" />
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              <div className="p-3 flex gap-2 items-end">
+                <input
+                  ref={chatImageInputRef}
+                  type="file"
+                  accept="image/*"
+                  className="hidden"
+                  onChange={(e) => {
+                    const file = e.target.files?.[0];
+                    if (file) void processChatImage(file);
+                  }}
+                />
+
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="icon"
+                  onClick={() => chatImageInputRef.current?.click()}
+                  disabled={chatLoading}
+                  className="h-10 w-10 shrink-0 text-muted-foreground hover:text-purple-600 hover:bg-purple-50 dark:hover:bg-purple-950/40 border-dashed"
+                  title="Attach an image (or paste/drag into box)"
+                >
+                  <ImagePlus className="h-4.5 w-4.5" />
+                </Button>
+
+                <textarea
+                  ref={chatInputRef}
+                  placeholder="Ask about SOP rules, camera specs, or gear availability... (Paste image or Shift+Enter for new line)"
+                  value={inputQuery}
+                  onChange={(e) => {
+                    setInputQuery(e.target.value);
+                    e.target.style.height = "auto";
+                    e.target.style.height = `${Math.min(e.target.scrollHeight, 160)}px`;
+                  }}
+                  onPaste={(e) => {
+                    const item = Array.from(e.clipboardData.items).find((i) => i.type.startsWith("image/"));
+                    if (item) {
+                      const file = item.getAsFile();
+                      if (file) {
+                        e.preventDefault();
+                        void processChatImage(file);
+                      }
+                    }
+                  }}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter" && !e.shiftKey) {
+                      e.preventDefault();
+                      handleSendMessage();
+                    }
+                  }}
+                  disabled={chatLoading}
+                  rows={1}
+                  className="flex-1 min-h-[40px] max-h-[160px] resize-none rounded-md border border-input bg-background px-3 py-2 text-xs md:text-sm shadow-xs focus:outline-none focus:ring-1 focus:ring-ring disabled:cursor-not-allowed disabled:opacity-50 leading-relaxed font-sans"
+                />
+                <Button
+                  onClick={() => handleSendMessage()}
+                  disabled={chatLoading || (!inputQuery.trim() && !attachedImage)}
+                  className="bg-purple-600 hover:bg-purple-700 text-white h-10 px-4 shrink-0 gap-1.5 self-end"
+                >
+                  <Send className="h-4 w-4" />
+                  <span className="hidden sm:inline">Ask</span>
+                </Button>
+              </div>
             </div>
           </div>
         </TabsContent>
