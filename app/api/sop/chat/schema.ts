@@ -5,6 +5,7 @@ export const ChatRequestSchema = z
   .object({
     question: z.string().max(4000, "Question must be 4000 characters or less").optional(),
     message: z.string().max(4000, "Message must be 4000 characters or less").optional(),
+    image: z.string().max(7 * 1024 * 1024, "Image must be 7MB or less").optional(),
     history: z
       .array(
         z.object({
@@ -19,7 +20,8 @@ export const ChatRequestSchema = z
     (data) =>
       Boolean(
         (data.question && data.question.trim().length > 0) ||
-        (data.message && data.message.trim().length > 0)
+        (data.message && data.message.trim().length > 0) ||
+        Boolean(data.image)
       ),
     {
       message: "Please provide a question or message.",

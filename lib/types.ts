@@ -202,6 +202,7 @@ export interface AIChatMessage {
   id: string;
   role: "user" | "assistant" | "system";
   content: string;
+  image?: string;
   citations?: SOPCitation[];
   created_at?: string;
 }

@@ -35,6 +35,14 @@ describe("SOP Chat Request Validation", () => {
     expect(result.success).toBe(true);
   });
 
+  test("accepts payload with image and optional question", () => {
+    const payload = {
+      image: "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=",
+    };
+    const result = ChatRequestSchema.safeParse(payload);
+    expect(result.success).toBe(true);
+  });
+
   test("rejects empty question and message", () => {
     const payload = {
       question: "   ",
@@ -189,6 +197,35 @@ The Sony FX3 weighs approximately 715g (1 lb 9.3 oz) including battery and memor
     });
 
     expect(res.answer).toContain("Answer from backup model knowledge");
+  });
+
+  test("processes image payload and passes multimodal parts to model.generateContent", async () => {
+    const { askSOPAssistant } = await import("@/lib/gemini");
+    const fakeResponse = "This is a Sony camera battery charger.";
+
+    mockGenerateContent.mockResolvedValueOnce({
+      response: {
+        text: () => fakeResponse,
+      },
+    });
+
+    const fakeImage = "data:image/jpeg;base64,fakeBase64String";
+    const res = await askSOPAssistant({
+      question: "What is this item?",
+      image: fakeImage,
+      sopDocuments: [],
+    });
+
+    expect(res.answer).toBe(fakeResponse);
+    expect(mockGenerateContent).toHaveBeenCalledWith([
+      expect.stringContaining("User Question: What is this item?"),
+      {
+        inlineData: {
+          mimeType: "image/jpeg",
+          data: "fakeBase64String",
+        },
+      },
+    ]);
   });
 });
 
