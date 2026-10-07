@@ -13,15 +13,12 @@ import {
   CreditCard,
   CheckCircle2,
   Clock,
-  AlertTriangle,
-  ArrowRight,
   ExternalLink,
   MapPin,
   ChevronRight,
   CheckCircle,
   XCircle,
   RotateCcw,
-  Sparkles,
   Handshake,
 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
@@ -29,7 +26,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { cn, roleBadgeClass } from "@/lib/utils";
-import type { Role, UserProfileData, UserProfileCheckout, UserProfileEvent } from "@/lib/types";
+import type { Role, UserProfileData, UserProfileCheckout } from "@/lib/types";
 import { EventDetailModal } from "@/components/EventDetailModal";
 import { HandoverModal } from "@/components/HandoverModal";
 import { formatDate, formatDateTime, isDateOnly, parseDueDate } from "@/lib/timezone";
@@ -51,7 +48,7 @@ const fmtDue = (s: string | null | undefined) => (isDateOnly(s) ? formatDate(s) 
 export function ProfileClient({
   initialData,
   viewerRole,
-  viewerId,
+  viewerId: _viewerId,
   isSelf,
 }: ProfileClientProps) {
   const router = useRouter();

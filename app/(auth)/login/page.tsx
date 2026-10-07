@@ -10,7 +10,6 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
-import { Logo } from "@/components/Logo";
 import { MediaClubLogo } from "@/components/MediaClubLogo";
 
 function MicrosoftIcon() {

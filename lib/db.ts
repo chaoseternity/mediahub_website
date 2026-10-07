@@ -24,7 +24,6 @@ import type {
   UserProfileData,
   UserProfileEvent,
   UserProfileCheckout,
-  UserProfileRole,
   ReminderType,
   CheckoutReminder,
   ReminderProcessResult,
@@ -32,11 +31,9 @@ import type {
   ReservationStatus,
   ReservationConflictCheck,
   HandoverCode,
-  HandoverStatus,
   AuditSession,
   AuditSessionStatus,
   AuditRecord,
-  AuditRecordStatus,
   StorageCabinet,
   StorageShelf,
   StorageMapConfigCabinet,
@@ -2047,20 +2044,18 @@ export async function createEvent(params: {
   av_ic_ids?: number[];
 }): Promise<AppEvent> {
   await ensureSchema();
-  // The event and its OIC / IC / rehearsal rows are created atomically. Inside the batch the new
-  // event's id is the table's MAX(id) (one transaction; AUTOINCREMENT ids only grow).
-  const newEventId = "(SELECT MAX(id) FROM events)";
-  const statements: BoundStatement[] = [
-    stmt`
-      INSERT INTO events (name, description, start_time, end_time, location, created_by, has_rehearsal, rehearsal_start_time, rehearsal_end_time)
-      VALUES (${params.name}, ${params.description ?? null}, ${params.start_time}, ${params.end_time}, ${params.location}, ${params.created_by}, ${params.has_rehearsal ?? false}, ${params.rehearsal_start_time ?? null}, ${params.rehearsal_end_time ?? null})
-      RETURNING id
-    `,
-  ];
+  const insertResult = await sql<{ id: number }>`
+    INSERT INTO events (name, description, start_time, end_time, location, created_by, has_rehearsal, rehearsal_start_time, rehearsal_end_time)
+    VALUES (${params.name}, ${params.description ?? null}, ${params.start_time}, ${params.end_time}, ${params.location}, ${params.created_by}, ${params.has_rehearsal ?? false}, ${params.rehearsal_start_time ?? null}, ${params.rehearsal_end_time ?? null})
+    RETURNING id
+  `;
+  const newId = insertResult.rows[0].id;
+
+  const statements: BoundStatement[] = [];
 
   for (const uid of params.oic_user_ids ?? []) {
     statements.push(
-      rawStmt(`INSERT INTO event_oics (event_id, user_id) VALUES (${newEventId}, ?) ON CONFLICT DO NOTHING`, [uid])
+      stmt`INSERT INTO event_oics (event_id, user_id) VALUES (${newId}, ${uid}) ON CONFLICT DO NOTHING`
     );
   }
 
@@ -2073,19 +2068,17 @@ export async function createEvent(params: {
   for (const sec of ["photo", "video", "av"] as EventSection[]) {
     for (const uid of sectionMap[sec] ?? []) {
       statements.push(
-        rawStmt(`INSERT INTO event_ics (event_id, user_id, section) VALUES (${newEventId}, ?, ?) ON CONFLICT DO NOTHING`, [uid, sec])
+        stmt`INSERT INTO event_ics (event_id, user_id, section) VALUES (${newId}, ${uid}, ${sec}) ON CONFLICT DO NOTHING`
       );
     }
     statements.push(
-      rawStmt(
-        `INSERT INTO event_section_rehearsals (event_id, section, participating) VALUES (${newEventId}, ?, FALSE) ON CONFLICT DO NOTHING`,
-        [sec]
-      )
+      stmt`INSERT INTO event_section_rehearsals (event_id, section, participating) VALUES (${newId}, ${sec}, FALSE) ON CONFLICT DO NOTHING`
     );
   }
 
-  const results = await batch<{ id: number }>(statements);
-  const newId = results[0].rows[0].id;
+  if (statements.length > 0) {
+    await batch(statements);
+  }
 
   return (await getEventById(newId))!;
 }

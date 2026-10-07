@@ -251,6 +251,7 @@ export function HandoverModal({
             {/* QR Code Display */}
             {qrDataUrl && (
               <div className="flex flex-col items-center justify-center p-3 bg-white rounded-xl shadow-xs border mx-auto w-fit">
+                {/* eslint-disable-next-line @next/next/no-img-element */}
                 <img
                   src={qrDataUrl}
                   alt={`Handover QR Code for ${equipmentName}`}

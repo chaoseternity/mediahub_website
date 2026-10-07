@@ -7,14 +7,10 @@ import {
   Plus,
   AlertTriangle,
   CheckCircle2,
-  XCircle,
   Clock,
   Package,
   User as UserIcon,
   Search,
-  Filter,
-  ArrowRight,
-  ShieldAlert,
   Calendar as CalendarIcon,
   List,
   ChevronLeft,
@@ -75,8 +71,8 @@ export function ReservationsClient({
   initialReservations,
   equipmentList,
   role,
-  currentUserId,
-  currentUserName,
+  currentUserId: _currentUserId,
+  currentUserName: _currentUserName,
 }: ReservationsClientProps) {
   const router = useRouter();
   const [reservations, setReservations] = useState<Reservation[]>(initialReservations);
