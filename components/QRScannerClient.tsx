@@ -1,11 +1,12 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { AlertCircle, Camera, RefreshCcw, Barcode, QrCode, Zap, CheckCircle2, Handshake } from "lucide-react";
+import { AlertCircle, Camera, RefreshCcw, Barcode, QrCode, Zap, CheckCircle2, Handshake, Focus, Flashlight } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { EquipmentModal } from "@/components/EquipmentModal";
+import { cn } from "@/lib/utils";
 import type { Checkout, Equipment, Role } from "@/lib/types";
 
 interface QRScannerClientProps {
@@ -123,6 +124,15 @@ export function QRScannerClient({ equipment, role, userName }: QRScannerClientPr
   const [cameraError, setCameraError] = useState<string | null>(null);
   const [manualCode, setManualCode] = useState("");
 
+  // Camera hardware controls & tap-to-focus
+  const [reticle, setReticle] = useState<{ x: number; y: number; active: boolean } | null>(null);
+  const [hasTorch, setHasTorch] = useState(false);
+  const [torchOn, setTorchOn] = useState(false);
+  const [zoomLevel, setZoomLevel] = useState(1);
+  const [zoomCapabilities, setZoomCapabilities] = useState<{ min: number; max: number; step: number } | null>(null);
+  const reticleTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const viewfinderRef = useRef<HTMLDivElement | null>(null);
+
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const scannerRef = useRef<any>(null);
   const streamRef = useRef<MediaStream | null>(null);
@@ -208,6 +218,81 @@ export function QRScannerClient({ equipment, role, userName }: QRScannerClientPr
     }
   }
 
+  async function triggerFocusAtPoint(clientX: number, clientY: number, showVisual = true) {
+    if (!viewfinderRef.current) return;
+    const rect = viewfinderRef.current.getBoundingClientRect();
+    const x = clientX - rect.left;
+    const y = clientY - rect.top;
+
+    if (showVisual) {
+      setReticle({ x, y, active: true });
+      if (reticleTimeoutRef.current) clearTimeout(reticleTimeoutRef.current);
+      reticleTimeoutRef.current = setTimeout(() => {
+        setReticle((prev) => (prev ? { ...prev, active: false } : null));
+      }, 1200);
+    }
+
+    const track = streamRef.current?.getVideoTracks()[0];
+    if (track) {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const cap = (track.getCapabilities ? track.getCapabilities() : {}) as any;
+      try {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const advanced: any[] = [];
+        const normX = Math.max(0, Math.min(1, x / Math.max(1, rect.width)));
+        const normY = Math.max(0, Math.min(1, y / Math.max(1, rect.height)));
+
+        if (cap.pointsOfInterest) {
+          advanced.push({ pointsOfInterest: [{ x: normX, y: normY }] });
+        }
+
+        if (cap.focusMode?.includes("single-shot")) {
+          advanced.push({ focusMode: "single-shot" });
+        } else if (cap.focusMode?.includes("continuous")) {
+          // Momentarily nudge focus mode to trigger an autofocus search sweep
+          if (cap.focusMode.includes("manual")) {
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            await track.applyConstraints({ advanced: [{ focusMode: "manual" }] } as any).catch(() => {});
+          }
+          advanced.push({ focusMode: "continuous" });
+        }
+
+        if (advanced.length > 0) {
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          await track.applyConstraints({ advanced } as any);
+        }
+      } catch {
+        // Optional browser constraint; ignore if unsupported
+      }
+    }
+  }
+
+  async function toggleTorch() {
+    const track = streamRef.current?.getVideoTracks()[0];
+    if (!track) return;
+    try {
+      const next = !torchOn;
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      await track.applyConstraints({ advanced: [{ torch: next }] } as any);
+      setTorchOn(next);
+    } catch (err) {
+      console.warn("Failed to toggle flashlight:", err);
+    }
+  }
+
+  async function toggleZoom() {
+    const track = streamRef.current?.getVideoTracks()[0];
+    if (!track || !zoomCapabilities) return;
+    try {
+      const nextZoom = zoomLevel === 1 ? Math.min(2.0, zoomCapabilities.max) : 1.0;
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      await track.applyConstraints({ advanced: [{ zoom: nextZoom }] } as any);
+      setZoomLevel(nextZoom);
+    } catch (err) {
+      console.warn("Failed to toggle zoom:", err);
+    }
+  }
+
   async function stopScanner(scanner: { isScanning?: boolean; stop: () => Promise<void>; clear: () => void } | null) {
     if (!scanner) return;
     try {
@@ -216,14 +301,21 @@ export function QRScannerClient({ equipment, role, userName }: QRScannerClientPr
     } catch {
       // ignore
     }
+    if (streamRef.current) {
+      streamRef.current.getTracks().forEach((t) => t.stop());
+      streamRef.current = null;
+    }
+    setTorchOn(false);
+    setHasTorch(false);
+    setZoomCapabilities(null);
+    setZoomLevel(1);
+    setReticle(null);
   }
 
   async function cleanup() {
     const scanner = scannerRef.current;
     scannerRef.current = null;
     await stopScanner(scanner);
-    streamRef.current?.getTracks().forEach((t) => t.stop());
-    streamRef.current = null;
   }
 
   function invalidatePendingInit() {
@@ -270,8 +362,20 @@ export function QRScannerClient({ equipment, role, userName }: QRScannerClientPr
 
     try {
       await scanner.start(
-        { facingMode: "environment" },
-        { fps: 15, qrbox: { width: 260, height: 180 } },
+        {
+          facingMode: "environment",
+          focusMode: "continuous",
+          advanced: [{ focusMode: "continuous" }],
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        } as any,
+        {
+          fps: 20,
+          qrbox: (viewfinderWidth: number, viewfinderHeight: number) => {
+            const width = Math.min(Math.floor(viewfinderWidth * 0.9), 360);
+            const height = Math.min(Math.floor(viewfinderHeight * 0.65), 240);
+            return { width: Math.max(width, 240), height: Math.max(height, 160) };
+          },
+        },
         (decodedText: string) => {
           if (pausedRef.current || inFlightRef.current) return;
           void handleCodeRecognized(decodedText);
@@ -289,6 +393,19 @@ export function QRScannerClient({ equipment, role, userName }: QRScannerClientPr
       const video = document.querySelector<HTMLVideoElement>("#qr-reader video");
       if (video?.srcObject instanceof MediaStream) {
         streamRef.current = video.srcObject;
+        const track = video.srcObject.getVideoTracks()[0];
+        if (track) {
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          const cap = (track.getCapabilities ? track.getCapabilities() : {}) as any;
+          if (cap.torch) setHasTorch(true);
+          if (cap.zoom && cap.zoom.max > 1.2) {
+            setZoomCapabilities({
+              min: cap.zoom.min || 1,
+              max: cap.zoom.max || 1,
+              step: cap.zoom.step || 0.1,
+            });
+          }
+        }
       }
     } catch (err) {
       if (isStale()) {
@@ -390,13 +507,104 @@ export function QRScannerClient({ equipment, role, userName }: QRScannerClientPr
       </div>
 
       {/* Camera Viewfinder */}
-      <div className="relative rounded-2xl overflow-hidden border-2 border-primary/20 bg-black min-h-64 shadow-md">
+      <div
+        ref={viewfinderRef}
+        onClick={(e) => {
+          if (started) void triggerFocusAtPoint(e.clientX, e.clientY);
+        }}
+        className="relative rounded-2xl overflow-hidden border-2 border-primary/20 bg-black min-h-64 shadow-md cursor-crosshair select-none"
+      >
         {!started && !cameraError && (
           <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 z-10 text-white">
             <Camera className="h-10 w-10 animate-pulse text-primary" />
             <p className="text-xs text-muted-foreground">Starting camera scanner…</p>
           </div>
         )}
+
+        {/* Tap-to-Focus Reticle Indicator */}
+        {reticle && reticle.active && (
+          <div
+            className="pointer-events-none absolute -translate-x-1/2 -translate-y-1/2 z-30 transition-all duration-200 ease-out"
+            style={{ left: reticle.x, top: reticle.y }}
+          >
+            <div className="relative w-14 h-14 border-2 border-amber-400 rounded-lg shadow-[0_0_12px_rgba(251,191,36,0.8)] animate-pulse flex items-center justify-center">
+              <span className="absolute -top-1 -left-1 w-2.5 h-2.5 border-t-2 border-l-2 border-white" />
+              <span className="absolute -top-1 -right-1 w-2.5 h-2.5 border-t-2 border-r-2 border-white" />
+              <span className="absolute -bottom-1 -left-1 w-2.5 h-2.5 border-b-2 border-l-2 border-white" />
+              <span className="absolute -bottom-1 -right-1 w-2.5 h-2.5 border-b-2 border-r-2 border-white" />
+              <span className="w-1.5 h-1.5 rounded-full bg-amber-400" />
+            </div>
+          </div>
+        )}
+
+        {/* Floating Quick Action Controls (Flashlight, Macro Zoom, Manual Focus) */}
+        {started && (
+          <div className="absolute top-3 right-3 z-20 flex items-center gap-1.5 bg-black/60 backdrop-blur-md p-1 rounded-full border border-white/10 shadow-lg">
+            {hasTorch && (
+              <Button
+                type="button"
+                size="icon"
+                variant="ghost"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  void toggleTorch();
+                }}
+                className={cn(
+                  "h-8 w-8 rounded-full text-white transition-colors",
+                  torchOn ? "bg-amber-500 text-black hover:bg-amber-400" : "hover:bg-white/20"
+                )}
+                title={torchOn ? "Turn off Flashlight" : "Turn on Flashlight"}
+              >
+                <Flashlight className="h-4 w-4" />
+              </Button>
+            )}
+            {zoomCapabilities && zoomCapabilities.max > 1.2 && (
+              <Button
+                type="button"
+                size="sm"
+                variant="ghost"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  void toggleZoom();
+                }}
+                className={cn(
+                  "h-8 px-2.5 rounded-full text-xs font-bold text-white transition-colors",
+                  zoomLevel > 1 ? "bg-primary text-primary-foreground hover:bg-primary/90" : "hover:bg-white/20"
+                )}
+                title="Toggle 2x Macro Zoom for small barcodes"
+              >
+                {zoomLevel === 1 ? "1x" : "2x"}
+              </Button>
+            )}
+            <Button
+              type="button"
+              size="icon"
+              variant="ghost"
+              onClick={(e) => {
+                e.stopPropagation();
+                if (viewfinderRef.current) {
+                  const rect = viewfinderRef.current.getBoundingClientRect();
+                  void triggerFocusAtPoint(rect.left + rect.width / 2, rect.top + rect.height / 2);
+                }
+              }}
+              className="h-8 w-8 rounded-full text-white hover:bg-white/20"
+              title="Refocus camera"
+            >
+              <Focus className="h-4 w-4" />
+            </Button>
+          </div>
+        )}
+
+        {/* Bottom Helper Hint */}
+        {started && (
+          <div className="pointer-events-none absolute bottom-3 inset-x-0 z-20 flex justify-center">
+            <div className="bg-black/65 backdrop-blur-md px-3 py-1 rounded-full border border-white/10 text-[11px] text-white/90 font-medium flex items-center gap-1.5 shadow-sm">
+              <Focus className="h-3 w-3 text-amber-400" />
+              Tap screen to focus {zoomCapabilities ? "• 2x for small barcodes" : ""}
+            </div>
+          </div>
+        )}
+
         <div id="qr-reader" className="w-full [&_video]:w-full" />
       </div>
 
