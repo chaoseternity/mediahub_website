@@ -474,32 +474,54 @@ export function AuditClient({
       scannerRef.current = html5QrCode;
 
       try {
-        await html5QrCode.start(
-          {
-            facingMode: desiredFacing,
-            focusMode: "continuous",
-            advanced: [{ focusMode: "continuous" }],
-            // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          } as any,
-          {
-            fps: 20,
-            qrbox: (viewfinderWidth: number, viewfinderHeight: number) => {
-              const width = Math.min(Math.floor(viewfinderWidth * 0.9), 320);
-              const height = Math.min(Math.floor(viewfinderHeight * 0.7), 240);
-              return { width: Math.max(width, 220), height: Math.max(height, 160) };
-            },
+        const scanConfig = {
+          fps: 20,
+          qrbox: (viewfinderWidth: number, viewfinderHeight: number) => {
+            const minEdge = Math.min(viewfinderWidth, viewfinderHeight);
+            const edge = Math.min(260, Math.max(50, Math.floor(minEdge * 0.8)));
+            return { width: edge, height: edge };
           },
-          (decodedText: string) => {
-            const now = Date.now();
-            const lastTime = lastScannedTimeRef.current[decodedText] || 0;
-            // Debounce identical barcode scans for 1.8s
-            if (now - lastTime < 1800) return;
-            lastScannedTimeRef.current[decodedText] = now;
-            // Via ref: always the latest session / handlers, never a stale closure.
-            enqueueScanRef.current(decodedText, "qr");
-          },
-          undefined
-        );
+          aspectRatio: 1.0,
+        };
+
+        const onScanSuccess = (decodedText: string) => {
+          const now = Date.now();
+          const lastTime = lastScannedTimeRef.current[decodedText] || 0;
+          // Debounce identical barcode scans for 1.8s
+          if (now - lastTime < 1800) return;
+          lastScannedTimeRef.current[decodedText] = now;
+          // Via ref: always the latest session / handlers, never a stale closure.
+          enqueueScanRef.current(decodedText, "qr");
+        };
+
+        let startErr: unknown = null;
+        try {
+          await html5QrCode.start(
+            { facingMode: desiredFacing },
+            scanConfig,
+            onScanSuccess,
+            undefined
+          );
+        } catch (err) {
+          startErr = err;
+        }
+
+        // If environment camera failed (e.g. laptop webcam without back camera), fallback to user camera
+        if (startErr && !isStale()) {
+          try {
+            const fallbackFacing = desiredFacing === "environment" ? "user" : "environment";
+            await html5QrCode.start(
+              { facingMode: fallbackFacing },
+              scanConfig,
+              onScanSuccess,
+              undefined
+            );
+            setFacingMode(fallbackFacing);
+            startErr = null;
+          } catch {
+            throw startErr;
+          }
+        }
 
         // Stopped, restarted or unmounted while start() was pending: release this stream now.
         if (isStale()) {
@@ -527,6 +549,10 @@ export function AuditClient({
                 max: cap.zoom.max || 1,
                 step: cap.zoom.step || 0.1,
               });
+            }
+            if (cap.focusMode?.includes("continuous") && track.applyConstraints) {
+              // eslint-disable-next-line @typescript-eslint/no-explicit-any
+              track.applyConstraints({ advanced: [{ focusMode: "continuous" }] } as any).catch(() => {});
             }
           }
         }
