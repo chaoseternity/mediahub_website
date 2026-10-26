@@ -361,27 +361,50 @@ export function QRScannerClient({ equipment, role, userName }: QRScannerClientPr
     scannerRef.current = scanner;
 
     try {
-      await scanner.start(
-        {
-          facingMode: "environment",
-          focusMode: "continuous",
-          advanced: [{ focusMode: "continuous" }],
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        } as any,
-        {
-          fps: 20,
-          qrbox: (viewfinderWidth: number, viewfinderHeight: number) => {
-            const width = Math.min(Math.floor(viewfinderWidth * 0.9), 360);
-            const height = Math.min(Math.floor(viewfinderHeight * 0.65), 240);
-            return { width: Math.max(width, 240), height: Math.max(height, 160) };
-          },
+      const scanConfig = {
+        fps: 20,
+        qrbox: (viewfinderWidth: number, viewfinderHeight: number) => {
+          const w = Math.min(Math.floor(viewfinderWidth * 0.85), 320);
+          const h = Math.min(Math.floor(viewfinderHeight * 0.65), 200);
+          return {
+            width: Math.min(w, Math.max(50, viewfinderWidth - 20)),
+            height: Math.min(h, Math.max(50, viewfinderHeight - 20)),
+          };
         },
-        (decodedText: string) => {
-          if (pausedRef.current || inFlightRef.current) return;
-          void handleCodeRecognized(decodedText);
-        },
-        undefined
-      );
+      };
+
+      const onScanSuccess = (decodedText: string) => {
+        if (pausedRef.current || inFlightRef.current) return;
+        void handleCodeRecognized(decodedText);
+      };
+
+      let startErr: unknown = null;
+      try {
+        await scanner.start(
+          { facingMode: "environment" },
+          scanConfig,
+          onScanSuccess,
+          undefined
+        );
+      } catch (err) {
+        startErr = err;
+      }
+
+      // Fallback to user/front camera if environment facingMode failed (e.g. laptop webcam)
+      if (startErr && !isStale()) {
+        try {
+          await scanner.start(
+            { facingMode: "user" },
+            scanConfig,
+            onScanSuccess,
+            undefined
+          );
+          startErr = null;
+        } catch {
+          throw startErr;
+        }
+      }
+
       // Unmounted (or re-initialised) while start() was pending: release the camera now,
       // otherwise the stream would leak (e.g. React StrictMode double mount).
       if (isStale()) {
@@ -404,6 +427,10 @@ export function QRScannerClient({ equipment, role, userName }: QRScannerClientPr
               max: cap.zoom.max || 1,
               step: cap.zoom.step || 0.1,
             });
+          }
+          if (cap.focusMode?.includes("continuous") && track.applyConstraints) {
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            track.applyConstraints({ advanced: [{ focusMode: "continuous" }] } as any).catch(() => {});
           }
         }
       }
