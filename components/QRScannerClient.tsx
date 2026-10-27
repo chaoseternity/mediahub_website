@@ -125,12 +125,18 @@ export function QRScannerClient({ equipment, role, userName }: QRScannerClientPr
   const [manualCode, setManualCode] = useState("");
 
   // Camera hardware controls & tap-to-focus
-  const [reticle, setReticle] = useState<{ x: number; y: number; active: boolean } | null>(null);
+  const [reticle, setReticle] = useState<{
+    x: number;
+    y: number;
+    active: boolean;
+    status: "focusing" | "locked";
+  } | null>(null);
   const [hasTorch, setHasTorch] = useState(false);
   const [torchOn, setTorchOn] = useState(false);
   const [zoomLevel, setZoomLevel] = useState(1);
   const [zoomCapabilities, setZoomCapabilities] = useState<{ min: number; max: number; step: number } | null>(null);
   const reticleTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const reticleLockTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const viewfinderRef = useRef<HTMLDivElement | null>(null);
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -218,51 +224,111 @@ export function QRScannerClient({ equipment, role, userName }: QRScannerClientPr
     }
   }
 
+  async function applyZoom(targetZoom: number) {
+    const track = streamRef.current?.getVideoTracks()[0];
+    if (!track || !zoomCapabilities) return;
+    try {
+      const clamped = Math.max(zoomCapabilities.min, Math.min(targetZoom, zoomCapabilities.max));
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      await track.applyConstraints({ advanced: [{ zoom: clamped }] } as any);
+      setZoomLevel(clamped);
+      if (typeof navigator !== "undefined" && navigator.vibrate) {
+        navigator.vibrate(15);
+      }
+    } catch (err) {
+      console.warn("Failed to apply zoom:", err);
+    }
+  }
+
+  async function cycleZoom() {
+    if (!zoomCapabilities) return;
+    let nextZoom = 1.0;
+    if (zoomLevel < 1.8 && zoomCapabilities.max >= 2.0) {
+      nextZoom = 2.0;
+    } else if (zoomLevel < 2.8 && zoomCapabilities.max >= 3.0) {
+      nextZoom = 3.0;
+    } else {
+      nextZoom = 1.0;
+    }
+    await applyZoom(nextZoom);
+  }
+
   async function triggerFocusAtPoint(clientX: number, clientY: number, showVisual = true) {
     if (!viewfinderRef.current) return;
     const rect = viewfinderRef.current.getBoundingClientRect();
-    const x = clientX - rect.left;
-    const y = clientY - rect.top;
+    const x = Math.max(0, Math.min(rect.width, clientX - rect.left));
+    const y = Math.max(0, Math.min(rect.height, clientY - rect.top));
+
+    // Immediate haptic pulse if supported
+    if (typeof navigator !== "undefined" && navigator.vibrate) {
+      try {
+        navigator.vibrate(25);
+      } catch {
+        // ignore
+      }
+    }
 
     if (showVisual) {
-      setReticle({ x, y, active: true });
       if (reticleTimeoutRef.current) clearTimeout(reticleTimeoutRef.current);
+      if (reticleLockTimeoutRef.current) clearTimeout(reticleLockTimeoutRef.current);
+
+      setReticle({ x, y, active: true, status: "focusing" });
+
+      reticleLockTimeoutRef.current = setTimeout(() => {
+        setReticle((prev) => (prev ? { ...prev, status: "locked" } : null));
+      }, 350);
+
       reticleTimeoutRef.current = setTimeout(() => {
         setReticle((prev) => (prev ? { ...prev, active: false } : null));
-      }, 1200);
+      }, 1500);
     }
 
     const track = streamRef.current?.getVideoTracks()[0];
     if (track) {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const cap = (track.getCapabilities ? track.getCapabilities() : {}) as any;
-      try {
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        const advanced: any[] = [];
-        const normX = Math.max(0, Math.min(1, x / Math.max(1, rect.width)));
-        const normY = Math.max(0, Math.min(1, y / Math.max(1, rect.height)));
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const settings = (track.getSettings ? track.getSettings() : {}) as any;
+      const normX = Math.max(0, Math.min(1, x / Math.max(1, rect.width)));
+      const normY = Math.max(0, Math.min(1, y / Math.max(1, rect.height)));
 
+      try {
+        // 1. Point of interest focusing
         if (cap.pointsOfInterest) {
-          advanced.push({ pointsOfInterest: [{ x: normX, y: normY }] });
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          await track.applyConstraints({ advanced: [{ pointsOfInterest: [{ x: normX, y: normY }] }] } as any).catch(() => {});
         }
 
+        // 2. Focus mode cycling
         if (cap.focusMode?.includes("single-shot")) {
-          advanced.push({ focusMode: "single-shot" });
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          await track.applyConstraints({ advanced: [{ focusMode: "single-shot" }] } as any).catch(() => {});
         } else if (cap.focusMode?.includes("continuous")) {
-          // Momentarily nudge focus mode to trigger an autofocus search sweep
           if (cap.focusMode.includes("manual")) {
             // eslint-disable-next-line @typescript-eslint/no-explicit-any
             await track.applyConstraints({ advanced: [{ focusMode: "manual" }] } as any).catch(() => {});
+            setTimeout(() => {
+              // eslint-disable-next-line @typescript-eslint/no-explicit-any
+              track.applyConstraints({ advanced: [{ focusMode: "continuous" }] } as any).catch(() => {});
+            }, 80);
           }
-          advanced.push({ focusMode: "continuous" });
         }
 
-        if (advanced.length > 0) {
+        // 3. Hardware PDAF depth kick via momentary micro-zoom nudge (+0.04 for 120ms)
+        // Recalibrates contrast and focal depth on mobile camera ISPs (iOS & Android)
+        if (cap.zoom && cap.zoom.max > 1.05) {
+          const currentZ = settings.zoom || zoomLevel || 1.0;
+          const nudgeZ = currentZ < cap.zoom.max - 0.05 ? currentZ + 0.04 : Math.max(1.0, currentZ - 0.04);
           // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          await track.applyConstraints({ advanced } as any);
+          track.applyConstraints({ advanced: [{ zoom: nudgeZ }] } as any).then(() => {
+            setTimeout(() => {
+              // eslint-disable-next-line @typescript-eslint/no-explicit-any
+              track.applyConstraints({ advanced: [{ zoom: currentZ }] } as any).catch(() => {});
+            }, 120);
+          }).catch(() => {});
         }
       } catch {
-        // Optional browser constraint; ignore if unsupported
+        // Ignore unsupported constraints
       }
     }
   }
@@ -280,19 +346,6 @@ export function QRScannerClient({ equipment, role, userName }: QRScannerClientPr
     }
   }
 
-  async function toggleZoom() {
-    const track = streamRef.current?.getVideoTracks()[0];
-    if (!track || !zoomCapabilities) return;
-    try {
-      const nextZoom = zoomLevel === 1 ? Math.min(2.0, zoomCapabilities.max) : 1.0;
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      await track.applyConstraints({ advanced: [{ zoom: nextZoom }] } as any);
-      setZoomLevel(nextZoom);
-    } catch (err) {
-      console.warn("Failed to toggle zoom:", err);
-    }
-  }
-
   async function stopScanner(scanner: { isScanning?: boolean; stop: () => Promise<void>; clear: () => void } | null) {
     if (!scanner) return;
     try {
@@ -304,6 +357,14 @@ export function QRScannerClient({ equipment, role, userName }: QRScannerClientPr
     if (streamRef.current) {
       streamRef.current.getTracks().forEach((t) => t.stop());
       streamRef.current = null;
+    }
+    if (reticleTimeoutRef.current) {
+      clearTimeout(reticleTimeoutRef.current);
+      reticleTimeoutRef.current = null;
+    }
+    if (reticleLockTimeoutRef.current) {
+      clearTimeout(reticleLockTimeoutRef.current);
+      reticleLockTimeoutRef.current = null;
     }
     setTorchOn(false);
     setHasTorch(false);
@@ -357,6 +418,9 @@ export function QRScannerClient({ equipment, role, userName }: QRScannerClientPr
     const scanner = new mod.Html5Qrcode("qr-reader", {
       formatsToSupport: supportedFormats,
       verbose: false,
+      experimentalFeatures: {
+        useBarCodeDetectorIfSupported: true,
+      },
     });
     scannerRef.current = scanner;
 
@@ -379,9 +443,14 @@ export function QRScannerClient({ equipment, role, userName }: QRScannerClientPr
       };
 
       let startErr: unknown = null;
+      // 1. Try environment camera with 1080p ideal resolution for sharp 1D barcodes
       try {
         await scanner.start(
-          { facingMode: "environment" },
+          {
+            facingMode: "environment",
+            width: { ideal: 1920 },
+            height: { ideal: 1080 },
+          },
           scanConfig,
           onScanSuccess,
           undefined
@@ -390,18 +459,29 @@ export function QRScannerClient({ equipment, role, userName }: QRScannerClientPr
         startErr = err;
       }
 
-      // Fallback to user/front camera if environment facingMode failed (e.g. laptop webcam)
+      // 2. Fallback to basic environment camera if resolution constraints rejected
       if (startErr && !isStale()) {
         try {
           await scanner.start(
-            { facingMode: "user" },
+            { facingMode: "environment" },
             scanConfig,
             onScanSuccess,
             undefined
           );
           startErr = null;
         } catch {
-          throw startErr;
+          // 3. Fallback to user/front camera (e.g. laptop webcam)
+          try {
+            await scanner.start(
+              { facingMode: "user" },
+              scanConfig,
+              onScanSuccess,
+              undefined
+            );
+            startErr = null;
+          } catch (finalErr) {
+            throw finalErr;
+          }
         }
       }
 
@@ -536,10 +616,7 @@ export function QRScannerClient({ equipment, role, userName }: QRScannerClientPr
       {/* Camera Viewfinder */}
       <div
         ref={viewfinderRef}
-        onClick={(e) => {
-          if (started) void triggerFocusAtPoint(e.clientX, e.clientY);
-        }}
-        className="relative rounded-2xl overflow-hidden border-2 border-primary/20 bg-black min-h-64 shadow-md cursor-crosshair select-none"
+        className="relative rounded-2xl overflow-hidden border-2 border-primary/20 bg-black min-h-64 shadow-md select-none"
       >
         {!started && !cameraError && (
           <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 z-10 text-white">
@@ -548,19 +625,51 @@ export function QRScannerClient({ equipment, role, userName }: QRScannerClientPr
           </div>
         )}
 
+        {/* Transparent Tap-to-Focus Touch Layer - captures touch/pointerdown immediately with zero lag */}
+        {started && (
+          <div
+            className="absolute inset-0 z-10 cursor-crosshair touch-none select-none"
+            onPointerDown={(e) => {
+              e.preventDefault();
+              void triggerFocusAtPoint(e.clientX, e.clientY);
+            }}
+          />
+        )}
+
         {/* Tap-to-Focus Reticle Indicator */}
         {reticle && reticle.active && (
           <div
-            className="pointer-events-none absolute -translate-x-1/2 -translate-y-1/2 z-30 transition-all duration-200 ease-out"
+            className="pointer-events-none absolute -translate-x-1/2 -translate-y-1/2 z-30 transition-all duration-200 ease-out flex flex-col items-center"
             style={{ left: reticle.x, top: reticle.y }}
           >
-            <div className="relative w-14 h-14 border-2 border-amber-400 rounded-lg shadow-[0_0_12px_rgba(251,191,36,0.8)] animate-pulse flex items-center justify-center">
-              <span className="absolute -top-1 -left-1 w-2.5 h-2.5 border-t-2 border-l-2 border-white" />
-              <span className="absolute -top-1 -right-1 w-2.5 h-2.5 border-t-2 border-r-2 border-white" />
-              <span className="absolute -bottom-1 -left-1 w-2.5 h-2.5 border-b-2 border-l-2 border-white" />
-              <span className="absolute -bottom-1 -right-1 w-2.5 h-2.5 border-b-2 border-r-2 border-white" />
-              <span className="w-1.5 h-1.5 rounded-full bg-amber-400" />
+            <div
+              className={cn(
+                "relative w-16 h-16 border-2 rounded-xl transition-all duration-300 flex items-center justify-center",
+                reticle.status === "focusing"
+                  ? "border-amber-400 scale-110 shadow-[0_0_16px_rgba(251,191,36,0.9)]"
+                  : "border-emerald-400 scale-100 shadow-[0_0_16px_rgba(52,211,153,0.9)]"
+              )}
+            >
+              <span className="absolute -top-1 -left-1 w-3 h-3 border-t-2 border-l-2 border-white" />
+              <span className="absolute -top-1 -right-1 w-3 h-3 border-t-2 border-r-2 border-white" />
+              <span className="absolute -bottom-1 -left-1 w-3 h-3 border-b-2 border-l-2 border-white" />
+              <span className="absolute -bottom-1 -right-1 w-3 h-3 border-b-2 border-r-2 border-white" />
+              {reticle.status === "focusing" ? (
+                <span className="w-2 h-2 rounded-full bg-amber-400 animate-ping" />
+              ) : (
+                <span className="w-2 h-2 rounded-full bg-emerald-400" />
+              )}
             </div>
+            <span
+              className={cn(
+                "mt-2 text-[10px] font-bold px-2 py-0.5 rounded-full backdrop-blur-md shadow-sm transition-all",
+                reticle.status === "focusing"
+                  ? "bg-amber-500/80 text-black"
+                  : "bg-emerald-600/90 text-white"
+              )}
+            >
+              {reticle.status === "focusing" ? "Refocusing…" : "Focused ✓"}
+            </span>
           </div>
         )}
 
@@ -592,15 +701,15 @@ export function QRScannerClient({ equipment, role, userName }: QRScannerClientPr
                 variant="ghost"
                 onClick={(e) => {
                   e.stopPropagation();
-                  void toggleZoom();
+                  void cycleZoom();
                 }}
                 className={cn(
                   "h-8 px-2.5 rounded-full text-xs font-bold text-white transition-colors",
                   zoomLevel > 1 ? "bg-primary text-primary-foreground hover:bg-primary/90" : "hover:bg-white/20"
                 )}
-                title="Toggle 2x Macro Zoom for small barcodes"
+                title="Cycle Zoom (1x / 2x / 3x) for small barcodes"
               >
-                {zoomLevel === 1 ? "1x" : "2x"}
+                {`${zoomLevel}x`}
               </Button>
             )}
             <Button
@@ -615,19 +724,43 @@ export function QRScannerClient({ equipment, role, userName }: QRScannerClientPr
                 }
               }}
               className="h-8 w-8 rounded-full text-white hover:bg-white/20"
-              title="Refocus camera"
+              title="Refocus center"
             >
               <Focus className="h-4 w-4" />
             </Button>
           </div>
         )}
 
-        {/* Bottom Helper Hint */}
+        {/* Bottom Helper Hint & Macro Zoom Buttons */}
         {started && (
-          <div className="pointer-events-none absolute bottom-3 inset-x-0 z-20 flex justify-center">
-            <div className="bg-black/65 backdrop-blur-md px-3 py-1 rounded-full border border-white/10 text-[11px] text-white/90 font-medium flex items-center gap-1.5 shadow-sm">
-              <Focus className="h-3 w-3 text-amber-400" />
-              Tap screen to focus {zoomCapabilities ? "• 2x for small barcodes" : ""}
+          <div className="absolute bottom-3 inset-x-3 z-20 flex flex-col items-center gap-1.5 pointer-events-none">
+            {zoomCapabilities && zoomCapabilities.max > 1.2 && (
+              <div className="pointer-events-auto flex items-center gap-1 bg-black/75 backdrop-blur-md px-1.5 py-1 rounded-full border border-white/10 shadow-md">
+                <span className="text-[10px] text-white/70 font-medium pl-1.5 pr-0.5">Macro:</span>
+                {[1, 2, ...(zoomCapabilities.max >= 3 ? [3] : [])].map((z) => (
+                  <button
+                    key={z}
+                    type="button"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      void applyZoom(z);
+                    }}
+                    className={cn(
+                      "px-2 py-0.5 rounded-full text-[11px] font-bold transition-all",
+                      Math.abs(zoomLevel - z) < 0.2
+                        ? "bg-amber-400 text-black shadow-sm"
+                        : "text-white/80 hover:text-white hover:bg-white/20"
+                    )}
+                  >
+                    {z}x
+                  </button>
+                ))}
+              </div>
+            )}
+
+            <div className="bg-black/75 backdrop-blur-md px-3 py-1 rounded-full border border-white/10 text-[11px] text-white/95 font-medium flex items-center gap-1.5 shadow-sm text-center">
+              <Focus className="h-3 w-3 text-amber-400 shrink-0" />
+              <span>Tap anywhere to focus • Hold 15–20 cm away</span>
             </div>
           </div>
         )}
