@@ -415,13 +415,13 @@ export function QRScannerClient({ equipment, role, userName }: QRScannerClientPr
       mod.Html5QrcodeSupportedFormats.ITF,
     ];
 
-    const scanner = new mod.Html5Qrcode("qr-reader", {
-      formatsToSupport: supportedFormats,
-      verbose: false,
-      experimentalFeatures: {
-        useBarCodeDetectorIfSupported: true,
-      },
-    });
+    const createScanner = () =>
+      new mod.Html5Qrcode("qr-reader", {
+        formatsToSupport: supportedFormats,
+        verbose: false,
+      });
+
+    let scanner = createScanner();
     scannerRef.current = scanner;
 
     try {
@@ -443,14 +443,9 @@ export function QRScannerClient({ equipment, role, userName }: QRScannerClientPr
       };
 
       let startErr: unknown = null;
-      // 1. Try environment camera with 1080p ideal resolution for sharp 1D barcodes
       try {
         await scanner.start(
-          {
-            facingMode: "environment",
-            width: { ideal: 1920 },
-            height: { ideal: 1080 },
-          },
+          { facingMode: "environment" },
           scanConfig,
           onScanSuccess,
           undefined
@@ -459,29 +454,26 @@ export function QRScannerClient({ equipment, role, userName }: QRScannerClientPr
         startErr = err;
       }
 
-      // 2. Fallback to basic environment camera if resolution constraints rejected
+      // Fallback to user/front camera if environment facingMode failed (e.g. laptop webcam)
       if (startErr && !isStale()) {
         try {
+          try {
+            scanner.clear();
+          } catch {
+            // ignore
+          }
+          scanner = createScanner();
+          scannerRef.current = scanner;
+
           await scanner.start(
-            { facingMode: "environment" },
+            { facingMode: "user" },
             scanConfig,
             onScanSuccess,
             undefined
           );
           startErr = null;
         } catch {
-          // 3. Fallback to user/front camera (e.g. laptop webcam)
-          try {
-            await scanner.start(
-              { facingMode: "user" },
-              scanConfig,
-              onScanSuccess,
-              undefined
-            );
-            startErr = null;
-          } catch (finalErr) {
-            throw finalErr;
-          }
+          throw startErr;
         }
       }
 

@@ -533,13 +533,13 @@ export function AuditClient({
         mod.Html5QrcodeSupportedFormats.ITF,
       ];
 
-      const html5QrCode = new mod.Html5Qrcode("audit-camera-reader", {
-        formatsToSupport: supportedFormats,
-        verbose: false,
-        experimentalFeatures: {
-          useBarCodeDetectorIfSupported: true,
-        },
-      });
+      const createScanner = () =>
+        new mod.Html5Qrcode("audit-camera-reader", {
+          formatsToSupport: supportedFormats,
+          verbose: false,
+        });
+
+      let html5QrCode = createScanner();
       scannerRef.current = html5QrCode;
 
       try {
@@ -564,14 +564,9 @@ export function AuditClient({
         };
 
         let startErr: unknown = null;
-        // 1. Try with 1080p ideal resolution for sharp 1D barcode scanning
         try {
           await html5QrCode.start(
-            {
-              facingMode: desiredFacing,
-              width: { ideal: 1920 },
-              height: { ideal: 1080 },
-            },
+            { facingMode: desiredFacing },
             scanConfig,
             onScanSuccess,
             undefined
@@ -580,31 +575,28 @@ export function AuditClient({
           startErr = err;
         }
 
-        // 2. Fallback to basic facingMode if resolution preference is unsupported
+        // If desired facingMode failed (e.g. environment on laptop with only front camera), fallback
         if (startErr && !isStale()) {
           try {
+            try {
+              html5QrCode.clear();
+            } catch {
+              // ignore
+            }
+            html5QrCode = createScanner();
+            scannerRef.current = html5QrCode;
+
+            const fallbackFacing = desiredFacing === "environment" ? "user" : "environment";
             await html5QrCode.start(
-              { facingMode: desiredFacing },
+              { facingMode: fallbackFacing },
               scanConfig,
               onScanSuccess,
               undefined
             );
+            setFacingMode(fallbackFacing);
             startErr = null;
           } catch {
-            // 3. Fallback to user/front camera (e.g. laptop webcam without back camera)
-            try {
-              const fallbackFacing = desiredFacing === "environment" ? "user" : "environment";
-              await html5QrCode.start(
-                { facingMode: fallbackFacing },
-                scanConfig,
-                onScanSuccess,
-                undefined
-              );
-              setFacingMode(fallbackFacing);
-              startErr = null;
-            } catch (finalErr) {
-              throw finalErr;
-            }
+            throw startErr;
           }
         }
 
